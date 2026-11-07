@@ -53,7 +53,8 @@ fn cleanup_detail(finished: &Result<Value>, owned: bool) -> String {
         .unwrap_or("unknown");
     format!("still open: {state}")
 }
-pub const MODEL_BUTTON: &str = "button[aria-label=\"Select ChatGPT model\"], button[data-codex-intelligence-trigger=\"true\"], [data-testid=\"model-switcher-dropdown-button\"], button.__composer-pill[aria-haspopup=\"menu\"]";
+/// Mirrors `BUTTON_SELECTOR` in browser-scripts/model.js.
+pub const MODEL_BUTTON: &str = "button[aria-label=\"Select ChatGPT model\"], button[data-codex-intelligence-trigger=\"true\"], form[data-chatgpt-composer] button[data-composer-navigation-target=\"reasoning\"], [data-testid=\"model-switcher-dropdown-button\"], button.__composer-pill[aria-haspopup=\"menu\"]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DispatchState {

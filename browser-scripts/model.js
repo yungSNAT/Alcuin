@@ -46,7 +46,9 @@ return (() => {
     return true;
   }
     // Capture the selectors and matcher literals up front so the browser expression stays pure.
-    const BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], [data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
+    // The aria-label is localised; the composer-scoped navigation target is not
+    // (after steipete/oracle 1503f8be, MIT, 5 November 2026).
+    const BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], form[data-chatgpt-composer] button[data-composer-navigation-target="reasoning"], [data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
     const COMPOSER_MODEL_SIGNAL_SELECTOR = '[data-testid="composer-footer-actions"]';
     const LABEL_TOKENS = cfg.labelTokens;
     const TEST_IDS = cfg.testIdTokens;
