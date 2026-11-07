@@ -13,13 +13,13 @@
 [![OpenSSF Scorecard](https://raw.githubusercontent.com/ryanduguid/.github/badges/EquityBot/Alcuin.svg)](https://scorecard.dev/viewer/?uri=github.com/yungSNAT/Alcuin)<br>
 [![rust: 1.99+](.github/assets/badges/rust.svg)](https://www.rust-lang.org/) [![licence: FSL-1.1-ALv2](.github/assets/badges/licence.svg)](LICENSE)
 
-[Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
+[Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
 </div>
 
 Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows and Linux.
 
-It is a Rust port of a maintained fork of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger. Use Oracle itself on macOS, or for Gemini, Claude or multi-model runs: see [Known limitations](#known-limitations).
+It is a Rust port of a maintained fork of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger. Use Oracle itself on macOS, or for Gemini, Claude or multi-model runs: see [When to choose something else](#when-to-choose-something-else).
 
 ## Install
 
@@ -91,6 +91,15 @@ Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_
 ## Security
 
 Read [SECURITY.md](SECURITY.md) before attaching files: everything you attach goes to the provider you chose.
+
+## When to choose something else
+
+Alcuin suits you if you want a model from another vendor to answer about a fixed set of files, and to keep every answer. Other tools fit other needs:
+
+- **A second look from the same family, with nothing to install:** Claude Code's [advisor tool](https://code.claude.com/docs/en/advisor) lets Claude consult a stronger Claude model, which reads the whole conversation.
+- **Review without driving a web page:** OpenAI's [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) runs Codex reviews from Claude Code. Codex reads what it chooses, not a packet you fix in advance.
+- **Several models at once:** [consult-llm](https://github.com/raine/consult-llm) and [pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) consult several providers through their APIs or local CLIs.
+- **macOS, Gemini or Claude:** [Oracle](https://github.com/steipete/oracle), the tool Alcuin is ported from.
 
 ## Development
 
