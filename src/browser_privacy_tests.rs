@@ -1161,21 +1161,35 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
     };
     // Pro available: GPT-6 High steps up to Pro, which checks the Pro radio.
     // Pro locked: the four-step slider has no Pro, so GPT-6 Extra High.
-    for (max, effective, model, level) in
-        [(4, "gpt-6-pro", "Pro", 4), (3, "gpt-6-astra", "GPT-6", 3)]
-    {
-        let mut reservation = picker(json!({"level":2,"max":max})).await?;
+    // A requested Extra High ends on GPT-6 Extra High whether Pro is available, already
+    // selected or locked, so a routine run leaves Pro unused.
+    for (start, max, requested, effective, model, level) in [
+        (("GPT-6", 2), 4, "pro", "gpt-6-pro", "Pro", 4),
+        (("GPT-6", 2), 3, "pro", "gpt-6-astra", "GPT-6", 3),
+        (("GPT-6", 2), 4, "extra-high", "gpt-6-astra", "GPT-6", 3),
+        (("Pro", 4), 4, "extra-high", "gpt-6-astra", "GPT-6", 3),
+        (("GPT-6", 2), 3, "extra-high", "gpt-6-astra", "GPT-6", 3),
+    ] {
+        let mut reservation = picker(json!({"model":start.0,"level":start.1,"max":max})).await?;
         let (_, thinking, chosen) = reservation
-            .select_pair("select", "GPT-6", SHORT, &cancel)
+            .select_pair("select", "GPT-6", requested, SHORT, &cancel)
             .await
-            .with_context(|| format!("Select pair with a {}-step slider", max + 1))?;
-        anyhow::ensure!(chosen == effective, "{max}: {chosen}");
+            .with_context(|| {
+                format!(
+                    "Select {requested} from {start:?} with a {}-step slider",
+                    max + 1
+                )
+            })?;
+        anyhow::ensure!(
+            chosen == effective,
+            "{requested} from {start:?}, {max}: {chosen}"
+        );
         let thinking = serde_json::to_value(&thinking)?;
         anyhow::ensure!(thinking["observedModelLabel"] == model, "{thinking}");
         let after = state().await?;
         anyhow::ensure!(
             after == json!({"model":model,"level":level,"open":false}),
-            "{max}: {after}"
+            "{requested} from {start:?}, {max}: {after}"
         );
         reservation.release_clean(SHORT).await?;
     }
@@ -1200,7 +1214,7 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
     // and owns inspection ahead of another composer pill.
     let mut reservation = picker(json!({"japanese":true})).await?;
     let (_, _, chosen) = reservation
-        .select_pair("select", "GPT-6", SHORT, &cancel)
+        .select_pair("select", "GPT-6", "pro", SHORT, &cancel)
         .await
         .context("Select pair through the Japanese trigger")?;
     anyhow::ensure!(chosen == "gpt-6-pro", "Japanese trigger: {chosen}");
@@ -1218,7 +1232,7 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
     // A menu that will not close fails closed and names what stayed open.
     let mut reservation = picker(json!({"stuck":true})).await?;
     let error = reservation
-        .select_pair("select", "GPT-6", SHORT, &cancel)
+        .select_pair("select", "GPT-6", "pro", SHORT, &cancel)
         .await
         .err()
         .context("A picker that stays open must not pass cleanup")?;

@@ -231,7 +231,7 @@ async fn native_preflight_cancellation_updates_model_and_session_without_dispatc
     );
 }
 #[test]
-fn borrowed_tabs_verify_an_existing_extra_high_without_the_fresh_pro_first_rule() {
+fn fresh_and_borrowed_requests_admit_extra_high_and_nothing_else() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path().join(".oracle"));
     let mut environment = Environment::new();
@@ -239,18 +239,29 @@ fn borrowed_tabs_verify_an_existing_extra_high_without_the_fresh_pro_first_rule(
         environment.insert(key.into(), home.path().to_string_lossy().into_owned());
     }
     let input = json!({"engine":"browser","prompt":"PUBLIC borrowed extra high","browserThinkingTime":"extra-high"});
+    // Its own prompt: an admitted run is saved, and a second identical prompt would be refused.
     let fresh = execution::resolve(
-        &input,
+        &json!({"engine":"browser","prompt":"PUBLIC fresh extra high","browserThinkingTime":"extra-high"}),
+        &json!({"browser":{"manualLogin":true,"manualLoginProfileDir":home.path().join("profile")}}),
+        &environment,
+        home.path(),
+    )
+    .unwrap();
+    // A fresh Extra High request is admitted so routine runs can leave Pro unused.
+    let metadata = browser_runner::prepare(&store, &fresh, home.path()).unwrap();
+    assert_eq!(metadata["browser"]["config"]["thinkingTime"], "extra-high");
+    let medium = execution::resolve(
+        &json!({"engine":"browser","prompt":"PUBLIC fresh medium request","browserThinkingTime":"medium"}),
         &json!({"browser":{"manualLogin":true,"manualLoginProfileDir":home.path().join("profile")}}),
         &environment,
         home.path(),
     )
     .unwrap();
     assert_eq!(
-        browser_runner::prepare(&store, &fresh, home.path())
+        browser_runner::prepare(&store, &medium, home.path())
             .unwrap_err()
             .to_string(),
-        "a fresh Latest request must try Pro before Extra High"
+        "Browser admission permits only Pro or Extra High thinking"
     );
     let borrowed = execution::resolve(
         &input,
