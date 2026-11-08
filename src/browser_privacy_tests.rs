@@ -56,7 +56,7 @@ async fn mount(page: &Cdp, html: &str, path: &str, setup: &str) -> Result<()> {
 
 /// Captured ChatGPT pages through the real inspection script and completion gate.
 async fn captured_pages_meet_the_completion_gate(page: &Cdp) -> Result<()> {
-    let inspection = include_str!("../browser-scripts/historical-inspection.js");
+    let inspection = crate::browser_tabs::INSPECT;
     let cfg =
         json!([{"expectedConversationId":"PUBLIC-fixture","expectedOrigin":"https://chatgpt.com"}]);
     for (name, html, stopped, finished) in [
@@ -1312,7 +1312,7 @@ async fn unrendered_completion_cases(page: &Cdp) -> Result<()> {
                 "(() => {{ {}\n{}\n return [hasTurnCompletion({{messageId: 'PUBLIC-assistant'}}, -1, false), ({})({{expectedConversationId: 'PUBLIC-render', expectedOrigin: location.origin}}).completionVisible]; }})()",
                 include_str!("../browser-scripts/ownership-prelude.js"),
                 include_str!("../browser-scripts/result-prelude.js"),
-                include_str!("../browser-scripts/historical-inspection.js")
+                crate::browser_tabs::INSPECT
             ),
             SHORT,
             &CancellationToken::new(),
@@ -1470,7 +1470,7 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
     };
     let historical = async || {
         page.evaluate_with_arguments(
-            include_str!("../browser-scripts/historical-inspection.js"),
+            crate::browser_tabs::INSPECT,
             &json!([{"expectedConversationId":"PUBLIC-id","expectedOrigin":"https://chatgpt.com"}]),
             SHORT,
             &cancel,

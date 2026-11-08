@@ -9,7 +9,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, time::Duration};
 use tokio_util::sync::CancellationToken;
-const PROBE: &str = include_str!("../browser-scripts/owned_commit.js");
+/// `owned_commit.js` with the shared stored-message reader in scope.
+const PROBE: &str = concat!(
+    "(...args) => {\n",
+    include_str!("../browser-scripts/user-source.js"),
+    "return (\n",
+    include_str!("../browser-scripts/owned_commit.js"),
+    ")(...args);\n}"
+);
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionOwner {
@@ -1163,7 +1170,7 @@ mod wire_tests {
                 let request: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
                 assert_eq!(request["method"], "Runtime.evaluate");
                 let source = request["params"]["expression"].as_str().unwrap();
-                assert!(source.contains("readUserOriginalSource"));
+                assert!(source.contains("const readUserOriginalSource = "));
                 assert!(source.contains("Object.getOwnPropertyDescriptor"));
                 assert!(source.contains("oracle:target-claim"));
                 assert!(source.contains(&serde_json::to_string(prompt).unwrap()));
