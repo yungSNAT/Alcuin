@@ -1056,7 +1056,9 @@ async fn web_search_captured_menu_case(page: &Cdp) -> Result<()> {
 /// The unified ChatGPT picker as captured on 27 October 2026 (classes removed): a simple view
 /// with the Power slider and an inert model view whose radios keep their layout. Selecting
 /// GPT-6's top Power step, labelled Pro, also checks the Pro radio. Updates happen in place,
-/// as React's do, so retained-node checks see one control.
+/// as React's do, so retained-node checks see one control. `japanese` gives the trigger the
+/// ja-JP composer's attributes (Oracle, 5 November 2026): a translated aria-label and only the
+/// composer-scoped navigation target. `decoy` adds a second composer pill ahead of it.
 const PRO_PICKER_SETUP: &str = r#"(cfg)=>{
   sessionStorage.removeItem('oracle:target-claim');
   const state=window.PUBLIC_picker=Object.assign({model:'GPT-6',level:2,max:4},cfg);
@@ -1064,9 +1066,13 @@ const PRO_PICKER_SETUP: &str = r#"(cfg)=>{
   const trigger=document.createElement('button');
   trigger.type='button';
   trigger.id='PUBLIC-trigger';
-  for(const [name,value] of Object.entries({'aria-label':'Select ChatGPT model','aria-haspopup':'menu','aria-expanded':'false','data-state':'closed','data-codex-intelligence-trigger':'true'}))trigger.setAttribute(name,value);
+  const identity=state.japanese?{'aria-label':'ChatGPT モデルを選択','data-composer-navigation-target':'reasoning'}:{'aria-label':'Select ChatGPT model','data-codex-intelligence-trigger':'true'};
+  for(const [name,value] of Object.entries({...identity,'aria-haspopup':'menu','aria-expanded':'false','data-state':'closed'}))trigger.setAttribute(name,value);
   trigger.innerHTML='<span>Thinking effort</span><span aria-hidden="true"></span>';
-  document.querySelector('form').append(trigger);
+  const form=document.querySelector('form');
+  if(state.japanese)form.setAttribute('data-chatgpt-composer','');
+  if(state.decoy)form.insertAdjacentHTML('beforeend','<button type="button" class="__composer-pill">Thinking</button>');
+  form.append(trigger);
   const radio=(label)=>`<div role="menuitemradio" aria-checked="false" tabindex="-1" data-orientation="vertical" data-radix-collection-item=""${label==='Pro'&&state.max<4?' aria-disabled="true" data-disabled=""':''}><div data-menu-row-content="true"><span>${label}</span></div></div>`;
   let wrapper=null;
   const close=()=>{if(state.stuck)return;wrapper?.remove();wrapper=null;trigger.setAttribute('aria-expanded','false');trigger.setAttribute('data-state','closed');};
@@ -1190,6 +1196,25 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
         );
         reservation.release_clean(SHORT).await?;
     }
+    // The Japanese trigger is found by its navigation target for selection and inspection,
+    // and owns inspection ahead of another composer pill.
+    let mut reservation = picker(json!({"japanese":true})).await?;
+    let (_, _, chosen) = reservation
+        .select_pair("select", "GPT-6", SHORT, &cancel)
+        .await
+        .context("Select pair through the Japanese trigger")?;
+    anyhow::ensure!(chosen == "gpt-6-pro", "Japanese trigger: {chosen}");
+    reservation.release_clean(SHORT).await?;
+    let mut reservation =
+        picker(json!({"model":"Pro","level":4,"japanese":true,"decoy":true})).await?;
+    let observed = reservation
+        .inspect_current_effort("pro", SHORT, &cancel)
+        .await?;
+    anyhow::ensure!(
+        observed["status"] == "ready",
+        "Japanese trigger beside a decoy pill: {observed}"
+    );
+    reservation.release_clean(SHORT).await?;
     // A menu that will not close fails closed and names what stayed open.
     let mut reservation = picker(json!({"stuck":true})).await?;
     let error = reservation

@@ -1035,6 +1035,9 @@ return (async () => {
     // before probing older model-picker layouts.
     const COMPOSER_EFFORT_PILL_SELECTORS = [
       'form[data-chatgpt-composer] button[aria-label="Select ChatGPT model"]',
+      // Locale-independent owner when the aria-label is translated or renamed
+      // (after steipete/oracle 1503f8be, MIT, 5 November 2026).
+      'form[data-chatgpt-composer] button[data-composer-navigation-target="reasoning"]',
       'form button.__composer-pill',
       '[data-testid="composer-footer-actions"] button.__composer-pill',
       '.__composer-pill-composite button.__composer-pill',
@@ -1051,7 +1054,11 @@ return (async () => {
       for (const selector of COMPOSER_EFFORT_PILL_SELECTORS) {
         for (const button of document.querySelectorAll(selector)) {
           if (seen.has(button) || !isVisible(button)) continue;
-          if (button.getAttribute('aria-label') === 'Select ChatGPT model' && button.closest('form[data-chatgpt-composer]')) return button;
+          if (
+            (button.getAttribute('aria-label') === 'Select ChatGPT model' ||
+              button.getAttribute('data-composer-navigation-target') === 'reasoning') &&
+            button.closest('form[data-chatgpt-composer]')
+          ) return button;
           seen.add(button);
           if (button.getAttribute?.('data-testid') === 'model-switcher-dropdown-button') continue;
           // A 5.6 Pro model pill is not Astra Latest's 6-prefixed effort owner.
