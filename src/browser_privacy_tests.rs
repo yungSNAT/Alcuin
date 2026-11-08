@@ -2740,8 +2740,15 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         }
         if case == "immediate" {
             // On 7 November 2026 ChatGPT put a sibling before the message element, moving the
-            // item from child 1 to child 2. Two children that carry an item stay ambiguous.
-            for (layout, complete) in [("sibling", true), ("two-items", false)] {
+            // item from child 1 to child 2. Two children that carry an item stay ambiguous. No
+            // item is reported apart from a stored text that differs, so a page change does not
+            // read as a prompt mismatch.
+            for (layout, complete, invalid, unavailable) in [
+                ("sibling", true, false, false),
+                ("two-items", false, true, false),
+                ("no-item", false, false, true),
+                ("other-text", false, false, false),
+            ] {
                 page.evaluate_with_arguments(r#"(cfg)=>{
                     document.querySelector('[data-turn-key="PUBLIC-user-turn"]')?.remove();
                     const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
@@ -2749,14 +2756,17 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                     const message={props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}};
                     const sibling={props:{conversationId:'PUBLIC-conversation',messageIds:[cfg.id]}};
                     turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:
-                        cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:[undefined,message,message]}}]};
+                        cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:cfg.layout==='two-items'?[undefined,message,message]:
+                        cfg.layout==='no-item'?[undefined,sibling,null]:[undefined,{props:{item:{...message.props.item,message:'PUBLIC other prompt'}}}]}}]};
                     document.querySelector('main').append(turn);return true;
                 }"#,&json!([{"id":MESSAGE,"prompt":prompt,"layout":layout}]),SHORT,&cancel).await?;
                 let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
                     &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":prepared.submission_intent(),"saved":null}]),SHORT,&cancel).await?;
                 anyhow::ensure!(
                     receipt["probe"]["messages"][0]["matches"] == complete
-                        && receipt["probe"]["invalid"] == !complete,
+                        && receipt["probe"]["invalid"] == invalid
+                        && receipt["probe"]["messages"][0]["sourceUnavailable"]
+                            == if unavailable { json!(true) } else { json!(null) },
                     "{layout} layout: {receipt}"
                 );
             }

@@ -33,6 +33,9 @@ struct Message {
     matches: Option<bool>,
     #[serde(default)]
     fingerprint_text: Option<String>,
+    /// The page holds no stored message for this new turn, which points at a page change.
+    #[serde(default)]
+    source_unavailable: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -531,6 +534,10 @@ fn observe(
     {
         return Ambiguous("historical-or-unanchored-user-message");
     }
+    // Recovered like a mismatch; the code tells a moved stored message from a different prompt.
+    if message.source_unavailable {
+        return Ambiguous("complete-prompt-source-unavailable");
+    }
     let web_search = before
         .submission_intent
         .as_ref()
@@ -762,6 +769,49 @@ turn [url]\(url) back into url
             receipt_for("PUBLIC.", r"PUBLIC\."),
             CommitObservation::Ambiguous("complete-prompt-mismatch")
         ));
+    }
+    #[test]
+    fn a_missing_stored_message_has_its_own_code_and_never_commits() {
+        let owner = owner();
+        let prompt = "PUBLIC prompt";
+        let old = || message("old-user", "old-turn", 0, "PUBLIC old");
+        let before = snapshot(&owner, probe(vec![old()], vec!["old-turn"], prompt)).unwrap();
+        let reason = |new: Value| match observe_once(
+            &owner,
+            &before,
+            probe(vec![old(), new], vec!["old-turn", "new-turn"], prompt),
+        ) {
+            CommitObservation::Ambiguous(reason) => reason,
+            other => panic!("Unexpected observation: {other:?}"),
+        };
+        let new = |mut value: Value| {
+            value["id"] = json!("new-user");
+            value["turnId"] = json!("new-turn");
+            value["index"] = json!(1);
+            value
+        };
+        // The probe's forms: no stored message, and a readable one that differs.
+        assert_eq!(
+            reason(new(json!({"matches":false,"sourceUnavailable":true}))),
+            "complete-prompt-source-unavailable"
+        );
+        assert_eq!(
+            reason(new(json!({"matches":false}))),
+            "complete-prompt-mismatch"
+        );
+        // Page data that also claims an exact match still never commits.
+        assert_eq!(
+            reason(new(
+                json!({"matches":true,"fingerprintText":prompt,"sourceUnavailable":true})
+            )),
+            "complete-prompt-source-unavailable"
+        );
+        assert_eq!(
+            reason(new(
+                json!({"matches":true,"fingerprintText":prompt,"sourceUnavailable":"yes"})
+            )),
+            "user-identity-unavailable"
+        );
     }
     #[test]
     fn complete_autolinks_keep_delimiters_and_escaped_literal_links() {

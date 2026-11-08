@@ -150,7 +150,8 @@
             webSearch === true && (text === expected + '@Web search' || text === '@Web search ' + expected));
         messages.set(id, { id, turnId: turnIds[index], index,
           ...(expected === null || previous.has(id) ? {} : { matches,
-            ...(matches ? { fingerprintText: text } : {}) }) });
+            ...(matches ? { fingerprintText: text } : {}),
+            ...(original.status === 'unavailable' ? { sourceUnavailable: true } : {}) }) });
       }
     });
     return { ...navigation, invalid, turnIds, messages: Array.from(messages.values()), canonicalPrompt: canonical(expectedPrompt) };
