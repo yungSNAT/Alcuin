@@ -40,7 +40,15 @@ const userMessageIds = node => [node?.getAttribute('data-message-id'), node?.get
       if (!keys.length) return unavailable;
       const descriptor = Object.getOwnPropertyDescriptor(host, keys[0]);
       if (!descriptor || !('value' in descriptor)) return ambiguous;
-      const item = own(own(child(own(child(descriptor.value, 2), 'props'), 1), 'props'), 'item');
+      // On 7 November 2026 ChatGPT put a sibling before the message element (child 1 became 2),
+      // so take the one child that carries an item; two such children are ambiguous.
+      const parts = own(child(descriptor.value, 2), 'props');
+      const children = own(parts, 'children');
+      if (children !== undefined && !Array.isArray(children)) throw Error('Unexpected children shape');
+      const items = Array.from({ length: children?.length ?? 0 }, (_, index) => own(own(child(parts, index), 'props'), 'item'))
+        .filter(item => item !== undefined);
+      if (items.length > 1) return ambiguous;
+      const item = items[0];
       if (item === undefined) return unavailable;
       const text = own(item, 'message');
       if (own(item, 'type') !== 'user-message' || own(item, 'messageId') !== id || typeof text !== 'string') return ambiguous;

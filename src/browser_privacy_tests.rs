@@ -2713,6 +2713,29 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 );
             }
         }
+        if case == "immediate" {
+            // On 7 November 2026 ChatGPT put a sibling before the message element, moving the
+            // item from child 1 to child 2. Two children that carry an item stay ambiguous.
+            for (layout, complete) in [("sibling", true), ("two-items", false)] {
+                page.evaluate_with_arguments(r#"(cfg)=>{
+                    document.querySelector('[data-turn-key="PUBLIC-user-turn"]')?.remove();
+                    const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
+                    turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
+                    const message={props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}};
+                    const sibling={props:{conversationId:'PUBLIC-conversation',messageIds:[cfg.id]}};
+                    turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:
+                        cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:[undefined,message,message]}}]};
+                    document.querySelector('main').append(turn);return true;
+                }"#,&json!([{"id":MESSAGE,"prompt":prompt,"layout":layout}]),SHORT,&cancel).await?;
+                let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+                    &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":prepared.submission_intent(),"saved":null}]),SHORT,&cancel).await?;
+                anyhow::ensure!(
+                    receipt["probe"]["messages"][0]["matches"] == complete
+                        && receipt["probe"]["invalid"] == !complete,
+                    "{layout} layout: {receipt}"
+                );
+            }
+        }
         assert_eq!(
             observed["calls"],
             if matches!(case, "duplicate" | "probe-conflict") {
