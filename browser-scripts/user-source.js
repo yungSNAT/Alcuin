@@ -48,10 +48,17 @@ const readUserOriginalSource = (user, turn, id) => {
     const parts = own(child(descriptor.value, 2), 'props');
     const children = own(parts, 'children');
     if (children !== undefined && !Array.isArray(children)) throw Error('Unexpected children shape');
-    const items = Array.from({ length: children?.length ?? 0 }, (_, index) => own(own(child(parts, index), 'props'), 'item'))
-      .filter(item => item !== undefined);
-    if (items.length > 1) return ambiguous;
-    const item = items[0];
+    // The length is page data too: read it as a data property, never through a getter, and walk at
+    // most 1,000 children (the 7 November layout had 5), so a huge length cannot stall the probe.
+    const length = children === undefined ? 0 : Object.getOwnPropertyDescriptor(children, 'length')?.value;
+    if (!Number.isInteger(length) || length < 0 || length > 1000) return ambiguous;
+    let item;
+    for (let index = 0; index < length; index++) {
+      const candidate = own(own(child(parts, index), 'props'), 'item');
+      if (candidate === undefined) continue;
+      if (item !== undefined) return ambiguous;
+      item = candidate;
+    }
     if (item === undefined) return unavailable;
     const text = own(item, 'message');
     if (own(item, 'type') !== 'user-message' || own(item, 'messageId') !== id || typeof text !== 'string') return ambiguous;
