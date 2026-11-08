@@ -651,6 +651,32 @@ fn an_explicit_pro_model_outranks_a_saved_thinking_time() {
     assert_eq!(request.browser["thinkingTime"], "extra-high");
 }
 #[test]
+fn a_thinking_time_that_is_not_text_is_refused_rather_than_read_as_pro() {
+    let root = tempfile::tempdir().unwrap();
+    let env = Environment::new();
+    let plain = json!({"prompt":"PUBLIC malformed thinking time","engine":"browser"});
+    let per_call = json!({"prompt":"PUBLIC malformed thinking time","engine":"browser","browserThinkingTime":3});
+    for (input, saved) in [
+        (&plain, json!({"browser":{"thinkingTime":4}})),
+        (
+            &plain,
+            json!({"model":"gpt-6-pro","browser":{"thinkingTime":["pro"]}}),
+        ),
+        (&per_call, json!({})),
+    ] {
+        for result in [
+            execution::resolve(input, &saved, &env, root.path()),
+            execution::resolve_mcp(input, &saved, &env, root.path()),
+        ] {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Unknown browser thinking time",
+                "{input} {saved}"
+            );
+        }
+    }
+}
+#[test]
 fn the_end_marker_is_opt_in_from_the_call_or_saved_config() {
     let root = tempfile::tempdir().unwrap();
     let env = Environment::new();

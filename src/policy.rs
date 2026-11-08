@@ -102,6 +102,16 @@ impl ThinkingTime {
             _ => None,
         }
     }
+
+    /// Reads a thinking-time setting: absent or null is `None`; anything but text is refused,
+    /// never read as absent (which means Pro).
+    pub fn setting(value: &serde_json::Value) -> Result<Option<&str>> {
+        match value {
+            serde_json::Value::Null => Ok(None),
+            serde_json::Value::String(text) => Ok(Some(text.as_str())),
+            _ => bail!("Unknown browser thinking time"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

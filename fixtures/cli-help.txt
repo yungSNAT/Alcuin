@@ -284,7 +284,7 @@ Tips
 • Pass a prompt and attach relevant source with --file …; Alcuin cannot inspect your project directly.
 • Preview the bundle with --dry-run summary --files-report and keep total input under ~196k tokens.
 • Explain the decision, constraints and prior attempts in a short project briefing.
-• Fresh browser requests verify Latest/GPT-6 and Pro before submission. A positively unavailable owned Pro control permits verified Extra High on GPT-6, and --browser-thinking-time extra-high selects verified Extra High without trying Pro. Missing or ambiguous controls stop the run. New older-model dispatch is refused; saved results remain readable without replay. UI labels do not attest backend identity.
+• Fresh browser requests verify Latest/GPT-6 and the requested tier before submission: Pro by default, or Extra High with --browser-thinking-time extra-high, which never tries Pro. A positively unavailable owned Pro control permits verified Extra High on GPT-6. Missing or ambiguous controls stop the run. New older-model dispatch is refused; saved results remain readable without replay. UI labels do not attest backend identity.
 • --perf-trace records browser queue, setup, mode selection, upload, generation and capture durations.
 • Spell out the project + platform + version requirements (repo name, target OS/toolchain versions, API dependencies) so Alcuin doesn’t guess defaults.
 • When comparing multiple repos/files, spell out each repo + path + role (e.g., “Project A SettingsView → apps/project-a/Sources/SettingsView.swift; Project B SettingsView → ../project-b/mac/...”) so the model knows exactly which file is which.
