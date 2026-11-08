@@ -504,7 +504,7 @@ impl Exchange {
             vec![]
         } else {
             vec![
-                json!({"id":"user-public","turnId":"user-turn-public","index":0,"matches":!matches!(self.fault, Fault::MissingSource | Fault::WrongSource),"fingerprintText":if matches!(self.fault, Fault::MissingSource) {Value::Null} else if matches!(self.fault, Fault::WrongSource) {json!("PUBLIC wrong original source")} else {json!(self.prompt)}}),
+                json!({"id":"user-public","turnId":"user-turn-public","index":0,"matches":!matches!(self.fault, Fault::MissingSource | Fault::WrongSource),"fingerprintText":if matches!(self.fault, Fault::MissingSource) {Value::Null} else if matches!(self.fault, Fault::WrongSource) {json!("PUBLIC wrong original source")} else {json!(self.prompt)},"sourceUnavailable":matches!(self.fault, Fault::MissingSource)}),
             ]
         };
         json!({"currentUrl":if before && !historical {"https://chatgpt.com/"} else {"https://chatgpt.com/c/consult-public"},"workSelected":false,"modeUnverified":false,"invalid":false,"turnIds":if before && !historical {vec![]} else {vec!["user-turn-public"]},"messages":messages,"canonicalPrompt":self.prompt})
@@ -7680,6 +7680,19 @@ async fn source_mismatch_historical_echo_incomplete_answer_and_lost_ack_never_re
             assert_eq!(runtime["tabUrl"], "https://chatgpt.com/c/consult-public");
             assert_eq!(runtime["conversationId"], "consult-public");
             assert!(runtime.get("userCommitReceipt").is_none());
+            // Same recovery, but the saved error tells a missing stored message from a different one.
+            let code = if matches!(fault, Fault::MissingSource) {
+                "(complete-prompt-source-unavailable)"
+            } else {
+                "(complete-prompt-mismatch)"
+            };
+            assert!(
+                meta["errorMessage"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(code)),
+                "{fault:?}: {}",
+                meta["errorMessage"]
+            );
         }
         assert!(run(&f).await.is_err());
         if matches!(
