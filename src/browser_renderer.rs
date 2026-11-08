@@ -1589,3 +1589,15 @@ mod cleanup_detail_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod model_button_tests {
+    #[test]
+    fn model_button_is_the_page_scripts_selector() {
+        let literal = format!("const BUTTON_SELECTOR = '{}';", super::MODEL_BUTTON);
+        assert!(
+            super::MODEL.contains(&literal),
+            "MODEL_BUTTON differs from BUTTON_SELECTOR in browser-scripts/model.js"
+        );
+    }
+}
