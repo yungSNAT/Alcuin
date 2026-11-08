@@ -2740,12 +2740,16 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         }
         if case == "immediate" {
             // On 7 November 2026 ChatGPT put a sibling before the message element, moving the
-            // item from child 1 to child 2. Two children that carry an item stay ambiguous. No
-            // item is reported apart from a stored text that differs, so a page change does not
-            // read as a prompt mismatch.
+            // item from child 1 to child 2. Two children that carry an item stay ambiguous. The
+            // children's length is page data: one far past the bound, or one a getter misreports to
+            // hide a second item, is ambiguous too, and neither may stall the walk. No item is
+            // reported apart from a stored text that differs, so a page change does not read as a
+            // prompt mismatch.
             for (layout, complete, invalid, unavailable) in [
                 ("sibling", true, false, false),
                 ("two-items", false, true, false),
+                ("getter-length", false, true, false),
+                ("huge-length", false, true, false),
                 ("no-item", false, false, true),
                 ("other-text", false, false, false),
             ] {
@@ -2755,9 +2759,13 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                     turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
                     const message={props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}};
                     const sibling={props:{conversationId:'PUBLIC-conversation',messageIds:[cfg.id]}};
-                    turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:
-                        cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:cfg.layout==='two-items'?[undefined,message,message]:
-                        cfg.layout==='no-item'?[undefined,sibling,null]:[undefined,{props:{item:{...message.props.item,message:'PUBLIC other prompt'}}}]}}]};
+                    const children=cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:
+                        cfg.layout==='two-items'?[undefined,message,message]:
+                        cfg.layout==='huge-length'?Object.assign([undefined,sibling,message],{length:2**32-1}):
+                        cfg.layout==='no-item'?[undefined,sibling,null]:
+                        cfg.layout==='other-text'?[undefined,{props:{item:{...message.props.item,message:'PUBLIC other prompt'}}}]:
+                        new Proxy([undefined,message,sibling,message],{get:(target,key)=>key==='length'?2:target[key]});
+                    turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children}}]};
                     document.querySelector('main').append(turn);return true;
                 }"#,&json!([{"id":MESSAGE,"prompt":prompt,"layout":layout}]),SHORT,&cancel).await?;
                 let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
