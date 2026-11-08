@@ -12,7 +12,14 @@ use sha1::{Digest, Sha1};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-const INSPECT: &str = include_str!("../browser-scripts/historical-inspection.js");
+/// `historical-inspection.js` with the shared stored-message reader in scope.
+pub(crate) const INSPECT: &str = concat!(
+    "(...args) => {\n",
+    include_str!("../browser-scripts/user-source.js"),
+    "return (\n",
+    include_str!("../browser-scripts/historical-inspection.js"),
+    ")(...args);\n}"
+);
 const COPY: &str = include_str!("../browser-scripts/historical-copy-markdown.js");
 
 fn normalise(text: &str) -> String {

@@ -4618,8 +4618,9 @@ async fn wait_receipt(
 }
 pub(crate) fn result_expression() -> String {
     crate::browser_privacy::guard(&format!(
-        "(cfg) => {{\n/* alcuin-dom:result */\n{}\n{}\n{}\nconst readResearchCompletion = minTurnIndex => {{ const cfg={{minTurnIndex}}; return ({}); }};\n{}\n}}",
+        "(cfg) => {{\n/* alcuin-dom:result */\n{}\n{}\n{}\n{}\nconst readResearchCompletion = minTurnIndex => {{ const cfg={{minTurnIndex}}; return ({}); }};\n{}\n}}",
         include_str!("../browser-scripts/ownership-prelude.js"),
+        include_str!("../browser-scripts/user-source.js"),
         include_str!("../browser-scripts/result-prelude.js"),
         include_str!("../browser-scripts/artifact-prelude.js"),
         include_str!("../browser-scripts/research-completion-poll.js"),
