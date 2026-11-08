@@ -6882,7 +6882,7 @@ fn url_followups_are_rejected_before_session_storage_or_target_allocation() {
         assert!(prepare(&store, &request, home.path()).is_err(), "{url}");
         assert!(!store.root().exists());
     }
-    for (model, effort) in [("GPT-5.6 Sol", "pro"), ("GPT-6", "extra-high")] {
+    for (model, effort) in [("GPT-5.6 Sol", "pro"), ("GPT-6", "medium")] {
         let store = SessionStore::new(home.path().join(".oracle"));
         let mut request = crate::execution::resolve(
             &json!({"prompt":"PUBLIC fresh browser request","engine":"browser"}),
@@ -7246,6 +7246,43 @@ async fn complete_sequence_commits_full_source_captures_exact_answer_and_retires
         assert_eq!(f.sends.load(Ordering::SeqCst), 1);
         stop(f).await;
     }
+}
+#[tokio::test]
+async fn a_fresh_extra_high_request_completes_without_opening_the_pro_step() {
+    let f = fixture_attempt(
+        Fault::None,
+        false,
+        false,
+        json!({"browserThinkingTime":"extra-high"}),
+    )
+    .await;
+    let result = run(&f).await.unwrap();
+    assert_eq!(result["status"], "completed");
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        result["browser"]["runtime"]["thinkingSelection"]["requestedLevel"],
+        "extra-high"
+    );
+    let saved = crate::followup::browser_parent(&f.id, &result)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved["thinkingTime"], "extra-high");
+    let trace = f.trace.lock().unwrap().clone();
+    let thinking: Vec<&str> = trace
+        .iter()
+        .filter_map(|v| v["params"]["expression"].as_str())
+        .filter(|s| s.contains("alcuin-dom:thinking"))
+        .collect();
+    assert!(
+        thinking
+            .iter()
+            .any(|s| s.contains("\"level\":\"extra-high\""))
+    );
+    assert!(
+        thinking.iter().all(|s| !s.contains("\"level\":\"pro\"")),
+        "an Extra High request opened the Pro step"
+    );
+    stop(f).await;
 }
 #[tokio::test]
 async fn completed_runs_save_the_reference_transcript_artifact() {

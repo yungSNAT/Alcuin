@@ -214,19 +214,6 @@ fn prepare_with_base(
         ),
         "Alcuin only permits Latest (GPT-6) browser dispatch"
     );
-    // Reference selectBrowserComposerModes: a follow-up or borrowed tab only verifies.
-    let verify_only = !request.browser["resumeConversationUrl"].is_null()
-        || request.browser["browserTabRef"]
-            .as_str()
-            .is_some_and(|reference| !policy::trim(reference).is_empty());
-    if !verify_only {
-        anyhow::ensure!(
-            request.browser["thinkingTime"]
-                .as_str()
-                .is_none_or(|level| level == "pro"),
-            "a fresh Latest request must try Pro before Extra High"
-        );
-    }
     if let Some(resume) = request.options.get("browserResumeConversationUrl") {
         anyhow::ensure!(
             *resume == request.browser["resumeConversationUrl"],
@@ -239,7 +226,7 @@ fn prepare_with_base(
         request.browser["thinkingTime"]
             .as_str()
             .is_none_or(|s| matches!(s, "pro" | "extra-high")),
-        "Browser admission requires Pro first with only a positively permitted Extra High fallback"
+        "Browser admission permits only Pro or Extra High thinking"
     );
     anyhow::ensure!(
         request.browser["modelStrategy"]
@@ -3267,6 +3254,7 @@ async fn deliver(
                 .select_pair(
                     config["modelStrategy"].as_str().unwrap_or("select"),
                     config["desiredModel"].as_str().unwrap_or("GPT-6"),
+                    config["thinkingTime"].as_str().unwrap_or("pro"),
                     limits.command,
                     cancel,
                 )

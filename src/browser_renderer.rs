@@ -1076,8 +1076,8 @@ impl RendererReservation {
         json!({"level":level,"inspectionOnly":inspection,"inspectionEvidence":inspection,"modelButtonSelector":MODEL_BUTTON})
     }
     /// Node ensureThinkingTime. Pro fails closed with the reference wording; a disabled Pro
-    /// row returns its outcome for the permit decision. The non-strict Extra High fallback
-    /// logs the reference line, then fails the joint verification as the reference does.
+    /// row returns its outcome for the permit decision. Non-strict Extra High (requested, or
+    /// the fallback) logs the reference line, then fails the joint verification as the reference does.
     async fn select_effort(
         &mut self,
         level: &str,
@@ -1213,12 +1213,17 @@ impl RendererReservation {
         &mut self,
         strategy: &str,
         desired: &str,
+        level: &str,
         timeout: Duration,
         cancel: &CancellationToken,
     ) -> Result<(ModelEvidence, ThinkingEvidence, String)> {
         anyhow::ensure!(
             matches!(strategy, "select" | "current"),
             "Ignoring model verification cannot authorise browser dispatch"
+        );
+        anyhow::ensure!(
+            matches!(level, "pro" | "extra-high"),
+            "Browser admission permits only Pro or Extra High thinking"
         );
         // Node selectSingleComposerPair: "current" observes without verifying a fresh choice,
         // so the reference refuses before any thinking-picker change.
@@ -1236,13 +1241,21 @@ impl RendererReservation {
         };
         let mut model = self.select_model(strategy, false, timeout, cancel).await?;
         model.requested_model = Some(requested.to_owned());
-        let (level, outcome) = match self.select_pro(timeout, cancel).await? {
-            Ok(outcome) => ("pro", outcome),
-            Err(permit) => {
-                self.note(format!(
-                    "[browser] Confirmed owned Pro unavailability; trying {requested} with Extra High."
-                ));
-                ("extra-high", self.fallback(permit, timeout, cancel).await?)
+        // A requested Extra High never opens the Pro step, so it leaves Pro's usage alone.
+        let (level, outcome) = if level == "extra-high" {
+            (
+                "extra-high",
+                self.select_effort("extra-high", timeout, cancel).await?,
+            )
+        } else {
+            match self.select_pro(timeout, cancel).await? {
+                Ok(outcome) => ("pro", outcome),
+                Err(permit) => {
+                    self.note(format!(
+                        "[browser] Confirmed owned Pro unavailability; trying {requested} with Extra High."
+                    ));
+                    ("extra-high", self.fallback(permit, timeout, cancel).await?)
+                }
             }
         };
         // Node ensureThinkingTime evidence: a selection that closed the picker verified as

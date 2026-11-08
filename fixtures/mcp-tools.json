@@ -67,7 +67,7 @@
             ]
           },
           "browserThinkingTime": {
-            "description": "Browser-only: set ChatGPT thinking time when supported by the chosen model.",
+            "description": "Browser-only: ChatGPT thinking time. A fresh run accepts pro (the default) or extra-high, which selects Extra High without trying Pro; other values are refused.",
             "type": "string",
             "enum": [
               "light",
