@@ -517,7 +517,7 @@ impl Exchange {
                 let marker = self
                     .prompt
                     .split_whitespace()
-                    .find(|word| word.starts_with("ALCUIN-END-"));
+                    .rfind(|word| word.starts_with("ALCUIN-END-"));
                 format!(
                     "{answer}\n{}\n",
                     marker.expect("the prompt asks for an end marker")
