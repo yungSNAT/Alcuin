@@ -24,10 +24,18 @@ jobs:
   # #[ignore]d and run locally; live receipts never run in CI. The native-Chrome job
   # below runs the privacy and Grok fixture test, which needs only an installed Chrome.
   check:
+    name: check (${{ matrix.os }}${{ matrix.shard && format(', {0}/2', matrix.shard) || '' }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+          # Windows runs its tests one at a time, so they are split across 2 runners by test
+          # name; the serial run took 11.5 of the job's 13.2 minutes.
+          - os: windows-latest
+            shard: 1
+          - os: windows-latest
+            shard: 2
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -48,8 +56,10 @@ jobs:
       - if: runner.os == 'Windows'
         shell: pwsh
         run: Set-MpPreference -DisableRealtimeMonitoring $true
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
+      - if: matrix.shard != 2
+        run: cargo fmt --check
+      - if: matrix.shard != 2
+        run: cargo clippy --all-targets --locked -- -D warnings
       # Coverage needs llvm-tools and a prebuilt cargo-llvm-cov, with no fallback to compiling it.
       - if: runner.os == 'Linux'
         run: rustup component add llvm-tools
@@ -58,12 +68,18 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
           fallback: none
-      # Timing-bounded tests (1 s and 5 s durable-write and retirement budgets) fail closed when the
-      # runner is contended: Windows runs them serially, Linux on two threads. Temporary files stay
-      # on the workspace drive: a durable write's median was 6 to 9 ms on the Windows system drive
-      # and 0.2 to 0.6 ms there (3 runners, 30 October 2026).
       - if: runner.os == 'Windows'
-        run: cargo test --locked -- --test-threads=1
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-nextest@0.9.150
+          fallback: none
+      # Timing-bounded tests (1 s and 5 s durable-write and retirement budgets) fail closed when the
+      # runner is contended: each Windows runner runs its half serially, Linux on two threads.
+      # Temporary files stay on the workspace drive: a durable write's median was 6 to 9 ms on the
+      # Windows system drive and 0.2 to 0.6 ms there (3 runners, 30 October 2026). The crate has no
+      # doc tests, so nextest runs every test cargo test did.
+      - if: runner.os == 'Windows'
+        run: cargo nextest run --locked --no-fail-fast --partition hash:${{ matrix.shard }}/2 --test-threads=1
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
