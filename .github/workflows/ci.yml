@@ -38,7 +38,11 @@ jobs:
       - name: Check browser script syntax
         shell: bash
         run: for script in browser-scripts/*.js; do node --check "$script"; done
+      # Only main saves: a pull request's cache can be restored only by that pull request's
+      # reruns, and its copies pushed the repository over the 10 GB cache limit.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Real-time scanning can hold newly written files, so atomic renames retry past the tests'
       # durable-write budgets. The runner is disposable.
       - if: runner.os == 'Windows'
@@ -87,6 +91,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked native_temporary_chat_predicate_and_retained_send_guard -- --ignored
 
   # The upload runs apart from the tests so the OIDC token is never available
