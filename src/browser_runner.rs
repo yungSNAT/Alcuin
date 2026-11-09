@@ -222,12 +222,7 @@ fn prepare_with_base(
     }
     policy::assert_model_allowed(request.options["model"].as_str())?;
     policy::assert_model_allowed(request.browser["desiredModel"].as_str())?;
-    anyhow::ensure!(
-        request.browser["thinkingTime"]
-            .as_str()
-            .is_none_or(|s| matches!(s, "pro" | "extra-high")),
-        "Browser admission permits only Pro or Extra High thinking"
-    );
+    policy::assert_thinking_admitted(&request.browser["thinkingTime"])?;
     anyhow::ensure!(
         request.browser["modelStrategy"]
             .as_str()

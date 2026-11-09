@@ -323,7 +323,7 @@ pub async fn inspect(
     );
     policy::assert_model_allowed(input["desiredModel"].as_str())?;
     let level = serde_json::to_value(
-        ThinkingTime::parse(input["thinkingTime"].as_str().unwrap_or("pro"))
+        ThinkingTime::parse(ThinkingTime::setting(&input["thinkingTime"])?.unwrap_or("pro"))
             .context("Unknown browser thinking time")?,
     )?;
     let home = environment

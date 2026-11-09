@@ -206,6 +206,19 @@ async fn health_rejects_invalid_deadlines_before_profile_or_browser_changes() {
             .is_err()
         );
     }
+    // A saved thinking time that is not text is refused, not checked as Pro.
+    let malformed = inspect(
+        &json!({"thinkingTime":4}),
+        &env,
+        home.path(),
+        Duration::from_secs(30),
+        &CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(
+        malformed.unwrap_err().to_string(),
+        "Unknown browser thinking time"
+    );
     assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
 }
 

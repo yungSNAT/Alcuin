@@ -394,10 +394,18 @@ fn run_warnings(meta: &Value, request: &BrowserRequest) -> Vec<Value> {
             .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
             .any(|word| word.eq_ignore_ascii_case("pro"))
     });
+    // Unlike the reference, skip a run verified at Extra High, whether asked for or the
+    // Pro-unavailable fallback: it gave no Pro output, whatever its model name says.
+    let thinking = thinking_evidence(meta);
+    let extra_high = thinking["verified"] == true && thinking["requestedLevel"] == "extra-high";
     let (Some(tokens), Some(elapsed)) = (input_tokens(request), elapsed_ms(meta)) else {
         return vec![];
     };
-    if !pro || tokens < LARGE_PRO_FAST_INPUT_TOKENS || elapsed >= LARGE_PRO_FAST_ELAPSED_MS {
+    if !pro
+        || extra_high
+        || tokens < LARGE_PRO_FAST_INPUT_TOKENS
+        || elapsed >= LARGE_PRO_FAST_ELAPSED_MS
+    {
         return vec![];
     }
     let requested = if evidence["requestedModel"].is_null() {
@@ -853,6 +861,13 @@ mod tests {
         assert!(run_warnings(&slow, &request(30_000, None)).is_empty());
         let plain = json!({"model":"gpt-6","startedAt":started(60_000)});
         assert!(run_warnings(&plain, &request(30_000, None)).is_empty());
+        // Nor does a gpt-6-pro run verified at Extra High; an unverified one still warns.
+        let at = |verified: bool| {
+            json!({"model":"gpt-6-pro","startedAt":started(60_000),
+            "browser":{"runtime":{"thinkingSelection":{"verified":verified,"requestedLevel":"extra-high"}}}})
+        };
+        assert!(run_warnings(&at(true), &request(30_000, None)).is_empty());
+        assert_eq!(run_warnings(&at(false), &request(30_000, None)).len(), 1);
     }
 
     #[test]

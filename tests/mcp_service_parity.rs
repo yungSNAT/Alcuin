@@ -231,6 +231,12 @@ async fn validation_and_engine_texts_match_the_reference() {
             json!({"prompt":PROMPT,"engine":"browser","browserResearchMode":"deep"}),
             "input.browserResearchMode: invalid enum value",
         ),
+        // Deliberately stricter than the reference, which accepts `medium` and other tiers.
+        (
+            "consult",
+            json!({"prompt":PROMPT,"engine":"browser","browserThinkingTime":"medium"}),
+            "input.browserThinkingTime: invalid enum value",
+        ),
         (
             "consult",
             json!({"prompt":PROMPT,"engine":"api","browserKeepBrowser":false,"dryRun":true}),

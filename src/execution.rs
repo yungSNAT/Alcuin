@@ -569,10 +569,10 @@ fn resolve_origin(
         .map(|raw| policy::trim(raw).to_lowercase());
     let explicit_pro = input["model"].as_str().is_some_and(policy::is_pro_model)
         && !matches!(strategy.as_deref(), Some("current" | "ignore"));
-    let time = input["browserThinkingTime"]
-        .as_str()
+    let saved = ThinkingTime::setting(&browser["thinkingTime"])?;
+    let time = ThinkingTime::setting(&input["browserThinkingTime"])?
         .or(explicit_pro.then_some("pro"))
-        .or(browser["thinkingTime"].as_str())
+        .or(saved)
         .unwrap_or("pro");
     browser["thinkingTime"] =
         json!(ThinkingTime::parse(time).context("Unknown browser thinking time")?);
