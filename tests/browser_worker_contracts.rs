@@ -263,6 +263,15 @@ fn fresh_and_borrowed_requests_admit_extra_high_and_nothing_else() {
             .to_string(),
         "Browser admission permits only Pro or Extra High thinking"
     );
+    // A non-text value is refused, not taken as absent: dispatch would read it as Pro.
+    let mut not_text = medium;
+    not_text.browser["thinkingTime"] = json!(4);
+    assert_eq!(
+        browser_runner::prepare(&store, &not_text, home.path())
+            .unwrap_err()
+            .to_string(),
+        "Browser admission permits only Pro or Extra High thinking"
+    );
     let borrowed = execution::resolve(
         &input,
         &json!({"browser":{"manualLogin":true,"manualLoginProfileDir":home.path().join("profile"),"browserTabRef":"current"}}),

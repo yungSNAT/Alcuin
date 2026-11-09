@@ -63,6 +63,16 @@ pub fn assert_model_allowed(model: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// A browser run may ask only for Pro (also when absent) or Extra High. A non-text value is
+/// refused, not taken as absent: dispatch would read it as Pro.
+pub fn assert_thinking_admitted(thinking: &serde_json::Value) -> Result<()> {
+    anyhow::ensure!(
+        thinking.is_null() || matches!(thinking.as_str(), Some("pro" | "extra-high")),
+        "Browser admission permits only Pro or Extra High thinking"
+    );
+    Ok(())
+}
+
 pub fn require_api_pro(mode: Option<&str>) -> Result<&'static str> {
     if mode.is_some_and(|mode| !mode.is_empty() && mode != "pro") {
         bail!("Alcuin API dispatch requires Pro reasoning mode.");

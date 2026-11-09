@@ -64,6 +64,8 @@ impl BrowserDriver {
         if browser["thinkingTime"].is_null() {
             browser["thinkingTime"] = json!("pro");
         }
+        // The client's value has not passed this host's run resolution.
+        policy::assert_thinking_admitted(&browser["thinkingTime"])?;
         if browser["modelStrategy"].is_null() {
             browser["modelStrategy"] = json!("select");
         }
@@ -377,6 +379,23 @@ mod tests {
             }
             assert!(!context.store.root().exists());
         }
+    }
+    #[test]
+    fn producer_admits_only_pro_or_extra_high_before_creating_session() {
+        for thinking in [json!(4), json!(["pro"]), json!("medium")] {
+            let (_home, driver, context) = fixture(json!({"prompt":"PUBLIC original prompt",
+                "browserConfig":{"thinkingTime":thinking},"options":{}}));
+            assert_eq!(
+                driver.prepare(&context).unwrap_err().to_string(),
+                "Browser admission permits only Pro or Extra High thinking"
+            );
+            assert!(!context.store.root().exists());
+        }
+        let (_home, driver, context) = fixture(json!({"prompt":"PUBLIC original prompt",
+            "browserConfig":{"thinkingTime":"extra-high"},"options":{}}));
+        let id = driver.prepare(&context).unwrap();
+        let metadata = context.store.require(&id).unwrap();
+        assert_eq!(metadata["browser"]["config"]["thinkingTime"], "extra-high");
     }
     #[test]
     fn chatgpt_url_errors_use_the_reference_wording() {
