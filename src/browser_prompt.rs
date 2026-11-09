@@ -383,8 +383,12 @@ fn count(attachments: usize, format: BundleFormat) -> Result<()> {
 pub(crate) fn new_end_marker() -> String {
     format!("ALCUIN-END-{}", uuid::Uuid::new_v4().simple())
 }
+/// The marker sits inside the sentence, so a capture that returns this prompt instead of the
+/// answer does not end with the marker's line.
 pub(crate) fn with_end_marker(prompt: &str, marker: &str) -> String {
-    format!("{prompt}\n\nEnd your reply with this exact line and write nothing after it:\n{marker}")
+    format!(
+        "{prompt}\n\nEnd your reply with a line holding only {marker} and write nothing after it."
+    )
 }
 fn closing_fence(line: &str) -> bool {
     line.len() >= 3 && (line.chars().all(|c| c == '`') || line.chars().all(|c| c == '~'))
@@ -870,7 +874,7 @@ mod tests {
         );
         assert_eq!(
             with_end_marker("PUBLIC prompt", "PUBLIC-END"),
-            "PUBLIC prompt\n\nEnd your reply with this exact line and write nothing after it:\nPUBLIC-END"
+            "PUBLIC prompt\n\nEnd your reply with a line holding only PUBLIC-END and write nothing after it."
         );
         for answer in [
             "PUBLIC-END",
@@ -897,6 +901,16 @@ mod tests {
         ] {
             assert!(!ends_with_marker(answer, "PUBLIC-END"), "{answer:?}");
         }
+    }
+    #[test]
+    fn a_capture_of_the_marked_prompt_is_not_a_complete_answer() {
+        let marker = new_end_marker();
+        let prompt = with_end_marker("PUBLIC prompt", &marker);
+        assert!(!ends_with_marker(&prompt, &marker), "{prompt:?}");
+        assert!(ends_with_marker(
+            &format!("PUBLIC answer\n{marker}\n"),
+            &marker
+        ));
     }
     #[test]
     fn full_prompt_and_fallback_corpus_matches_the_pinned_reference() {
