@@ -514,7 +514,14 @@ impl Exchange {
         let answer = "PUBLIC exact owned answer\n\nEnd\n";
         match self.fault {
             Fault::MarkedAnswer | Fault::GenerationFailedThenMarked => {
-                format!("{answer}\n{}\n", self.prompt.lines().last().unwrap())
+                let marker = self
+                    .prompt
+                    .split_whitespace()
+                    .rfind(|word| word.starts_with("ALCUIN-END-"));
+                format!(
+                    "{answer}\n{}\n",
+                    marker.expect("the prompt asks for an end marker")
+                )
             }
             Fault::TinyAnswer => "I".into(),
             _ => answer.into(),
