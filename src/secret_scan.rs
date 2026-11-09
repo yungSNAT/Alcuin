@@ -35,9 +35,22 @@ const RULES: &[(&str, &str)] = &[
         r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b(?s:.{0,128}?)[^A-Za-z0-9/+=][A-Za-z0-9/+]{40}(?:[^A-Za-z0-9/+=]|\z)",
     ),
     ("OpenAI admin key", r"\bsk-admin-[A-Za-z0-9_-]{40}"),
+    // Keys of any kind hold the fixed marker `T3BlbkFJ`, as in gitleaks' `openai-api-key` rule
+    // (config/gitleaks.toml, gitleaks/gitleaks 09242ce). Its longest prefix before the marker is
+    // `svcacct-` and 74 characters, hence 82.
+    ("OpenAI key", r"\bsk-[A-Za-z0-9_-]{20,82}T3BlbkFJ"),
+    // Anthropic credentials start `sk-ant-<kind><version>-`: `api03` and `admin01` keys
+    // (gitleaks' `anthropic-api-key` and `anthropic-admin-api-key`) and `oat01` OAuth tokens
+    // (platform.claude.com CLI authentication docs). The kind stays open, so OAuth refresh tokens,
+    // whose prefix Anthropic does not document, are caught too.
     (
         "Anthropic key",
-        r"\bsk-ant-(?:api|admin)[0-9a-z]*-[A-Za-z0-9_-]{40}",
+        r"\bsk-ant-[0-9a-z]{1,12}-[A-Za-z0-9_-]{40}",
+    ),
+    // gitleaks' `huggingface-access-token` rule: exactly 34 letters, so a longer identifier passes.
+    (
+        "Hugging Face token",
+        r"\bhf_[A-Za-z]{34}(?:[^A-Za-z0-9_]|\z)",
     ),
     ("xAI key", r"\bxai-[A-Za-z0-9]{80}"),
     ("Google API key", r"\bAIza[A-Za-z0-9_-]{35}"),
@@ -163,6 +176,7 @@ mod tests {
     fn fixtures() -> Vec<(&'static str, String)> {
         let dash = "-".repeat(5);
         let key_id = ["AK", "IA"].concat() + &body(16, 1);
+        let openai = ["T3Bl", "bkFJ"].concat();
         vec![
             (
                 "private key block",
@@ -204,6 +218,18 @@ mod tests {
                 ["sk-", "admin-"].concat() + &body(60, 11),
             ),
             (
+                "OpenAI key",
+                ["sk-", "proj-"].concat() + &body(74, 35) + &openai + &body(74, 36),
+            ),
+            (
+                "OpenAI key",
+                ["sk-", "svcacct-"].concat() + &body(58, 37) + &openai + &body(58, 38),
+            ),
+            (
+                "OpenAI key",
+                ["s", "k-"].concat() + &body(20, 39) + &openai + &body(20, 40),
+            ),
+            (
                 "Anthropic key",
                 ["sk-", "ant-api03-"].concat() + &body(95, 12),
             ),
@@ -211,6 +237,15 @@ mod tests {
                 "Anthropic key",
                 ["sk-", "ant-admin01-"].concat() + &body(95, 13),
             ),
+            (
+                "Anthropic key",
+                ["sk-", "ant-oat01-"].concat() + &body(95, 41),
+            ),
+            (
+                "Anthropic key",
+                ["sk-", "ant-ort01-"].concat() + &body(95, 42),
+            ),
+            ("Hugging Face token", ["h", "f_"].concat() + &body(34, 43)),
             ("xAI key", ["x", "ai-"].concat() + &body(80, 14)),
             ("Google API key", ["AI", "za"].concat() + &body(35, 15)),
             (
@@ -336,6 +371,12 @@ mod tests {
             ["gh", "p_"].concat() + "xxxx",
             ["sk-", "admin-"].concat() + "1234abcd",
             ["sk-", "ant-api03-"].concat() + "R2D...igAA",
+            ["sk-", "ant-oat01-"].concat() + "EXA...",
+            // An OpenAI-like value without the marker, and a placeholder.
+            ["sk-", "proj-"].concat() + &body(80, 44),
+            ["sk-", "proj-"].concat() + "...",
+            ["h", "f_"].concat() + "xxx",
+            ["h", "f_"].concat() + &body(35, 45),
             ["x", "ai-"].concat() + "...oYZ4",
             ["xo", "xb-"].concat() + "not-a-real-token-this-will-not-work",
             ["pk_", "live_"].concat() + &body(24, 29),
