@@ -35,12 +35,10 @@ const RULES: &[(&str, &str)] = &[
         r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b(?s:.{0,128}?)[^A-Za-z0-9/+=][A-Za-z0-9/+]{40}(?:[^A-Za-z0-9/+=]|\z)",
     ),
     ("OpenAI admin key", r"\bsk-admin-[A-Za-z0-9_-]{40}"),
-    // Project, service account and legacy user keys hold the fixed marker `T3BlbkFJ`, as in
-    // gitleaks' `openai-api-key` rule (config/gitleaks.toml, gitleaks/gitleaks 09242ce).
-    (
-        "OpenAI key",
-        r"\bsk-(?:(?:proj|svcacct)-[A-Za-z0-9_-]{58,74}|[A-Za-z0-9]{20})T3BlbkFJ",
-    ),
+    // Keys of any kind hold the fixed marker `T3BlbkFJ`, as in gitleaks' `openai-api-key` rule
+    // (config/gitleaks.toml, gitleaks/gitleaks 09242ce). Its longest prefix before the marker is
+    // `svcacct-` and 74 characters, hence 82.
+    ("OpenAI key", r"\bsk-[A-Za-z0-9_-]{20,82}T3BlbkFJ"),
     // Anthropic credentials start `sk-ant-<kind><version>-`: `api03` and `admin01` keys
     // (gitleaks' `anthropic-api-key` and `anthropic-admin-api-key`) and `oat01` OAuth tokens
     // (platform.claude.com CLI authentication docs). The kind stays open, so OAuth refresh tokens,
@@ -49,8 +47,11 @@ const RULES: &[(&str, &str)] = &[
         "Anthropic key",
         r"\bsk-ant-[0-9a-z]{1,12}-[A-Za-z0-9_-]{40}",
     ),
-    // gitleaks' `huggingface-access-token` rule.
-    ("Hugging Face token", r"\bhf_[A-Za-z]{34}"),
+    // gitleaks' `huggingface-access-token` rule: exactly 34 letters, so a longer identifier passes.
+    (
+        "Hugging Face token",
+        r"\bhf_[A-Za-z]{34}(?:[^A-Za-z0-9_]|\z)",
+    ),
     ("xAI key", r"\bxai-[A-Za-z0-9]{80}"),
     ("Google API key", r"\bAIza[A-Za-z0-9_-]{35}"),
     (
@@ -375,6 +376,7 @@ mod tests {
             ["sk-", "proj-"].concat() + &body(80, 44),
             ["sk-", "proj-"].concat() + "...",
             ["h", "f_"].concat() + "xxx",
+            ["h", "f_"].concat() + &body(35, 45),
             ["x", "ai-"].concat() + "...oYZ4",
             ["xo", "xb-"].concat() + "not-a-real-token-this-will-not-work",
             ["pk_", "live_"].concat() + &body(24, 29),
