@@ -148,7 +148,7 @@ async fn dry_runs_print_the_reference_summary_resolved_lines_and_guidance() {
         "  browser bundle files: no",
         "  follow-ups: 1",
         "  guidance: Manual-login browser mode uses Alcuin's private Chrome profile at PUBLIC-profile, separate from your normal Chrome profile.",
-        "  guidance: First-time setup: run alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir \"PUBLIC-profile\" -p \"HI\", sign into ChatGPT in that window, then retry the consult.",
+        "  guidance: First-time setup: run alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir \"PUBLIC-profile\" -p \"Reply with OK.\", sign into ChatGPT in that window, then retry the consult.",
         "  guidance: This ChatGPT project URL is persistent. Project Sources should be mutated only by the project_sources tool with confirmMutation:true.",
         "  guidance: This is a multi-turn browser consult; all follow-ups stay in one ChatGPT conversation.",
     ] {

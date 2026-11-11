@@ -1771,10 +1771,13 @@ fn manual_login_not_initialised(profile: &Path) -> String {
         manual_login_setup_command(profile)
     )
 }
+/// The prompt the setup command sends once the user has signed in. It must pass the browser
+/// runner's minimum prompt length, or the setup run is refused.
+pub(crate) const MANUAL_LOGIN_SETUP_PROMPT: &str = "Reply with OK.";
 /// The reference's `formatManualLoginSetupCommand`.
 pub(crate) fn manual_login_setup_command(profile: &Path) -> String {
     format!(
-        "alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {} -p \"HI\"",
+        "alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {} -p \"{MANUAL_LOGIN_SETUP_PROMPT}\"",
         serde_json::Value::String(profile.display().to_string())
     )
 }
@@ -4185,7 +4188,7 @@ mod tests {
         assert_eq!(
             manual_login_not_initialised(profile),
             format!(
-                "ChatGPT browser manual-login profile is not initialized. Browser mode is using Alcuin's private Chrome profile at {}, separate from your normal Chrome profile. Run first-time setup, sign in there, then retry: alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {quoted} -p \"HI\". If you want to reuse an already signed-in Chrome instead, use --browser-attach-running.",
+                "ChatGPT browser manual-login profile is not initialized. Browser mode is using Alcuin's private Chrome profile at {}, separate from your normal Chrome profile. Run first-time setup, sign in there, then retry: alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {quoted} -p \"Reply with OK.\". If you want to reuse an already signed-in Chrome instead, use --browser-attach-running.",
                 profile.display()
             )
         );

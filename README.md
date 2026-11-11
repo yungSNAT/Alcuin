@@ -55,7 +55,7 @@ alcuin --dry-run summary --files-report -p "Review this module" --file src/lib.r
 **ChatGPT in the browser.** Alcuin uses its own Chrome profile, separate from your normal one. Sign in once:
 
 ```sh
-alcuin --engine browser --browser-manual-login --browser-keep-browser -p "HI"
+alcuin --engine browser --browser-manual-login --browser-keep-browser -p "Reply with OK."
 ```
 
 Then run consultations with `--engine browser`. Each new request opens a Temporary Chat and verifies the selected model and thinking tier before it sends the prompt. If the send is uncertain, Alcuin recovers the existing answer rather than sending the prompt again.
