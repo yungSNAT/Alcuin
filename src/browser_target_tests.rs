@@ -720,12 +720,17 @@ async fn cancellation_retains_allocation_until_exact_late_blank_target_absence_i
                     allocation_lease,
                     "https://chatgpt.com/c/public-late",
                     &token,
-                    Duration::from_secs(1),
+                    Duration::from_secs(10),
                 )
                 .await
             } else {
-                copy.acquire(connection, allocation_lease, &token, Duration::from_secs(1))
-                    .await
+                copy.acquire(
+                    connection,
+                    allocation_lease,
+                    &token,
+                    Duration::from_secs(10),
+                )
+                .await
             }
         });
         seen.await.unwrap();
@@ -737,9 +742,16 @@ async fn cancellation_retains_allocation_until_exact_late_blank_target_absence_i
             true
         );
         resume.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while acquisition.state().await != AllocationState::Absent {
-            assert!(Instant::now() < deadline);
+        // Liveness bounds, not speed checks: the allocation and this loop end as soon as the target
+        // is absent. 1 second for each was too short under coverage instrumentation with 2 test
+        // threads; the allocation's deadline also runs whilst the test cancels and resumes.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = acquisition.state().await;
+            if state == AllocationState::Absent {
+                break;
+            }
+            assert!(Instant::now() < deadline, "still {state:?} after 10 s");
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert!(
