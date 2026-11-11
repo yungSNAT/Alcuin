@@ -8319,6 +8319,19 @@ async fn recovery_preserves_image_positions_and_reuses_button_publications_after
     }
 }
 #[test]
+fn the_manual_login_setup_prompt_passes_the_prompt_minimum() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path().join(".oracle"));
+    let request = crate::execution::resolve(
+        &json!({"prompt": crate::browser_chrome::MANUAL_LOGIN_SETUP_PROMPT, "engine": "browser"}),
+        &json!({}),
+        &crate::config::Environment::new(),
+        home.path(),
+    )
+    .unwrap();
+    prepare(&store, &request, home.path()).unwrap();
+}
+#[test]
 fn invalid_image_destinations_refuse_before_session_creation() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path().join(".oracle"));
@@ -9595,7 +9608,7 @@ async fn manual_login_timeout_names_the_private_profile_and_setup_command() {
     assert_eq!(
         error.to_string(),
         format!(
-            "Manual login mode timed out waiting for ChatGPT session. Browser mode is using Alcuin's private Chrome profile at {profile}, not your normal Chrome profile. Run first-time setup, sign in there, then retry: alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {} -p \"HI\"",
+            "Manual login mode timed out waiting for ChatGPT session. Browser mode is using Alcuin's private Chrome profile at {profile}, not your normal Chrome profile. Run first-time setup, sign in there, then retry: alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {} -p \"Reply with OK.\"",
             serde_json::to_string(&profile).unwrap()
         )
     );

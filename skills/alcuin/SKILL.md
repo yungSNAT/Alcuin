@@ -22,7 +22,7 @@ The model sees only the prompt and the attachments. Give it the goal, what you h
 ChatGPT in the browser needs one sign-in, which the user does by hand in the window this opens:
 
 ```sh
-alcuin --engine browser --browser-manual-login --browser-keep-browser -p "HI"
+alcuin --engine browser --browser-manual-login --browser-keep-browser -p "Reply with OK."
 ```
 
 Then:

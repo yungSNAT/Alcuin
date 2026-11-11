@@ -715,7 +715,7 @@ pub fn dry_run_resolved(request: &ResolvedRequest) -> Value {
                 .as_str()
                 .unwrap_or("~/.oracle/browser-profile");
             guidance.push(format!("Manual-login browser mode uses Alcuin's private Chrome profile at {profile}, separate from your normal Chrome profile."));
-            guidance.push(format!("First-time setup: run alcuin --engine browser --browser-manual-login --browser-keep-browser --browser-manual-login-profile-dir {} -p \"HI\", sign into ChatGPT in that window, then retry the consult.", json!(profile)));
+            guidance.push(format!("First-time setup: run {}, sign into ChatGPT in that window, then retry the consult.", crate::browser_chrome::manual_login_setup_command(Path::new(profile))));
             guidance.push("If this profile is not signed in, non-setup MCP/browser runs fail fast instead of waiting for the full browser timeout.".into());
         }
     } else {
