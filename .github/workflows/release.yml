@@ -1,0 +1,161 @@
+name: release
+
+# Builds alcuin and alcuin-mcp for Linux and Windows and bundles alcuin-mcp as an MCP bundle
+# (.mcpb) for Claude Desktop. A tag such as v0.1.0 attests the archives and publishes them as a
+# GitHub release; a manual run attests and uploads artefacts; a pull request that changes this
+# workflow or the bundle manifest only uploads them. The tests run in ci.yml on every commit to
+# main, so this workflow only builds.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - packaging/mcpb/manifest.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Pinned, not ubuntu-latest, so the glibc floor (2.39) stays where README states it.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            exe: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: .exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test "${GITHUB_REF_NAME}" = "v${version}" || {
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}"
+            exit 1
+          }
+      - run: rustup toolchain install
+      - name: Build
+        env:
+          # A static C runtime, so the Windows binaries run without the VC++ redistributable.
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static' || '' }}
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          name=alcuin-${{ matrix.target }}
+          mkdir -p "dist/$name"
+          for bin in alcuin alcuin-mcp; do
+            cp "target/${{ matrix.target }}/release/${bin}${{ matrix.exe }}" "dist/$name/"
+          done
+          cp LICENSE NOTICE README.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "$name" > /dev/null
+            sha256sum "$name.zip" > "$name.zip.sha256"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+          rm -r "$name"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alcuin-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Bundle alcuin-mcp for Claude Desktop
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          bundle="$RUNNER_TEMP/bundle"
+          mkdir -p "$bundle/server" "$RUNNER_TEMP/out"
+          tar -xzf dist/alcuin-x86_64-unknown-linux-gnu.tar.gz -C "$RUNNER_TEMP"
+          unzip -q dist/alcuin-x86_64-pc-windows-msvc.zip -d "$RUNNER_TEMP"
+          # alcuin-mcp starts the alcuin CLI beside it, so each platform folder holds both.
+          mv "$RUNNER_TEMP/alcuin-x86_64-unknown-linux-gnu" "$bundle/server/linux-x64"
+          mv "$RUNNER_TEMP/alcuin-x86_64-pc-windows-msvc" "$bundle/server/win32-x64"
+          for bin in alcuin alcuin-mcp; do
+            test -x "$bundle/server/linux-x64/$bin"
+            test -f "$bundle/server/win32-x64/$bin.exe"
+          done
+          sed "s/@VERSION@/${version}/" packaging/mcpb/manifest.json > "$bundle/manifest.json"
+          python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$bundle/manifest.json"
+          grep -q "\"version\": \"${version}\"" "$bundle/manifest.json"
+          (cd "$bundle" && zip -qr "$RUNNER_TEMP/out/alcuin.mcpb" .)
+          (cd "$RUNNER_TEMP/out" && sha256sum alcuin.mcpb > alcuin.mcpb.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alcuin-mcpb
+          path: ${{ runner.temp }}/out/*
+          if-no-files-found: error
+
+  # Attestations go to the public Sigstore log, so pull request runs skip this job.
+  attest:
+    if: github.event_name != 'pull_request'
+    needs: [build, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.mcpb
+
+  release:
+    # A tag push only: a manual run on a tag leaves its artefacts unpublished.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [build, bundle, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Prebuilt alcuin and alcuin-mcp for Linux (x86_64, glibc 2.39 or later) and Windows (x86_64), each archive with a SHA-256 checksum and a build provenance attestation, and an MCP bundle (alcuin.mcpb) for Claude Desktop. See CHANGELOG.md for what changed."

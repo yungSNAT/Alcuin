@@ -1,0 +1,29 @@
+{
+  "manifest_version": "0.3",
+  "name": "alcuin",
+  "display_name": "Alcuin",
+  "version": "@VERSION@",
+  "description": "Ask ChatGPT, or the OpenAI or Azure OpenAI API, about the source files you choose, and keep each answer as a durable session.",
+  "author": { "name": "yungSNAT", "url": "https://github.com/yungSNAT" },
+  "homepage": "https://github.com/yungSNAT/Alcuin",
+  "repository": { "type": "git", "url": "https://github.com/yungSNAT/Alcuin" },
+  "license": "FSL-1.1-ALv2 AND MIT",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/linux-x64/alcuin-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/linux-x64/alcuin-mcp",
+      "args": [],
+      "platform_overrides": {
+        "win32": { "command": "${__dirname}/server/win32-x64/alcuin-mcp.exe" }
+      }
+    }
+  },
+  "tools": [
+    { "name": "consult", "description": "Run an Alcuin session through the API or ChatGPT in the browser, with the files you attach." },
+    { "name": "project_sources", "description": "List a ChatGPT Project's Sources tab, or preview which files an upload would add." },
+    { "name": "sessions", "description": "List recent Alcuin sessions or fetch one by ID." },
+    { "name": "wait", "description": "Wait for a session to finish without polling." }
+  ],
+  "compatibility": { "platforms": ["win32", "linux"] }
+}
