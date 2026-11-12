@@ -12,6 +12,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - packaging/mcpb/manifest.json
+      - packaging/smoke.sh
   workflow_dispatch:
 
 permissions:
@@ -72,6 +73,20 @@ jobs:
             sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           fi
           rm -r "$name"
+      - name: Smoke-test the packaged archive
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          name=alcuin-${{ matrix.target }}
+          smoke="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd dist && sha256sum -c "$name.zip.sha256")
+            7z x "dist/$name.zip" -o"$smoke" > /dev/null
+          else
+            (cd dist && sha256sum -c "$name.tar.gz.sha256")
+            tar -xzf "dist/$name.tar.gz" -C "$smoke"
+          fi
+          bash packaging/smoke.sh "$smoke/$name" "$version"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: alcuin-${{ matrix.target }}
@@ -110,6 +125,23 @@ jobs:
           grep -q "\"version\": \"${version}\"" "$bundle/manifest.json"
           (cd "$bundle" && zip -qr "$RUNNER_TEMP/out/alcuin.mcpb" .)
           (cd "$RUNNER_TEMP/out" && sha256sum alcuin.mcpb > alcuin.mcpb.sha256)
+      # The Linux server runs here; the Windows one must match the archive the build job ran.
+      - name: Smoke-test the MCP bundle
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          smoke="$RUNNER_TEMP/mcpb-smoke"
+          (cd "$RUNNER_TEMP/out" && sha256sum -c alcuin.mcpb.sha256)
+          unzip -q "$RUNNER_TEMP/out/alcuin.mcpb" -d "$smoke"
+          linux=$(jq -r .server.entry_point "$smoke/manifest.json")
+          # The Windows command is ${__dirname}/<path>; drop that first segment.
+          windows=$(jq -r .server.mcp_config.platform_overrides.win32.command "$smoke/manifest.json")
+          windows=${windows#*/}
+          bash packaging/smoke.sh "$smoke/$(dirname "$linux")" "$version"
+          for bin in alcuin.exe alcuin-mcp.exe; do
+            unzip -p dist/alcuin-x86_64-pc-windows-msvc.zip "alcuin-x86_64-pc-windows-msvc/$bin" |
+              cmp - "$smoke/$(dirname "$windows")/$bin"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: alcuin-mcpb
