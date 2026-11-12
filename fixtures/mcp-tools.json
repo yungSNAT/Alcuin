@@ -2,8 +2,8 @@
   "tools": [
     {
       "name": "consult",
-      "title": "Run a Alcuin session",
-      "description": "Run a Alcuin session (API or ChatGPT browser automation). Use `files` to attach project context. If `engine` is omitted, Alcuin follows CLI defaults: config/ORACLE_ENGINE first, then API when OPENAI_API_KEY is set, otherwise browser. Browser ChatGPT Pro consults can take many minutes; set `waitForCompletion:false` to return a durable sessionId immediately, then use `wait` to block without agent-side polling. Use `dryRun:true` first when configuring an agent and inspect `sessions`/`alcuin status` before retrying. Browser manual-login uses a private Alcuin Chrome profile separate from the user's normal Chrome; dry-run output includes first-time setup guidance when that path is active. For browser file uploads, set `browserAttachments:\"always\"`. Browser consults can include `browserFollowUps` for a multi-turn ChatGPT review in one conversation. Sessions are stored under `ORACLE_HOME_DIR` (shared with the CLI).",
+      "title": "Run an Alcuin session",
+      "description": "Run an Alcuin session (API or ChatGPT browser automation). Use `files` to attach project context. If `engine` is omitted, Alcuin follows CLI defaults: config/ORACLE_ENGINE first, then API when OPENAI_API_KEY is set, otherwise browser. Browser ChatGPT Pro consults can take many minutes; set `waitForCompletion:false` to return a durable sessionId immediately, then use `wait` to block without agent-side polling. Use `dryRun:true` first when configuring an agent and inspect `sessions`/`alcuin status` before retrying. Browser manual-login uses a private Alcuin Chrome profile separate from the user's normal Chrome; dry-run output includes first-time setup guidance when that path is active. For browser file uploads, set `browserAttachments:\"always\"`. Browser consults can include `browserFollowUps` for a multi-turn ChatGPT review in one conversation. Sessions are stored under `ORACLE_HOME_DIR` (shared with the CLI).",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -905,7 +905,7 @@
     },
     {
       "name": "wait",
-      "title": "Wait for a Alcuin session",
+      "title": "Wait for an Alcuin session",
       "description": "Wait for an existing Alcuin session to reach a terminal state without agent-side polling. Omit timeoutMs to wait indefinitely, or set a bounded caller wait. Wait timeout or request cancellation never cancels the Alcuin session; call wait again with the same id to continue waiting. Like `sessions`, it sees only sessions started in or below the MCP server working directory unless the user sets ORACLE_MCP_ALL_SESSIONS=1.",
       "inputSchema": {
         "type": "object",
