@@ -44,7 +44,10 @@
       for (; fiber && !seen.has(fiber); fiber = fiber.return) {
         seen.add(fiber);
         const props = fiber.memoizedProps;
-        if (props?.scrollStateConversationId !== viewId || props.isChatConversation !== true) continue;
+        // From 10 November 2026 ChatGPT keys the view by its local client ID and names the
+        // server ID only in its history; the older layout named it in scrollStateConversationId.
+        const boundId = props?.scrollStateConversationId ?? props?.history?.serverConversationId;
+        if (boundId !== viewId || props.isChatConversation !== true) continue;
         if (props.isTemporaryChat !== true || props.isWorkConversation !== false || props.isSharedConversation !== false) return false;
         matches.add(fiber);
       }
