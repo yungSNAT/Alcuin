@@ -23,9 +23,45 @@ It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Stein
 
 ## Install
 
-Alcuin needs Rust 1.99 or later. Browser runs also need Google Chrome.
+Download both binaries from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest), built for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64). Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs. Each block checks the archive's SHA-256 checksum, unpacks it and, with the [GitHub CLI](https://cli.github.com/), verifies its build provenance attestation.
+
+Linux (put `~/.local/bin` on your `PATH`):
 
 ```sh
+t=alcuin-x86_64-unknown-linux-gnu
+curl -fsSLO "https://github.com/yungSNAT/Alcuin/releases/latest/download/$t.tar.gz"
+curl -fsSLO "https://github.com/yungSNAT/Alcuin/releases/latest/download/$t.tar.gz.sha256"
+sha256sum -c "$t.tar.gz.sha256"
+gh attestation verify "$t.tar.gz" --repo yungSNAT/Alcuin
+tar -xzf "$t.tar.gz"
+mkdir -p ~/.local/bin && cp "$t/alcuin" "$t/alcuin-mcp" ~/.local/bin/
+alcuin --version
+```
+
+Windows, in PowerShell (then add `%LOCALAPPDATA%\Programs\Alcuin\alcuin-x86_64-pc-windows-msvc` to your `PATH`):
+
+```powershell
+$t = 'alcuin-x86_64-pc-windows-msvc'
+$base = 'https://github.com/yungSNAT/Alcuin/releases/latest/download'
+Invoke-WebRequest "$base/$t.zip" -OutFile "$t.zip"
+Invoke-WebRequest "$base/$t.zip.sha256" -OutFile "$t.zip.sha256"
+if ((Get-FileHash "$t.zip" -Algorithm SHA256).Hash -ne (Get-Content "$t.zip.sha256").Split(' ')[0]) { throw "Checksum mismatch: $t.zip" }
+gh attestation verify "$t.zip" --repo yungSNAT/Alcuin
+Expand-Archive "$t.zip" -DestinationPath "$env:LOCALAPPDATA\Programs\Alcuin" -Force
+& "$env:LOCALAPPDATA\Programs\Alcuin\$t\alcuin.exe" --version
+```
+
+For Claude Desktop, the same release has [`alcuin.mcpb`](https://github.com/yungSNAT/Alcuin/releases/latest/download/alcuin.mcpb), an MCP bundle holding `alcuin-mcp` for both platforms; open it with Claude Desktop to install the server as an extension.
+
+For Codex or Claude Code on the machine that runs the browser, `alcuin bridge codex-config --local-browser` and `alcuin bridge claude-config --local-browser` print a server entry that uses the browser profile you sign in to under [Use](#use). Without `--local-browser` they print entries for the remote browser bridge: the Codex entry points at an `alcuin serve` host, and the Claude Code entry uses a remote host only when your config or `ORACLE_REMOTE_HOST` names one, otherwise a separate `~/.oracle-local` home and browser profile.
+
+Browser runs need a Chromium-based browser. Alcuin looks for Chrome and Edge on Windows, and for Chrome, Chromium, Brave and Edge on Linux; to use another, such as Brave on Windows, set `CHROME_PATH` to its executable.
+
+To build from source instead, with Rust 1.99 or later:
+
+```sh
+git clone https://github.com/yungSNAT/Alcuin.git
+cd Alcuin
 cargo install --locked --path .
 alcuin --help
 ```
@@ -35,10 +71,6 @@ To build both binaries into `target/release` instead:
 ```sh
 cargo build --release
 ```
-
-Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs.
-
-Each [release](https://github.com/yungSNAT/Alcuin/releases) also attaches both binaries for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64), so no Rust toolchain is needed. Every archive has a SHA-256 checksum and a build provenance attestation, which `gh attestation verify` checks, and the MCP bundle `alcuin.mcpb` installs `alcuin-mcp` in Claude Desktop in one step.
 
 To teach a coding agent to use Alcuin, add its skill with the [Skills CLI](https://github.com/vercel-labs/skills):
 
