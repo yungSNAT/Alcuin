@@ -277,6 +277,30 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
             "Accepted conflicting or stale React view"
         );
     }
+    // From 10 November 2026 ChatGPT keys the view by its local client ID and names the server
+    // ID only in its history; scrollStateConversationId is gone.
+    let history_view = current_view.replace(
+        "scrollStateConversationId:'PUBLIC-id'",
+        "conversationId:'local-chatgpt:11111111-2222-4333-8444-555555555555',history:{serverConversationId:'PUBLIC-id'}",
+    );
+    for (setup, expected) in [
+        (history_view.clone(), json!(true)),
+        (
+            history_view.replace(
+                "serverConversationId:'PUBLIC-id'",
+                "serverConversationId:'PUBLIC-other'",
+            ),
+            json!(null),
+        ),
+        (
+            history_view.replace("isTemporaryChat:true", "isTemporaryChat:false"),
+            json!(false),
+        ),
+    ] {
+        mount(page, ACTIVE, "/c/PUBLIC-id", &setup).await?;
+        let state = page.evaluate(PROBE, SHORT, &cancel).await?;
+        assert_eq!(state, expected, "History-bound view: {setup}");
+    }
     // The guard is installed whilst Temporary Chat is valid, then the mode changes
     // before the native key event. A preflight-only implementation fails this case.
     mount(page, ACTIVE, "/", "(cfg)=>{window.PUBLIC_sends=0;document.querySelector('form').onsubmit=e=>{e.preventDefault();window.PUBLIC_sends++;};}").await?;
