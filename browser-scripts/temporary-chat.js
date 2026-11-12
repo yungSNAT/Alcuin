@@ -1,6 +1,9 @@
 // Qualified live UI predicate; source identity recorded in temporary-chat-source.json.
+// Its state is true, false (refused) or null (unknown); a state other than true names
+// the check that decided it, so a refusal can say which one failed.
 (() => {
-    if (location.origin !== 'https://chatgpt.com') return false;
+    const verdict = (state, reason) => ({ state, reason });
+    if (location.origin !== 'https://chatgpt.com') return verdict(false, 'Page is not on chatgpt.com');
     const visible = node => {
       if (node.closest('[data-message-author-role], [data-content-search-unit-key], [data-chatgpt-search-unit-key], [data-testid^="conversation-turn"], article[data-turn], [data-turn-key]')) return false;
       const rect = node.getBoundingClientRect();
@@ -13,7 +16,8 @@
     };
     const active = Array.from(document.querySelectorAll('main > header[data-app-shell-titlebar="true"] button[aria-label="Turn off temporary chat"]')).filter(visible);
     const inactive = Array.from(document.querySelectorAll('main > header[data-app-shell-titlebar="true"] button[aria-label="Turn on temporary chat"]')).filter(visible);
-    if (inactive.length || active.length > 1) return false;
+    if (inactive.length) return verdict(false, 'Header shows Temporary Chat turned off');
+    if (active.length > 1) return verdict(false, 'Header shows more than one Temporary Chat control');
     // ChatGPT removes the toggle after dispatch. Its mounted conversation view
     // still carries the mode and server ID; require both on the current tree.
     const path = location.pathname.split('/').filter(Boolean);
@@ -24,7 +28,10 @@
     const viewId = provisional ? decodeURIComponent(conversationId) : conversationId;
     // The toggle can unmount before both the route and conversation view.
     // Absence is unknown; an explicit inactive control above still refuses.
-    if (!conversationId) return path.length === 0 ? (active.length === 1 ? true : null) : false;
+    if (!conversationId) {
+      if (path.length !== 0) return verdict(false, 'Page is neither the landing page nor a conversation');
+      return active.length === 1 ? verdict(true, null) : verdict(null, 'Landing page shows no Temporary Chat control');
+    }
     const seen = new Set();
     const matches = new Set();
     for (const node of document.querySelectorAll('main *')) {
@@ -48,7 +55,9 @@
         // server ID only in its history; the older layout named it in scrollStateConversationId.
         const boundId = props?.scrollStateConversationId ?? props?.history?.serverConversationId;
         if (boundId !== viewId || props.isChatConversation !== true) continue;
-        if (props.isTemporaryChat !== true || props.isWorkConversation !== false || props.isSharedConversation !== false) return false;
+        if (props.isTemporaryChat !== true) return verdict(false, 'Conversation view is not marked Temporary Chat');
+        if (props.isWorkConversation !== false) return verdict(false, 'Conversation view is not confirmed outside Work');
+        if (props.isSharedConversation !== false) return verdict(false, 'Conversation view is not confirmed unshared');
         matches.add(fiber);
       }
     }
@@ -56,5 +65,6 @@
     // Every matching current view above must agree that it is temporary.
     // A conversation route can precede its mounted view. This is unknown,
     // never authority to enter payloads, dispatch, capture or retire a target.
-    return !provisional && matches.size > 0 ? true : null;
+    if (provisional) return verdict(null, 'Conversation has only its provisional local route');
+    return matches.size > 0 ? verdict(true, null) : verdict(null, 'Temporary Chat binding not found for the conversation view');
   })()

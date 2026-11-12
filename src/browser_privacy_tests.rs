@@ -34,6 +34,18 @@ fn landing_url_requests_temporary_mode_without_claiming_it_is_verified() {
     }
 }
 
+#[test]
+fn an_unverified_deadline_names_the_last_unknown_reason_or_that_none_was_read() {
+    assert_eq!(
+        unverified(Some("PUBLIC reason"), Duration::from_millis(300)),
+        format!("PUBLIC reason; still unknown after 300 ms. {REFUSAL}")
+    );
+    assert_eq!(
+        unverified(None, Duration::ZERO),
+        format!("Temporary Chat was not verified within 0 ms. {REFUSAL}")
+    );
+}
+
 async fn mount(page: &Cdp, html: &str, path: &str, setup: &str) -> Result<()> {
     page.evaluate_with_arguments(
         "(cfg) => { window.__oracleSubmissionWitness?.cleanup?.();delete window.__oracleSubmissionWitness; history.replaceState(null,'',cfg.path); document.body.innerHTML=cfg.html; return true; }",
@@ -51,6 +63,35 @@ async fn mount(page: &Cdp, html: &str, path: &str, setup: &str) -> Result<()> {
         )
         .await?;
     }
+    Ok(())
+}
+
+/// Both privacy gates refuse the mounted page and name the predicate's `reason`: `require`
+/// ahead of `REFUSAL`, and a guarded script through what the page threw.
+async fn refuses(page: &Cdp, timeout: Duration, reason: &str) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let waited = match require(page, timeout, &cancel).await {
+        Ok(()) => anyhow::bail!("require accepted a page that should refuse with: {reason}"),
+        Err(error) => format!("{error:#}"),
+    };
+    anyhow::ensure!(
+        waited.starts_with(reason) && waited.ends_with(REFUSAL),
+        "require should name '{reason}': {waited}"
+    );
+    let guarded = match page
+        .evaluate_with_arguments(&guard("(cfg) => true"), &json!([{}]), SHORT, &cancel)
+        .await
+    {
+        Ok(value) => anyhow::bail!("guard ran its script ({value}) instead of refusing: {reason}"),
+        Err(error) => format!("{error:#}"),
+    };
+    anyhow::ensure!(
+        guarded
+            == format!(
+                "Browser expression failed; result was not accepted. The page threw: {reason}. {REFUSAL}"
+            ),
+        "guard should name '{reason}': {guarded}"
+    );
     Ok(())
 }
 
@@ -202,30 +243,56 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
     let cancel = CancellationToken::new();
     mount(page, ACTIVE, "/", "").await?;
     require(page, SHORT, &cancel).await?;
-    for html in [
-        ACTIVE.replace("Turn off temporary chat", "Turn on temporary chat"),
-        ACTIVE.replace("<header ", "<header hidden "),
-        ACTIVE.replace("<button aria-label", "<button disabled aria-label"),
-        ACTIVE.replace(
-            "</header>",
-            "<button aria-label='Turn on temporary chat'>Ordinary</button></header>",
+    let off = "Header shows Temporary Chat turned off";
+    let landing = "Landing page shows no Temporary Chat control";
+    for (html, reason) in [
+        (
+            ACTIVE.replace("Turn off temporary chat", "Turn on temporary chat"),
+            off,
         ),
-        ACTIVE.replace(
-            "</header>",
-            "<button aria-label='Turn off temporary chat'>Duplicate</button></header>",
+        (ACTIVE.replace("<header ", "<header hidden "), landing),
+        (
+            ACTIVE.replace("<button aria-label", "<button disabled aria-label"),
+            landing,
         ),
-        format!("<article data-message-author-role='assistant'>{ACTIVE}</article>"),
-        ACTIVE.replace(
-            "data-app-shell-titlebar='true'",
-            "data-app-shell-titlebar='false'",
+        (
+            ACTIVE.replace(
+                "</header>",
+                "<button aria-label='Turn on temporary chat'>Ordinary</button></header>",
+            ),
+            off,
+        ),
+        (
+            ACTIVE.replace(
+                "</header>",
+                "<button aria-label='Turn off temporary chat'>Duplicate</button></header>",
+            ),
+            "Header shows more than one Temporary Chat control",
+        ),
+        (
+            format!("<article data-message-author-role='assistant'>{ACTIVE}</article>"),
+            landing,
+        ),
+        (
+            ACTIVE.replace(
+                "data-app-shell-titlebar='true'",
+                "data-app-shell-titlebar='false'",
+            ),
+            landing,
         ),
     ] {
         mount(page, &html, "/", "").await?;
-        assert!(
-            require(page, UNKNOWN, &cancel).await.is_err(),
-            "Accepted unverified fixture: {html}"
-        );
+        refuses(page, UNKNOWN, reason)
+            .await
+            .with_context(|| format!("Accepted or misnamed unverified fixture: {html}"))?;
     }
+    mount(page, ACTIVE, "/g/PUBLIC-project", "").await?;
+    refuses(
+        page,
+        UNKNOWN,
+        "Page is neither the landing page nor a conversation",
+    )
+    .await?;
     let current_view = "(cfg) => { const root={return:null,stateNode:{}}; root.stateNode.current=root; const props={scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}; document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:props}; }";
     for temporary in [false, true] {
         let setup = current_view
@@ -246,23 +313,52 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
         .await?;
         let state = page.evaluate(PROBE, SHORT, &cancel).await?;
         assert_eq!(
-            state,
+            state["state"],
             if temporary { json!(null) } else { json!(false) },
             "Provisional client route authorised privacy"
         );
-        assert!(require(page, UNKNOWN, &cancel).await.is_err());
+        refuses(
+            page,
+            UNKNOWN,
+            if temporary {
+                "Conversation has only its provisional local route"
+            } else {
+                "Conversation view is not marked Temporary Chat"
+            },
+        )
+        .await?;
     }
     mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
     require(page, SHORT, &cancel).await?;
     page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),old=node.__reactFiber$PUBLIC,root={return:null,stateNode:{}};root.stateNode.current=root;old.return.stateNode.current=root;old.alternate={return:root,memoizedProps:old.memoizedProps};return true;}",&json!([{}]),SHORT,&cancel).await?;
     require(page, SHORT, &cancel).await?;
-    for change in [
-        "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isTemporaryChat=false;}",
-        "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isSharedConversation=true;}",
-        "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isWorkConversation=true;}",
-        "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.scrollStateConversationId='PUBLIC-other';}",
-        "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.return.stateNode.current={};}",
-        "(cfg)=>{const n=document.createElement('div');n.textContent='PUBLIC conflicting view';document.querySelector('main').append(n);const f=document.querySelector('#view').__reactFiber$PUBLIC;n.__reactFiber$PUBLIC={return:f.return,memoizedProps:{...f.memoizedProps,isTemporaryChat:false}};}",
+    let not_temporary = "Conversation view is not marked Temporary Chat";
+    let unbound = "Temporary Chat binding not found for the conversation view";
+    for (change, reason) in [
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isTemporaryChat=false;}",
+            not_temporary,
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isSharedConversation=true;}",
+            "Conversation view is not confirmed unshared",
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isWorkConversation=true;}",
+            "Conversation view is not confirmed outside Work",
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.scrollStateConversationId='PUBLIC-other';}",
+            unbound,
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.return.stateNode.current={};}",
+            unbound,
+        ),
+        (
+            "(cfg)=>{const n=document.createElement('div');n.textContent='PUBLIC conflicting view';document.querySelector('main').append(n);const f=document.querySelector('#view').__reactFiber$PUBLIC;n.__reactFiber$PUBLIC={return:f.return,memoizedProps:{...f.memoizedProps,isTemporaryChat:false}};}",
+            not_temporary,
+        ),
     ] {
         mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
         page.evaluate_with_arguments(
@@ -272,10 +368,9 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
             &cancel,
         )
         .await?;
-        assert!(
-            require(page, SHORT, &cancel).await.is_err(),
-            "Accepted conflicting or stale React view"
-        );
+        refuses(page, SHORT, reason).await.with_context(|| {
+            format!("Accepted or misnamed conflicting or stale React view: {change}")
+        })?;
     }
     // From 10 November 2026 ChatGPT keys the view by its local client ID and names the server
     // ID only in its history; scrollStateConversationId is gone.
@@ -283,23 +378,34 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
         "scrollStateConversationId:'PUBLIC-id'",
         "conversationId:'local-chatgpt:11111111-2222-4333-8444-555555555555',history:{serverConversationId:'PUBLIC-id'}",
     );
-    for (setup, expected) in [
-        (history_view.clone(), json!(true)),
+    for (setup, expected, reason) in [
+        (history_view.clone(), json!(true), None),
+        // The 10 November 2026 failure: the view's server ID does not bind it to the route.
         (
             history_view.replace(
                 "serverConversationId:'PUBLIC-id'",
                 "serverConversationId:'PUBLIC-other'",
             ),
             json!(null),
+            Some(unbound),
         ),
         (
             history_view.replace("isTemporaryChat:true", "isTemporaryChat:false"),
             json!(false),
+            Some(not_temporary),
         ),
     ] {
         mount(page, ACTIVE, "/c/PUBLIC-id", &setup).await?;
         let state = page.evaluate(PROBE, SHORT, &cancel).await?;
-        assert_eq!(state, expected, "History-bound view: {setup}");
+        assert_eq!(state["state"], expected, "History-bound view: {setup}");
+        assert_eq!(
+            state["reason"],
+            json!(reason),
+            "History-bound view: {setup}"
+        );
+        if let Some(reason) = reason {
+            refuses(page, UNKNOWN, reason).await?;
+        }
     }
     // The guard is installed whilst Temporary Chat is valid, then the mode changes
     // before the native key event. A preflight-only implementation fails this case.
@@ -3315,7 +3421,7 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
             }
             if origin!="https://chatgpt.com" {
                 mount(&page,ACTIVE,"/","").await?;
-                anyhow::ensure!(require(&page,SHORT,&cancel).await.is_err(),"Non-ChatGPT origin proved Temporary Chat");
+                refuses(&page,SHORT,"Page is not on chatgpt.com").await.context("Non-ChatGPT origin proved Temporary Chat")?;
             }
             if origin=="https://grok.com" {
                 crate::browser_grok::tests::native_cases(&page, &chrome.endpoint).await.context("Native Grok Private/witness regression")?;
