@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, such as an interactive Claude Code session, which can then carry on whilst ChatGPT answers. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`. Other clients, and every other tool, keep the synchronous result unchanged.
+
 ## 0.1.0 (2026-11-12)
 
 First public release. Alcuin is a Rust port of [Oracle](https://github.com/steipete/oracle), made from a private fork that has since been retired; this repository starts a fresh history and carries no upstream changelog.
