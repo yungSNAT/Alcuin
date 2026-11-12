@@ -667,7 +667,7 @@ fn consult_runs_as_a_task_only_for_clients_that_declare_the_tasks_extension() {
     child.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sessions","arguments":{}}}));
     let sessions = child.receive(2);
     assert!(sessions["result"]["content"].is_array(), "{sessions}");
-    assert_ne!(sessions["result"]["resultType"], "task");
+    assert!(sessions["result"].get("taskId").is_none(), "{sessions}");
 
     child.frames.clear();
     child.send(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"consult","arguments":{"prompt":PROMPT,"engine":"api","dryRun":true}}}));
@@ -697,11 +697,34 @@ fn consult_runs_as_a_task_only_for_clients_that_declare_the_tasks_extension() {
         .unwrap()
         .to_owned();
     // The request reaches the silent provider before the cancel.
+    let _connection = provider_request(&silent);
+    child.send(json!({"jsonrpc":"2.0","id":5,"method":"tasks/cancel","params":{"taskId":running}}));
+    assert_eq!(child.receive(5)["result"]["resultType"], "complete");
+    let cancelled = child.settled(&running, 2000, &Value::Null);
+    assert_eq!(cancelled["status"], "cancelled", "{cancelled}");
+    // The run's error survives the cancel, with its session and the dispatch warning.
+    let message = cancelled["statusMessage"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("Session ")
+            && message.contains("dispatch may have reached the provider"),
+        "{cancelled}"
+    );
+
+    child.send(
+        json!({"jsonrpc":"2.0","id":6,"method":"tasks/get","params":{"taskId":"PUBLIC-unknown"}}),
+    );
+    assert_eq!(child.receive(6)["error"]["code"], -32602);
+    drop(child.child.stdin.take());
+    let _ = child.child.wait();
+}
+
+/// Waits up to 30 seconds for the consult's request to reach the silent provider.
+fn provider_request(silent: &TcpListener) -> std::net::TcpStream {
     silent.set_nonblocking(true).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let _connection = loop {
+    loop {
         match silent.accept() {
-            Ok((connection, _)) => break connection,
+            Ok((connection, _)) => return connection,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 assert!(
                     std::time::Instant::now() < deadline,
@@ -711,18 +734,35 @@ fn consult_runs_as_a_task_only_for_clients_that_declare_the_tasks_extension() {
             }
             Err(error) => panic!("{error}"),
         }
-    };
-    child.send(json!({"jsonrpc":"2.0","id":5,"method":"tasks/cancel","params":{"taskId":running}}));
-    assert_eq!(child.receive(5)["result"]["resultType"], "complete");
-    let cancelled = child.settled(&running, 2000, &Value::Null);
-    assert_eq!(cancelled["status"], "cancelled", "{cancelled}");
+    }
+}
 
-    child.send(
-        json!({"jsonrpc":"2.0","id":6,"method":"tasks/get","params":{"taskId":"PUBLIC-unknown"}}),
-    );
-    assert_eq!(child.receive(6)["error"]["code"], -32602);
+#[test]
+fn closing_stdin_cancels_a_running_task_consult() {
+    let home = tempfile::tempdir().unwrap();
+    let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", silent.local_addr().unwrap());
+    let mut child = mcp_child(home.path(), &endpoint);
+    child.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}},"clientInfo":{"name":"PUBLIC","version":"0.0.0"}}}));
+    let _ = child.receive(1);
+    child.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    child.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"consult","arguments":{"prompt":PROMPT,"engine":"api"}}}));
+    assert_eq!(child.receive(2)["result"]["resultType"], "task");
+    let _connection = provider_request(&silent);
     drop(child.child.stdin.take());
     let _ = child.child.wait();
+    // A fresh server reads the session the closed one left.
+    let mut reader = mcp_child(home.path(), &endpoint);
+    reader.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"PUBLIC","version":"0.0.0"}}}));
+    let _ = reader.receive(1);
+    reader.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    reader.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sessions","arguments":{}}}));
+    let listed = reader.receive(2);
+    let entries = &listed["result"]["structuredContent"]["entries"];
+    assert_eq!(entries.as_array().map(Vec::len), Some(1), "{listed}");
+    assert_eq!(entries[0]["status"], "cancelled", "{listed}");
+    drop(reader.child.stdin.take());
+    let _ = reader.child.wait();
 }
 
 #[test]
@@ -734,7 +774,7 @@ fn consult_stays_synchronous_and_tasks_are_refused_without_the_extension() {
     child.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     child.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"consult","arguments":{"prompt":PROMPT,"engine":"api","dryRun":true}}}));
     let result = child.receive(2)["result"].clone();
-    assert_ne!(result["resultType"], "task", "{result}");
+    assert!(result.get("taskId").is_none(), "{result}");
     assert_eq!(result["structuredContent"]["status"], "dry-run");
     child.send(
         json!({"jsonrpc":"2.0","id":3,"method":"tasks/get","params":{"taskId":"PUBLIC-unknown"}}),
@@ -760,16 +800,14 @@ fn a_2026_request_decides_the_task_by_its_own_meta_capabilities() {
     let tasks = meta(json!({"extensions":{"io.modelcontextprotocol/tasks":{}}}));
     child.send(json!({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":tasks}}));
     let discovered = child.receive(1);
-    assert!(discovered["error"].is_null(), "{discovered}");
-    assert!(
-        discovered["result"]
-            .to_string()
-            .contains("io.modelcontextprotocol/tasks"),
+    assert_eq!(
+        discovered["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"],
+        json!({}),
         "{discovered}"
     );
     child.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"consult","arguments":{"prompt":PROMPT,"engine":"api","dryRun":true},"_meta":meta(json!({}))}}));
     let plain = child.receive(2)["result"].clone();
-    assert_ne!(plain["resultType"], "task", "{plain}");
+    assert!(plain.get("taskId").is_none(), "{plain}");
     assert_eq!(plain["structuredContent"]["status"], "dry-run");
     child.send(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"consult","arguments":{"prompt":PROMPT,"engine":"api","dryRun":true},"_meta":tasks}}));
     let created = child.receive(3)["result"].clone();

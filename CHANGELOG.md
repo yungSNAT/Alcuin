@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, such as an interactive Claude Code session, which can then carry on whilst ChatGPT answers. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`. Other clients, and every other tool, keep the synchronous result unchanged.
+- MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, so the client need not hold the call open whilst the consultation runs. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`; closing the server cancels it too. Other clients, and every other tool, get the same results as before. The server now advertises the extension, and a `tasks/*` request from a client that has not declared it fails with -32021 (missing client capability) in place of -32601.
 
 ## 0.1.0 (2026-11-12)
 

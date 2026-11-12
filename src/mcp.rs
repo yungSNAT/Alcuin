@@ -104,6 +104,10 @@ pub struct AlcuinMcp {
 // `AlcuinMcp` constructible as before; a field on the server is the upgrade path if a process
 // ever serves several clients.
 static TASKS: std::sync::LazyLock<TaskManager> = std::sync::LazyLock::new(TaskManager::new);
+/// Cancelled when the stdio server stops, so a task consult is cancelled at EOF as a synchronous
+/// one is, through rmcp's request token.
+static SHUTDOWN: std::sync::LazyLock<CancellationToken> =
+    std::sync::LazyLock::new(CancellationToken::new);
 impl AlcuinMcp {
     pub fn tools() -> Vec<Tool> {
         serde_json::from_str::<ListToolsResult>(include_str!("../fixtures/mcp-tools.json"))
@@ -170,19 +174,19 @@ impl AlcuinMcp {
         let _ = forward.await;
         result
     }
-    /// Runs a consult as an SEP-2663 task. `tasks/cancel` cancels the run, which settles as
-    /// `cancelled` if it then fails and as `completed` if its answer was already saved. When
-    /// stdin closes the process exits without cancelling it, as a synchronous consult gets only
-    /// rmcp's brief drain; either way the session stays for owner recovery.
+    /// Runs a consult as an SEP-2663 task. `tasks/cancel`, or the server stopping, cancels the
+    /// run, which settles as `cancelled` with the run's error as its status message if it then
+    /// fails, and as `completed` if its answer was already saved.
     async fn consult_task(
         self,
         peer: Peer<RoleServer>,
         arguments: Value,
         task: TaskContext,
     ) -> std::result::Result<CallToolResult, TaskExit> {
-        let cancel = CancellationToken::new();
+        let cancel = SHUTDOWN.child_token();
         let relay = tokio::spawn({
             let cancel = cancel.clone();
+            let task = task.clone();
             async move {
                 task.cancelled().await;
                 cancel.cancel();
@@ -193,6 +197,14 @@ impl AlcuinMcp {
             .await;
         relay.abort();
         if cancel.is_cancelled() && result.is_error == Some(true) {
+            // Keeps the session ID and any warning that the request may have been sent.
+            let text = result
+                .content
+                .iter()
+                .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            task.set_status_message(text);
             return Err(TaskExit::Cancelled);
         }
         Ok(result)
@@ -791,11 +803,18 @@ pub async fn serve(server: AlcuinMcp) -> Result<()> {
     let cancellation = running.cancellation_token();
     let watcher = tokio::spawn(async move {
         closed.cancelled().await;
+        SHUTDOWN.cancel();
         cancellation.cancel();
     });
     let result = running.waiting().await;
     watcher.abort();
     let _ = watcher.await;
+    // Task consults get the drain rmcp gives synchronous requests at EOF to settle as cancelled.
+    SHUTDOWN.cancel();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while TASKS.running_task_count() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     result?;
     Ok(())
 }
