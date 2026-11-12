@@ -31,6 +31,31 @@ impl std::fmt::Display for PageReadStalled {
 }
 impl std::error::Error for PageReadStalled {}
 
+/// The most page-supplied text an error message carries.
+const PAGE_TEXT_CHARS: usize = 300;
+/// Page-supplied text for an error message: its first line, without control characters,
+/// at most `PAGE_TEXT_CHARS` characters.
+pub(crate) fn page_text(raw: &str) -> String {
+    raw.lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(PAGE_TEXT_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+/// What an expression threw, as one bounded line, so a refusal names the guard that refused.
+fn thrown(details: &Value) -> Option<String> {
+    let exception = &details["exception"];
+    let raw = exception["description"]
+        .as_str()
+        .or_else(|| exception["value"].as_str())?;
+    let line = page_text(raw.strip_prefix("Error: ").unwrap_or(raw));
+    (!line.is_empty()).then_some(line)
+}
+
 /// A CDP command, or a browser step, that certainly sent nothing. Its consultation may
 /// retry in a fresh tab only when the attempt's durable dispatch record agrees.
 #[derive(Debug)]
@@ -274,11 +299,15 @@ impl Cdp {
             .await?;
         if let Some(details) = result.get("exceptionDetails") {
             let failed = "Browser expression failed; result was not accepted.";
+            let failed = match thrown(details) {
+                Some(thrown) => format!("{failed} The page threw: {thrown}"),
+                None => failed.to_owned(),
+            };
             // The page's privacy guard throws its refusal, which is final. So is an
             // exception that does not say what was thrown.
             return Err(match details["exception"]["description"].as_str() {
-                Some(thrown) if !thrown.contains(crate::browser_privacy::REFUSAL) => {
-                    PageReadStalled(failed.into()).into()
+                Some(described) if !described.contains(crate::browser_privacy::REFUSAL) => {
+                    PageReadStalled(failed).into()
                 }
                 _ => anyhow::anyhow!(failed),
             });
@@ -463,6 +492,76 @@ mod tests {
             .unwrap_err();
         assert!(closed.to_string().contains("not sent"));
         assert!(closed.downcast_ref::<NotSent>().is_some(), "{closed:#}");
+        client
+            .disconnect_and_wait(Duration::from_secs(1))
+            .await
+            .unwrap();
+    }
+    /// A failed expression names what the page threw, bounded to one line; the privacy
+    /// refusal and an unexplained exception stay final and any other throw is a stall.
+    #[tokio::test]
+    async fn failed_expressions_name_what_the_page_threw() {
+        let refusal = crate::browser_privacy::REFUSAL;
+        let long = format!("Error: PUBLIC\u{7} {}", "x".repeat(400));
+        let failed = "Browser expression failed; result was not accepted.";
+        let cases = [
+            (
+                json!({"description":format!("Error: PUBLIC reason. {refusal}\n    at <anonymous>:1:2")}),
+                format!("{failed} The page threw: PUBLIC reason. {refusal}"),
+                false,
+            ),
+            (
+                json!({"description":"TypeError: PUBLIC page replaced\n    at <anonymous>:3:4"}),
+                format!("{failed} The page threw: TypeError: PUBLIC page replaced"),
+                true,
+            ),
+            (
+                json!({"type":"string","value":"PUBLIC thrown text"}),
+                format!("{failed} The page threw: PUBLIC thrown text"),
+                false,
+            ),
+            (json!(null), failed.to_owned(), false),
+            (
+                json!({"description":long}),
+                format!("{failed} The page threw: PUBLIC {}", "x".repeat(293)),
+                true,
+            ),
+        ];
+        let (client, mut server) = pair(16 * 1024, Duration::from_secs(1)).await;
+        let exceptions: Vec<Value> = cases.iter().map(|case| case.0.clone()).collect();
+        let peer = tokio::spawn(async move {
+            for exception in exceptions {
+                let request = server.next().await.unwrap().unwrap();
+                let request: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+                let details = if exception.is_null() {
+                    json!({"text":"Uncaught"})
+                } else {
+                    json!({"text":"Uncaught","exception":exception})
+                };
+                server
+                    .send(Message::Text(
+                        json!({"id":request["id"],"result":{"result":{"type":"object"},"exceptionDetails":details}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let cancel = CancellationToken::new();
+        for (_, message, stalled) in cases {
+            let error = client
+                .evaluate("'PUBLIC'", Duration::from_secs(1), &cancel)
+                .await
+                .unwrap_err();
+            assert_eq!(format!("{error:#}"), message);
+            assert_eq!(
+                error.downcast_ref::<PageReadStalled>().is_some(),
+                stalled,
+                "{message}"
+            );
+        }
+        peer.await.unwrap();
         client
             .disconnect_and_wait(Duration::from_secs(1))
             .await

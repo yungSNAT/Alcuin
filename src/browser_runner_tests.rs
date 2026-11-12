@@ -418,7 +418,7 @@ impl Exchange {
     }
     /// A `browser_privacy::guard` script throws in the page unless the predicate is true now.
     fn guard_refuses(&self, expression: &str) -> bool {
-        expression.contains("if (!oracleTemporaryChat()) throw Error(")
+        expression.contains("if (oracleTemporaryChatState.state !== true) throw Error(")
             && self.sends.load(Ordering::SeqCst) > 0
             && match self.fault {
                 Fault::SequentialPrivacySettling => self.privacy_reads_since_remount() < 3,
@@ -984,13 +984,14 @@ impl Exchange {
             return json!({"status":"switched","label":"Extra High","modelKind":"thinking"});
         }
         if expression.contains("alcuin-dom:temporary-chat") {
-            if let Some(state) = self.sequential_privacy() {
-                return state;
-            }
-            return json!(
-                !(matches!(self.fault, Fault::ProviderRecoveryPrivacy)
-                    && self.provider_recovery_started())
-            );
+            let state = self.sequential_privacy().unwrap_or_else(|| {
+                json!(
+                    !(matches!(self.fault, Fault::ProviderRecoveryPrivacy)
+                        && self.provider_recovery_started())
+                )
+            });
+            let reason = (state != true).then_some("PUBLIC fake privacy reason");
+            return json!({"state":state,"reason":reason});
         }
         if expression.contains("alcuin-dom:navigation") {
             // A Work-mode borrowed tab stays in Work until Alcuin navigates it.
@@ -1479,7 +1480,10 @@ impl Exchange {
                     .as_str()
                     .is_some_and(|expression| expression.contains("alcuin-dom:result"))
             {
-                let description = format!("Error: {}", crate::browser_privacy::REFUSAL);
+                let description = format!(
+                    "Error: PUBLIC guard reason. {}\n    at <anonymous>:1:2",
+                    crate::browser_privacy::REFUSAL
+                );
                 let thrown = json!({"id":request["id"],"result":{"result":{"type":"object","subtype":"error"},"exceptionDetails":{"text":"Uncaught","exception":{"description":description}}}});
                 if socket
                     .send(Message::Text(thrown.to_string().into()))
@@ -4650,9 +4654,20 @@ async fn a_privacy_refusal_from_the_result_read_ends_the_wait_at_once() {
     };
     let started = std::time::Instant::now();
     let error = run_within(&f, &patient).await.unwrap_err();
+    // The message names the refusing guard from the first line of what the page threw.
+    let shown = format!("{error:#}");
     assert!(
-        format!("{error:#}").contains("Browser expression failed"),
-        "{error:#}"
+        shown.contains(&format!(
+            "Browser expression failed; result was not accepted. The page threw: PUBLIC guard reason. {}",
+            crate::browser_privacy::REFUSAL
+        )) && !shown.contains("<anonymous>"),
+        "{shown}"
+    );
+    assert!(
+        f.store.require(&f.id).unwrap()["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("The page threw: PUBLIC guard reason.")
     );
     assert!(started.elapsed() < Duration::from_secs(20));
     assert!(captured(&f.store, &f.id).is_err());
@@ -5847,8 +5862,15 @@ async fn sequential_browser_refuses_unknown_or_ordinary_chat_without_another_gua
         let started = Instant::now();
         let error = run_within(&f, &limits).await.unwrap_err();
         let elapsed = started.elapsed();
+        // The refusal names the predicate's reason, and for unknown that it waited.
+        let named = if matches!(fault, Fault::SequentialPrivacyUnknown) {
+            "PUBLIC fake privacy reason; still unknown after "
+        } else {
+            "PUBLIC fake privacy reason. Verified ChatGPT Temporary Chat is required"
+        };
+        assert!(format!("{error:#}").contains(named), "{fault:?}: {error:#}");
         assert!(
-            format!("{error:#}").contains("Verified ChatGPT Temporary Chat is required"),
+            format!("{error:#}").contains(crate::browser_privacy::REFUSAL),
             "{fault:?}: {error:#}"
         );
         // Unknown waits out its command deadline; false refuses on its first read. Staging the
@@ -5866,6 +5888,11 @@ async fn sequential_browser_refuses_unknown_or_ordinary_chat_without_another_gua
         }
         let meta = f.store.require(&f.id).unwrap();
         assert_eq!(meta["status"], "error");
+        assert!(
+            meta["errorMessage"].as_str().unwrap().contains(named),
+            "{fault:?}: {}",
+            meta["errorMessage"]
+        );
         assert_eq!(meta["recoveryRequired"], true);
         assert_eq!(meta["dispatch"]["state"], "uncertain");
         assert_eq!(f.sends.load(Ordering::SeqCst), 1);
@@ -5880,9 +5907,11 @@ async fn sequential_browser_refuses_unknown_or_ordinary_chat_without_another_gua
                 })
                 .unwrap();
             assert!(
-                trace[send + 1..].iter().all(|r| !r["params"]["expression"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("if (!oracleTemporaryChat()) throw Error("))),
+                trace[send + 1..]
+                    .iter()
+                    .all(|r| !r["params"]["expression"].as_str().is_some_and(
+                        |e| e.contains("if (oracleTemporaryChatState.state !== true) throw Error(")
+                    )),
                 "{fault:?} ran a guarded step after an unverified read"
             );
         }

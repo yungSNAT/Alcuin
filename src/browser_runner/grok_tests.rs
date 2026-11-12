@@ -233,7 +233,7 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                 return Ok::<_,anyhow::Error>(());
             }
             if refused {
-                // CDP redacts the page's refusal but not that the page threw. The "listed" and
+                // CDP reports a page throw as a failed browser expression. The "listed" and
                 // "inline-exact" cases pass on the same fixtures except for the user turn, and the
                 // refused run had acknowledged its commitment and received the whole answer, so
                 // the refusal is the user-turn comparison, not a stall.
@@ -589,7 +589,7 @@ async fn recovery_case(
         );
         if !damage.is_empty() {
             let after = store.stored_for_update(child_id)?;
-            // The Private guard's throw reaches Rust redacted by the CDP client.
+            // The Private guard's throw reaches Rust as a failed browser expression.
             let cause = if damage == "witness" {
                 "live witness or dispatch changed"
             } else {
