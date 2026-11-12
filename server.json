@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.yungSNAT/alcuin",
+  "title": "Alcuin",
+  "description": "Ask ChatGPT about the source files you choose, and keep each answer as a durable session.",
+  "repository": {
+    "url": "https://github.com/yungSNAT/Alcuin",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/yungSNAT/Alcuin/releases/download/v0.1.0/alcuin.mcpb",
+      "fileSha256": "64e1d0f62e989f5d40e606cf8c126a2f80e0f94dee0ed491f7e70ca471fa3f2b",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
