@@ -4663,11 +4663,20 @@ async fn a_privacy_refusal_from_the_result_read_ends_the_wait_at_once() {
         )) && !shown.contains("<anonymous>"),
         "{shown}"
     );
+    let stored = f.store.require(&f.id).unwrap()["errorMessage"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(
-        f.store.require(&f.id).unwrap()["errorMessage"]
-            .as_str()
-            .unwrap()
-            .contains("The page threw: PUBLIC guard reason.")
+        stored.contains("The page threw: PUBLIC guard reason.") && !stored.contains("<anonymous>"),
+        "{stored}"
+    );
+    // Execution logs a failed run's error as given, so the session log names the guard too.
+    crate::execution::log_failure(&f.store, &f.id, &error).unwrap();
+    let log = f.store.log(&f.id).unwrap();
+    assert!(
+        log.contains(&format!("ERROR: {shown}")) && !log.contains("<anonymous>"),
+        "{log}"
     );
     assert!(started.elapsed() < Duration::from_secs(20));
     assert!(captured(&f.store, &f.id).is_err());

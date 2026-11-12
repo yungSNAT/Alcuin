@@ -503,6 +503,8 @@ mod tests {
     async fn failed_expressions_name_what_the_page_threw() {
         let refusal = crate::browser_privacy::REFUSAL;
         let long = format!("Error: PUBLIC\u{7} {}", "x".repeat(400));
+        // A refusal past the shown excerpt is still final: classification reads the whole text.
+        let late = format!("Error: {} {refusal}", "y".repeat(400));
         let failed = "Browser expression failed; result was not accepted.";
         let cases = [
             (
@@ -525,6 +527,11 @@ mod tests {
                 json!({"description":long}),
                 format!("{failed} The page threw: PUBLIC {}", "x".repeat(293)),
                 true,
+            ),
+            (
+                json!({"description":late}),
+                format!("{failed} The page threw: {}", "y".repeat(300)),
+                false,
             ),
         ];
         let (client, mut server) = pair(16 * 1024, Duration::from_secs(1)).await;
