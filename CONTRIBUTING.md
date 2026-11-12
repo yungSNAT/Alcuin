@@ -40,3 +40,13 @@ accounts. One ignored test needs only an installed Chrome: CI's `native-chrome`
 job runs it, and
 `cargo test --locked native_temporary_chat_predicate_and_retained_send_guard -- --ignored`
 runs it locally.
+
+## Releases
+
+Set the new `version` in `Cargo.toml` and `Cargo.lock`, date its `CHANGELOG.md`
+heading and merge that change. Then push a tag `v<version>` on the merge commit.
+[release.yml](.github/workflows/release.yml) refuses a tag that does not match
+`Cargo.toml`, builds `alcuin` and `alcuin-mcp` for Linux and Windows, bundles
+`alcuin-mcp` as `alcuin.mcpb` from `packaging/mcpb/manifest.json`, attests the
+archives and publishes the release. A pull request that changes the workflow or
+that manifest builds and bundles without publishing.

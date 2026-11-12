@@ -20,7 +20,7 @@ Version 0.1.0 (unreleased). Needs Rust 1.99 or later; install from a checkout wi
 ## Related
 
 - [yungSNAT](https://github.com/yungSNAT): other yungSNAT tools.
-- [Oracle](https://github.com/steipete/oracle): the upstream project; Alcuin is a Rust port of a maintained fork of it.
+- [Oracle](https://github.com/steipete/oracle): the upstream project; Alcuin is a Rust port of it, made from a private fork that has since been retired.
 
 ## Reuse
 

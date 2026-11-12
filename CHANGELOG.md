@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-First public release. Alcuin is a Rust port of a maintained fork of [Oracle](https://github.com/steipete/oracle); this repository starts a fresh history and carries no upstream changelog.
+First public release. Alcuin is a Rust port of [Oracle](https://github.com/steipete/oracle), made from a private fork that has since been retired; this repository starts a fresh history and carries no upstream changelog.
 
 - CLI `alcuin` and stdio MCP server `alcuin-mcp` for Windows and Linux.
 - ChatGPT browser runs in Temporary Chat with model and thinking-tier verification before dispatch, durable sessions and recovery that never resends an uncertain prompt.
@@ -10,6 +10,7 @@ First public release. Alcuin is a Rust port of a maintained fork of [Oracle](htt
 - Optional Grok browser fallback in Private Chat after a qualifying ChatGPT failure.
 - Remote bridge (`serve` and client) for running the browser on another machine.
 - Agent skill in `skills/alcuin`, added with the Skills CLI.
+- Release archives of both binaries for Linux and Windows (x86_64), with SHA-256 checksums and build provenance attestations, and an MCP bundle, `alcuin.mcpb`, for Claude Desktop.
 - Compatible with Oracle's `ORACLE_*` settings and `~/.oracle` session storage.
 - `serve` prints its access token only when it generates one, adds `--token-file`, compares tokens without early exit, refuses an empty token and answers HTTP 413 `payload_too_large` for run requests over 1,432,704,342 bytes (Oracle's limit).
 - File selection fails closed: `.gitignore` rules apply from the root of the repository holding each selected path, a `.gitignore` that cannot be read or parsed is an error, files read into an API prompt or a browser text bundle must be UTF-8 text rather than being garbled (browser uploads and ZIP bundles still send the original bytes), and credential and private-key files are refused by name and skipped in expansion.

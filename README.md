@@ -19,7 +19,7 @@
 
 Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows and Linux.
 
-It is a Rust port of a maintained fork of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger. Use Oracle itself on macOS, or for Gemini, Claude or multi-model runs: see [When to choose something else](#when-to-choose-something-else).
+It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. Use Oracle itself on macOS, or for Gemini, Claude or multi-model runs: see [When to choose something else](#when-to-choose-something-else).
 
 ## Install
 
@@ -37,6 +37,8 @@ cargo build --release
 ```
 
 Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs.
+
+Each [release](https://github.com/yungSNAT/Alcuin/releases) also attaches both binaries for Linux (x86_64, glibc) and Windows (x86_64), so no Rust toolchain is needed. Every archive has a SHA-256 checksum and a build provenance attestation, which `gh attestation verify` checks, and the MCP bundle `alcuin.mcpb` installs `alcuin-mcp` in Claude Desktop in one step.
 
 To teach a coding agent to use Alcuin, add its skill with the [Skills CLI](https://github.com/vercel-labs/skills):
 
@@ -113,7 +115,7 @@ cargo test --locked -- --test-threads=1
 
 ## Credits
 
-Alcuin is a Rust port of a maintained fork of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger.
+Alcuin is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired.
 
 The banner's lettering and emblem are drawn from Cascadia Mono and Besley glyphs (SIL OFL 1.1).
 
