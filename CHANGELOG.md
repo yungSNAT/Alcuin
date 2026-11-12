@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-12)
 
 First public release. Alcuin is a Rust port of [Oracle](https://github.com/steipete/oracle), made from a private fork that has since been retired; this repository starts a fresh history and carries no upstream changelog.
 

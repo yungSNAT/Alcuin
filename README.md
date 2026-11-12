@@ -38,7 +38,7 @@ cargo build --release
 
 Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs.
 
-Each [release](https://github.com/yungSNAT/Alcuin/releases) also attaches both binaries for Linux (x86_64, glibc) and Windows (x86_64), so no Rust toolchain is needed. Every archive has a SHA-256 checksum and a build provenance attestation, which `gh attestation verify` checks, and the MCP bundle `alcuin.mcpb` installs `alcuin-mcp` in Claude Desktop in one step.
+Each [release](https://github.com/yungSNAT/Alcuin/releases) also attaches both binaries for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64), so no Rust toolchain is needed. Every archive has a SHA-256 checksum and a build provenance attestation, which `gh attestation verify` checks, and the MCP bundle `alcuin.mcpb` installs `alcuin-mcp` in Claude Desktop in one step.
 
 To teach a coding agent to use Alcuin, add its skill with the [Skills CLI](https://github.com/vercel-labs/skills):
 
