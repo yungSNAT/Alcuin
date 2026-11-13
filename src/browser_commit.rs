@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, time::Duration};
 use tokio_util::sync::CancellationToken;
-/// `owned_commit.js` with the shared stored-message reader in scope.
+/// `owned_commit.js` with the shared stored-message reader in scope. The Oracle sources it was
+/// derived from, and the changes since, are recorded in `owned_commit-source.json`.
 const PROBE: &str = concat!(
     "(...args) => {\n",
     include_str!("../browser-scripts/user-source.js"),
