@@ -42,7 +42,8 @@ jobs:
             echo "No shipped files changed."
             exit 0
           fi
-          added=$(git diff --unified=0 "$BASE...$HEAD" -- CHANGELOG.md | grep -E '^\+' | grep -vE '^\+\+\+ ' || true)
+          changelog=$(git diff --unified=0 "$BASE...$HEAD" -- CHANGELOG.md)
+          added=$(grep -vE '^\+\+\+ ' <<<"$changelog" | grep -E '^\+' || true)
           if grep -qE '^\+.*[^[:space:]]' <<<"$added"; then
             echo "CHANGELOG.md has a new line."
             exit 0
