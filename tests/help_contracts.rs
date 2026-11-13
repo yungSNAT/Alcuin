@@ -105,6 +105,64 @@ fn refused_options_are_hidden_from_help_but_still_parsed() {
     }
 }
 
+/// Every command path in the captured command specs, such as `["project-sources", "list"]`.
+fn command_paths() -> Vec<Vec<String>> {
+    fn walk(spec: &serde_json::Value, parent: &[String], paths: &mut Vec<Vec<String>>) {
+        let name = spec["command"].as_str().unwrap().split_whitespace().next();
+        let mut path = parent.to_vec();
+        path.push(name.unwrap().to_owned());
+        for child in spec["children"].as_array().into_iter().flatten() {
+            walk(child, &path, paths);
+        }
+        paths.push(path);
+    }
+    let specs: serde_json::Value =
+        serde_json::from_str(include_str!("../src/cli_commands.json")).unwrap();
+    let mut paths = vec![];
+    for spec in specs.as_array().unwrap() {
+        walk(spec, &[], &mut paths);
+    }
+    paths
+}
+
+/// Whether `help` names `flag` whole, not as the start of a longer option.
+fn names(help: &str, flag: &str) -> bool {
+    help.match_indices(flag).any(|(at, _)| {
+        !help[at + flag.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+#[test]
+fn subcommand_help_omits_refused_options() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = command_paths();
+    assert!(paths.len() > 20, "{paths:?}");
+    for path in paths {
+        let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+        args.push("--help");
+        let output = cli(home.path(), &args);
+        assert!(output.status.success(), "{args:?}");
+        let help = String::from_utf8(output.stdout).unwrap();
+        for flag in REFUSED.iter().chain(&["--clear"]) {
+            assert!(!names(&help, flag), "{args:?} lists {flag}:\n{help}");
+        }
+    }
+    for args in [
+        &["status", "--clear"][..],
+        &["session", "--clear"],
+        &["project-sources", "list", "--browser-reuse-wait", "30s"],
+    ] {
+        let output = cli(home.path(), args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let flag = args.iter().find(|arg| arg.starts_with("--")).unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("{flag} {NOT_SUPPORTED}")),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn mcp_tools_put_an_before_alcuin() {
     let tools = include_str!("../fixtures/mcp-tools.json");

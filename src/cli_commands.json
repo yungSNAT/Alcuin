@@ -124,7 +124,8 @@
       },
       {
         "flags": "--browser-reuse-wait <duration>",
-        "description": "Wait for an existing shared Chrome to appear."
+        "description": "Wait for an existing shared Chrome to appear.",
+        "hidden": true
       },
       {
         "flags": "--browser-max-concurrent-tabs <n>",
@@ -450,7 +451,8 @@
       },
       {
         "flags": "--clear",
-        "description": "Delete stored sessions older than the provided window (24h default). (default: false)"
+        "description": "Delete stored sessions older than the provided window (24h default). (default: false)",
+        "hidden": true
       },
       {
         "flags": "--hide-prompt",
@@ -517,7 +519,8 @@
       },
       {
         "flags": "--clear",
-        "description": "Delete stored sessions older than the provided window (24h default). (default: false)"
+        "description": "Delete stored sessions older than the provided window (24h default). (default: false)",
+        "hidden": true
       },
       {
         "flags": "--render",
