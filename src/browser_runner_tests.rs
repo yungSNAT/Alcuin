@@ -187,6 +187,8 @@ enum Fault {
     FileExportNoAnswer,
     FileExportChangedSource,
     FileExportFormatted,
+    CopyMissing,
+    CopyTimeout,
     FormattedMarkdown,
     FormattedImage,
     TwoFilePartial,
@@ -737,6 +739,12 @@ impl Exchange {
             return json!(buttons);
         }
         if expression.contains("alcuin-dom:copy-markdown") {
+            if matches!(self.fault, Fault::CopyMissing) {
+                return json!({"success":false,"status":"missing-button"});
+            }
+            if matches!(self.fault, Fault::CopyTimeout) {
+                return json!({"success":false,"status":"timeout"});
+            }
             if self.sequential() {
                 return json!({"success":true,"markdown":format!("PUBLIC owned answer {}",self.turns.len())});
             }
@@ -3768,6 +3776,33 @@ async fn a_run_without_the_option_keeps_its_prompt_and_completes_unmarked() {
     assert!(!committed.extra.contains_key("endMarker"));
     assert_eq!(run(&f).await.unwrap()["status"], "completed");
     stop(f).await;
+}
+#[tokio::test]
+async fn a_missing_or_timed_out_copy_button_saves_the_page_text_and_says_so() {
+    for (fault, copy) in [
+        (Fault::None, None),
+        (Fault::CopyMissing, Some("was missing")),
+        (Fault::CopyTimeout, Some("timed out")),
+    ] {
+        let f = fixture(fault, false).await;
+        assert_eq!(run(&f).await.unwrap()["status"], "completed");
+        let meta = f.store.require(&f.id).unwrap();
+        let receipt: CaptureReceipt =
+            serde_json::from_value(meta["browser"]["capturedAnswer"].clone()).unwrap();
+        let text = artifacts::verify_capture(&f.store, &receipt).unwrap();
+        assert_eq!(text, b"PUBLIC exact owned answer\n\nEnd\n");
+        assert_eq!(
+            meta["browser"]["runtime"]["captureSource"],
+            json!(copy.map(|_| "page-text")),
+            "{fault:?}"
+        );
+        let log = f.store.log(&f.id).unwrap();
+        match copy {
+            Some(copy) => assert!(log.contains(&format!("[browser] Markdown capture fallback: ChatGPT's Copy button {copy}; saved the answer's page text, which can lose Markdown formatting.")), "{log}"),
+            None => assert!(!log.contains("Markdown capture fallback"), "{log}"),
+        }
+        stop(f).await;
+    }
 }
 #[tokio::test]
 async fn parent_cleanup_retries_once_without_replaying_or_closing_changed_targets() {
