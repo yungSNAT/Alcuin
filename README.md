@@ -15,6 +15,8 @@
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
+Guides: [Quickstart](docs/quickstart.md) · [MCP setup](docs/mcp.md) · [Troubleshooting](docs/troubleshooting.md)
+
 </div>
 
 Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows and Linux.
