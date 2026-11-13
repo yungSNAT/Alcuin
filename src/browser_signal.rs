@@ -172,13 +172,29 @@ fn run_hooks(signal: &str, code: i32, before: impl FnOnce()) -> bool {
     }
     std::process::exit(code);
 }
+/// Installs the Ctrl-C listener when called, not when first polled as `tokio::signal::ctrl_c`
+/// does, so a Ctrl-C sent before a spawned listener first runs still reaches it instead of
+/// killing the process. False when the listener could not be installed.
+fn ctrl_c() -> impl Future<Output = bool> {
+    #[cfg(unix)]
+    let listener = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
+    #[cfg(not(unix))]
+    let listener = tokio::signal::windows::ctrl_c();
+    async move {
+        let Ok(mut listener) = listener else {
+            return false;
+        };
+        listener.recv().await;
+        true
+    }
+}
 /// CLI Ctrl-C (reference top-level handler, then the browser hooks). While a browser run owns
 /// Chrome, print "Cancelled.", run its hooks and exit 130 without cancelling or settling the
 /// run, so its session stays reattachable. Otherwise cancel the run as before.
 pub(crate) fn cancel_on_ctrl_c(cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
+    let interrupt = ctrl_c();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok()
-            && !run_hooks("SIGINT", INTERRUPT_EXIT_CODE, || println!("\nCancelled."))
+        if interrupt.await && !run_hooks("SIGINT", INTERRUPT_EXIT_CODE, || println!("\nCancelled."))
         {
             cancel.cancel();
         }
@@ -186,9 +202,9 @@ pub(crate) fn cancel_on_ctrl_c(cancel: CancellationToken) -> tokio::task::JoinHa
 }
 /// MCP has no top-level handler: without a browser hook, Ctrl-C keeps its default action.
 pub(crate) fn exit_on_ctrl_c() {
-    tokio::spawn(async {
-        if tokio::signal::ctrl_c().await.is_ok() && !run_hooks("SIGINT", INTERRUPT_EXIT_CODE, || {})
-        {
+    let interrupt = ctrl_c();
+    tokio::spawn(async move {
+        if interrupt.await && !run_hooks("SIGINT", INTERRUPT_EXIT_CODE, || {}) {
             #[cfg(unix)]
             default_disposition(libc::SIGINT);
             // The default console handler exits with STATUS_CONTROL_C_EXIT.
