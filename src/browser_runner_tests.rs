@@ -8466,11 +8466,60 @@ fn duplicate_guard_admits_only_a_run_whose_worker_and_controller_are_dead() {
         let result = prepare(&store, &resolved, home.path());
         // The refusal names the blocking session, so its owner knows what to reattach.
         assert_eq!(
-            result.as_ref().err().map(ToString::to_string),
-            blocked.then(|| format!("An identical prompt is already running ({earlier}); reattach to the retained session with \"alcuin session {earlier}\"")),
+            result.as_ref().err().and_then(duplicate_of),
+            blocked.then_some(earlier),
             "{saved} {result:?}"
         );
         assert_eq!(store.stored_for_update(earlier).unwrap(), before);
+    }
+}
+fn duplicate_of(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<crate::execution::DuplicatePrompt>()
+        .map(|duplicate| duplicate.0.as_str())
+}
+#[test]
+fn duplicate_guard_matches_the_api_guard_on_the_trimmed_prompt_and_follow_ups() {
+    let live = ProcessIdentity::current().unwrap();
+    let running = json!({"status":"running","lifecycle":{"processIdentity":live,"workerPid":live.pid,"workerProcessStartedAtMs":live.started_at_ms}});
+    let asked = json!({"prompt":"PUBLIC repeated question","engine":"browser","browserFollowUps":["PUBLIC follow-up"]});
+    for (later, blocked) in [
+        (asked.clone(), true),
+        (
+            json!({"prompt":"  PUBLIC repeated question\n","engine":"browser","browserFollowUps":[" PUBLIC follow-up ",""]}),
+            true,
+        ),
+        (
+            json!({"prompt":"PUBLIC repeated question","engine":"browser"}),
+            false,
+        ),
+        (
+            json!({"prompt":"PUBLIC repeated question","engine":"browser","browserFollowUps":["PUBLIC other follow-up"]}),
+            false,
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path().join(".oracle"));
+        let resolve = |input: &Value| {
+            crate::execution::resolve(input, &json!({}), &Environment::new(), home.path()).unwrap()
+        };
+        let earlier = store
+            .create(resolve(&asked).options, home.path(), None)
+            .unwrap();
+        let earlier = earlier["id"].as_str().unwrap();
+        store
+            .update(earlier, |_| Ok(Some(running.clone())))
+            .unwrap();
+        let result = prepare(&store, &resolve(&later), home.path());
+        assert_eq!(
+            result.as_ref().err().and_then(duplicate_of),
+            blocked.then_some(earlier),
+            "{later} {result:?}"
+        );
+        if blocked {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("--force"), "{error}");
+        }
     }
 }
 #[tokio::test]

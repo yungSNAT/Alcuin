@@ -109,7 +109,7 @@ pub(crate) fn log_failure(
     Ok(lines)
 }
 /// Reference normalizeRunSignature: the trimmed prompt and its non-blank trimmed follow-ups.
-fn run_signature(options: &Value) -> (&str, Vec<&str>) {
+pub(crate) fn run_signature(options: &Value) -> (&str, Vec<&str>) {
     let follow_ups = options["browserFollowUps"]
         .as_array()
         .into_iter()
