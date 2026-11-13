@@ -1400,13 +1400,19 @@ mod tests {
             })
         };
         read.wait();
-        journal
-            .set_failed_sweep_cursor(
-                &b,
-                "ffffffff-ffff-4fff-8fff-ffffffffffff",
-                Instant::now() + Duration::from_secs(5),
-            )
-            .unwrap();
+        // This write first waits on the held lock. A busy lock skips the write after 250 ms by
+        // design, and a loaded runner can hold it longer, so retry a skip until the deadline.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        std::iter::repeat_with(|| {
+            journal.set_failed_sweep_cursor(&b, "ffffffff-ffff-4fff-8fff-ffffffffffff", deadline)
+        })
+        .find(|written| {
+            !written.as_ref().is_err_and(|error| {
+                error.to_string() == "Failed-run sweep cursor is busy" && Instant::now() < deadline
+            })
+        })
+        .unwrap()
+        .unwrap();
         writer.join().unwrap();
         assert_eq!(
             journal.failed_sweep_cursor(&a),
