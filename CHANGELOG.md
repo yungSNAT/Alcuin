@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `--help`, and its verbose form, no longer lists options that Alcuin refuses: the browser recheck and auto-reattach timings, `--browser-reuse-wait`, `--verbose-render`, the provider-native capture pair and `--retain-hours`. Subcommand help hides `--clear` and `--browser-reuse-wait` too. Passing one is still refused (#121).
+- `--help` no longer lists options that Alcuin refuses: `--verbose-render`, the provider-native capture pair and `--retain-hours`. Its verbose form (`--help --verbose`, `--debug-help`) also drops the browser recheck and auto-reattach timings and `--browser-reuse-wait`, and subcommand help hides `--clear` and `--browser-reuse-wait`. Passing one is still refused (#121).
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).
 
 ## 0.1.0 (2026-11-12)
