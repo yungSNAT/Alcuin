@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `--help` no longer lists options that Alcuin refuses: the browser recheck and auto-reattach timings, `--browser-reuse-wait`, `--verbose-render`, the provider-native capture pair and `--retain-hours`. Subcommand help hides `--clear` and `--browser-reuse-wait` too. Passing one is still refused (#121).
+- The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', replacing 'a Alcuin' (#121).
+
 ## 0.1.0 (2026-11-12)
 
 First public release. Alcuin is a Rust port of [Oracle](https://github.com/steipete/oracle), made from a private fork that has since been retired; this repository starts a fresh history and carries no upstream changelog.
