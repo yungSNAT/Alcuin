@@ -264,6 +264,15 @@ fn parse_failures_use_commander_wording() {
             vec!["status", "--hourz", "2"],
             "error: unknown option '--hourz'\n(Did you mean --hours?)\n(use --help for usage)\n",
         ),
+        // Commander suggests only visible options; these near misses are all hidden.
+        (
+            vec!["status", "--clea"],
+            "error: unknown option '--clea'\n(use --help for usage)\n",
+        ),
+        (
+            vec!["project-sources", "--browser-reuse-wai", "1s"],
+            "error: unknown option '--browser-reuse-wai'\n(use --help for usage)\n",
+        ),
         (
             vec!["-p", "PUBLIC", "--model"],
             "error: option '-m, --model <model>' argument missing\n(use --help for usage)\n",

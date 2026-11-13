@@ -347,9 +347,12 @@ fn candidates(path: &[String]) -> Vec<String> {
     for depth in (1..=path.len()).rev() {
         if let Some(spec) = command_spec(&path[..depth]) {
             flags.extend(
-                spec_options(&spec)
-                    .filter(|flags| !flags.contains("--clean"))
-                    .filter_map(long_flag)
+                spec["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|option| option["hidden"] != true)
+                    .filter_map(|option| option["flags"].as_str().and_then(long_flag))
                     .map(str::to_owned),
             );
             flags.push("--help".into());
