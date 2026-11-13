@@ -1,0 +1,52 @@
+name: Changelog
+
+# Fails a pull request that changes what a release ships (the crate's sources and manifests,
+# browser scripts, bundled data, the vendored hyper, the agent skill, the MCP bundle manifest
+# and the help and MCP fixtures compiled into the binaries) without adding a line to
+# CHANGELOG.md. Add the line under '## Unreleased', or apply the skip-changelog label to a
+# change users cannot see. Dependabot pull requests are skipped.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a changelog line for shipped changes
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          shipped='^(src/|build\.rs$|Cargo\.(toml|lock)$|browser-scripts/|data/|vendor/|skills/|packaging/mcpb/|fixtures/(cli-help\.txt|cli-debug-help\.txt|mcp-tools\.json|mcp-resources\.json)$)'
+          changed=$(git diff --name-only "$BASE...$HEAD")
+          matched=$(grep -E "$shipped" <<<"$changed" | grep -vE '_tests\.rs$' || true)
+          if [ -z "$matched" ]; then
+            echo "No shipped files changed."
+            exit 0
+          fi
+          added=$(git diff --unified=0 "$BASE...$HEAD" -- CHANGELOG.md | grep -E '^\+' | grep -vE '^\+\+\+ ' || true)
+          if grep -qE '^\+.*[^[:space:]]' <<<"$added"; then
+            echo "CHANGELOG.md has a new line."
+            exit 0
+          fi
+          printf 'Shipped files changed:\n%s\n' "$matched"
+          echo "::error file=CHANGELOG.md::This pull request changes shipped files but adds no line to CHANGELOG.md. Add one under '## Unreleased', or apply the skip-changelog label if users cannot see the change."
+          exit 1
