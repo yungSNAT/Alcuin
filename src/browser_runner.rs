@@ -3445,7 +3445,7 @@ async fn deliver(
     witness.require(&store.require(id)?)?;
     crate::perf::phase("capture", None);
     let initial_markdown =
-        capture_markdown(&store.require(id)?, reservation, &observed, limits, cancel).await?;
+        capture_markdown(store, id, witness, reservation, &observed, limits, cancel).await?;
     remember_turn(
         store,
         id,
@@ -3574,7 +3574,7 @@ async fn deliver(
         .await?;
         crate::perf::phase("capture", None);
         let markdown =
-            capture_markdown(&store.require(id)?, reservation, &observed, limits, cancel).await?;
+            capture_markdown(store, id, witness, reservation, &observed, limits, cancel).await?;
         outcome_witness.require(&store.require(id)?, witness, None, cancel)?;
         remember_turn(
             store,
@@ -4611,12 +4611,15 @@ pub(crate) fn result_expression() -> String {
     ))
 }
 async fn capture_markdown(
-    metadata: &Value,
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
     reservation: &RendererReservation,
     observed: &Value,
     limits: &RunnerLimits,
     cancel: &CancellationToken,
 ) -> Result<String> {
+    let metadata = &store.require(id)?;
     crate::browser_privacy::require(reservation.page(), limits.command, cancel).await?;
     if observed["kind"] == "deep-research-report" {
         let current = crate::browser_research::observe_report(reservation.page(), metadata,
@@ -4710,17 +4713,29 @@ async fn capture_markdown(
         );
         Ok(markdown)
     } else {
+        let status = copied["status"].as_str();
         anyhow::ensure!(
-            matches!(
-                copied["status"].as_str(),
-                Some("missing-button" | "timeout")
-            ),
+            matches!(status, Some("missing-button" | "timeout")),
             "Unknown Markdown capture outcome; preserve recovery"
         );
-        Ok(observed["text"]
+        let text = observed["text"]
             .as_str()
-            .context("Owned fallback text is unavailable")?
-            .into())
+            .context("Owned fallback text is unavailable")?;
+        // The page text keeps the words but can lose Markdown formatting, so say so and record it.
+        runtime_patch(store, id, witness, json!({"captureSource":"page-text"}))?;
+        let copy = if status == Some("timeout") {
+            "timed out"
+        } else {
+            "was missing"
+        };
+        automation_log(
+            store,
+            id,
+            &format!(
+                "[browser] Markdown capture fallback: ChatGPT's Copy button {copy}; saved the answer's page text, which can lose Markdown formatting."
+            ),
+        )?;
+        Ok(text.into())
     }
 }
 #[allow(clippy::too_many_arguments)] // Recovery retains all original dispatch and allocation witnesses.
