@@ -277,16 +277,20 @@ fn prepare_with_base(
         Duration::from_secs(10),
     )?;
     if source.is_none() && request.options["force"] != true {
+        // The API guard's rule: the trimmed prompt and follow-ups, refused as DuplicatePrompt.
         // A run whose worker and controller are verifiably dead no longer counts as running.
-        // Summaries skip finished sessions' model runs, which status and prompt do not need.
+        // Summaries skip finished sessions' model runs, which status and options do not need.
+        let signature = crate::execution::run_signature(&request.options);
         for current in store.list(true)? {
-            let id = current["id"].as_str().unwrap_or("unknown");
-            anyhow::ensure!(
-                !matches!(current["status"].as_str(), Some("pending" | "running"))
-                    || current["options"]["prompt"] != request.options["prompt"]
-                    || store.verified_dead_run(&current),
-                "An identical prompt is already running ({id}); reattach to the retained session with \"alcuin session {id}\""
-            );
+            if matches!(current["status"].as_str(), Some("pending" | "running"))
+                && crate::execution::run_signature(&current["options"]) == signature
+                && !store.verified_dead_run(&current)
+            {
+                return Err(crate::execution::DuplicatePrompt(
+                    current["id"].as_str().unwrap_or("unknown").into(),
+                )
+                .into());
+            }
         }
     }
     let meta = store.create(request.options.clone(), cwd, source)?;
