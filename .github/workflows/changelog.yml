@@ -36,7 +36,7 @@ jobs:
         run: |
           set -eu
           shipped='^(src/|build\.rs$|Cargo\.(toml|lock)$|browser-scripts/|data/|vendor/|skills/|packaging/mcpb/|fixtures/(cli-help\.txt|cli-debug-help\.txt|mcp-tools\.json|mcp-resources\.json)$)'
-          changed=$(git diff --name-only "$BASE...$HEAD")
+          changed=$(git diff --no-renames --name-only "$BASE...$HEAD")
           matched=$(grep -E "$shipped" <<<"$changed" | grep -vE '_tests\.rs$' || true)
           if [ -z "$matched" ]; then
             echo "No shipped files changed."
