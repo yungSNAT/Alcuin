@@ -181,14 +181,15 @@ async fn verify_reopening_deadlines() {
             );
             let detail = format!("{error:#}");
             if !detail.contains("Fresh observation cleanup confirmed") {
-                // Native authority reads can exceed the bounded cleanup budget under
+                // Native authority reads and writes can exceed the bounded cleanup budget under
                 // concurrent filesystem load. Only that exact, fail-closed outcome is valid.
-                // An uncommitted navigation times out rather than being refused.
+                // An uncommitted navigation and a delayed acknowledgement time out rather than
+                // being refused.
                 let method = match case {
                     "page-error" => Some("Page.enable"),
                     "runtime-error" => Some("Runtime.enable"),
                     "navigation-error" => Some("Page.navigate"),
-                    "navigation-uncommitted" => None,
+                    "navigation-uncommitted" | "shared-deadline" => None,
                     _ => panic!("{case}: {detail}"),
                 };
                 assert!(
@@ -196,7 +197,17 @@ async fn verify_reopening_deadlines() {
                         .contains(&format!("CDP command {method} was refused by the endpoint"))),
                     "{case}: {detail}"
                 );
-                assert!(detail.contains("Observation cleanup unconfirmed; exact admission retained: Browser profile transaction deadline reached"), "{case}: {detail}");
+                assert!(
+                    [
+                        "Browser profile transaction deadline reached",
+                        "Atomic publication deadline reached"
+                    ]
+                    .iter()
+                    .any(|cause| detail.contains(&format!(
+                        "Observation cleanup unconfirmed; exact admission retained: {cause}"
+                    ))),
+                    "{case}: {detail}"
+                );
                 cleanup_deadline = true;
             }
         }
