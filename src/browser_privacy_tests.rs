@@ -229,6 +229,9 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
         .await
         .context("Failed upload settlement regression")?;
     witness_cases(page).await.context("Witness regression")?;
+    receipt_privacy_read_cases(page)
+        .await
+        .context("Receipt privacy read regression")?;
     witness_closure_release_cases(page)
         .await
         .context("Witness closure regression")?;
@@ -3021,6 +3024,38 @@ async fn unknown_privacy_send_case(page: &Cdp) -> Result<()> {
         &cancel,
     )
     .await?;
+    Ok(())
+}
+
+/// A receipt read of a retained witness on a conversation route evaluates the Temporary Chat
+/// predicate, a walk of `main`, once before source inspection and once for the final state.
+async fn receipt_privacy_read_cases(page: &Cdp) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let view = "()=>{const root={return:null,stateNode:{}};root.stateNode.current=root;document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:{scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}};}";
+    mount(page, ACTIVE, "/c/PUBLIC-id", view).await?;
+    let owner = json!({"claimId":"PUBLIC-claim","reservationId":"PUBLIC-reservation"});
+    let intent = json!({"witnessId":"PUBLIC-witness","dispatchGuardId":"PUBLIC-guard","promptSha256":"PUBLIC-sha"});
+    page.evaluate_with_arguments(r#"(cfg)=>{
+        sessionStorage.setItem('oracle:target-claim',JSON.stringify({id:cfg.owner.claimId,retiring:false,
+            submission:{id:cfg.owner.reservationId,state:'quarantined',dispatch:'acknowledged'}}));
+        window.__oracleSubmissionWitness=Object.freeze({witnessId:cfg.intent.witnessId,dispatchGuardId:cfg.intent.dispatchGuardId,
+            owner:cfg.owner,document,conversationId:'PUBLIC-id',result:{state:'pending'},candidate:{messageId:'PUBLIC-message'}});
+        window.PUBLIC_walks=0;
+        document.querySelectorAll=function(selector){if(selector==='main *')window.PUBLIC_walks++;return Document.prototype.querySelectorAll.call(this,selector);};
+        return true;
+    }"#,&json!([{"owner":owner,"intent":intent}]),SHORT,&cancel).await?;
+    let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+        &json!([{"owner":owner,"ids":[],"prompt":"PUBLIC prompt","intent":intent,"saved":null}]),SHORT,&cancel).await?;
+    let walks=page.evaluate_with_arguments("()=>{const walks=window.PUBLIC_walks;delete document.querySelectorAll;delete window.PUBLIC_walks;delete window.__oracleSubmissionWitness;sessionStorage.removeItem('oracle:target-claim');return walks;}",&json!([]),SHORT,&cancel).await?;
+    assert!(
+        receipt["probe"].is_object(),
+        "Source was not inspected: {receipt}"
+    );
+    assert_eq!(
+        receipt["submission"]["state"], "captured",
+        "Retained witness was not read: {receipt}"
+    );
+    assert_eq!(walks, 2, "Receipt probe walked main {walks} times");
     Ok(())
 }
 
