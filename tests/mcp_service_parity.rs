@@ -190,6 +190,35 @@ async fn dry_runs_print_the_reference_summary_resolved_lines_and_guidance() {
 }
 
 #[tokio::test]
+async fn a_config_file_that_fails_to_load_refuses_the_call() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("config.json");
+    let server = server(home.path(), Environment::new());
+    for (raw, reason) in [
+        ("{ engine: ", "invalid JSON5 configuration"),
+        ("[]", "config must be an object"),
+    ] {
+        std::fs::write(&path, raw).unwrap();
+        for (tool, input) in [
+            (
+                "consult",
+                json!({"prompt":PROMPT,"engine":"api","dryRun":true}),
+            ),
+            ("project_sources", json!({"operation":"list","dryRun":true})),
+        ] {
+            let error = call(&server, tool, input).await.unwrap_err().to_string();
+            assert_eq!(
+                error,
+                format!(
+                    "Failed to read {}: {reason}. Fix or remove that file, then retry.",
+                    path.display()
+                )
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn validation_and_engine_texts_match_the_reference() {
     let home = tempfile::tempdir().unwrap();
     let server = server(home.path(), Environment::new());
