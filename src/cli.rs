@@ -1041,7 +1041,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                 let mut overrides = browser_runtime_overrides_at_scope(
                     &matches,
                     &[child, sub],
-                    &server.configured()["browser"],
+                    &server.configured()?["browser"],
                     &server.env,
                 )?;
                 for (flag, key) in [
