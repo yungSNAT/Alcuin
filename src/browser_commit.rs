@@ -74,6 +74,11 @@ pub struct SubmissionWitness {
     request_path: String,
     history_disabled: bool,
 }
+impl SubmissionWitness {
+    pub(crate) fn witness_id(&self) -> &str {
+        &self.witness_id
+    }
+}
 /// `privacy` is the Temporary Chat state the caller read in this renderer task.
 const WITNESS_READ: &str = r#"(cfg, privacy) => {
     const record=window.__oracleSubmissionWitness;

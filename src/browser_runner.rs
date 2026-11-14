@@ -4920,6 +4920,25 @@ impl PageStalls {
         }
     }
 }
+/// Reads the submission witness's stream-end trace (I-1 step 3, logging only) for this witness.
+pub(crate) const STREAM_END: &str = "(cfg)=>{ /* alcuin-dom:stream-end */ const r=window.__oracleStreamEnd; return r&&r.witnessId===cfg.witnessId?{state:r.state,ms:r.ms,fetch:r.fetch}:null; }";
+/// The trace line beside the terminal gate. It writes only a state from the collector's fixed
+/// vocabulary, whole milliseconds once ended, and whether the page's fetch looked native (advisory);
+/// anything else reads as not observed or is left out.
+fn stream_end_line(trace: &Value, gate_ms: u64) -> String {
+    let observed = match (trace["state"].as_str(), &trace["ms"]) {
+        (Some("ended"), ms) if ms.is_u64() => format!("ended {ms} ms after send"),
+        (Some(state @ ("pending" | "unavailable")), Value::Null) => state.to_owned(),
+        _ => "not observed".to_owned(),
+    };
+    let fetch = match trace["fetch"].as_str() {
+        Some(looks @ ("native" | "wrapped")) => format!("; fetch looked {looks}"),
+        _ => String::new(),
+    };
+    format!(
+        "[browser] Stream-end trace: {observed}{fetch}; gate confirmed {gate_ms} ms into the wait."
+    )
+}
 #[allow(clippy::too_many_arguments)] // Acceptance binds source, selection, ownership and the polling deadline.
 async fn wait_answer(
     store: &SessionStore,
@@ -5165,6 +5184,28 @@ async fn wait_answer(
                 strong_thinking_active: observed["strongThinkingActive"] != false,
             };
             if gate.observe(&sample, limits.confirm_cycles, limits.stable_ms) {
+                // A recovery read may follow the saved answer block, so only a first wait logs the trace.
+                if !recovery && let Some(witness) = &receipt.submission_witness {
+                    // Logging only: a failed read is logged as not observed, and neither it nor a failed
+                    // append changes acceptance.
+                    let trace = reservation
+                        .page()
+                        .evaluate_with_arguments(
+                            STREAM_END,
+                            &json!([{"witnessId":witness.witness_id()}]),
+                            limits.command,
+                            cancel,
+                        )
+                        .await
+                        .unwrap_or(Value::Null);
+                    if let Ok(log) = store.require(&progress) {
+                        let _ = store.append_log(
+                            &progress,
+                            log["model"].as_str(),
+                            &format!("{}\n", stream_end_line(&trace, sample.now_ms)),
+                        );
+                    }
+                }
                 anyhow::ensure!(
                     !deep || research_observed,
                     "deep-research-not-started: ChatGPT completed a normal answer without starting Deep Research; recover the retained target without sending again"

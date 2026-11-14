@@ -6,6 +6,17 @@
   if (previous) throw Error('An earlier submission witness requires exact cleanup');
   if (typeof window.fetch !== 'function') throw Error('Submission transport is unavailable');
   const original = window.fetch;
+  // Advisory and easily fooled (a bound function or an edited toString looks native): whether the
+  // fetch below this hook looked like the browser's own when the hook was installed. The stream-end
+  // trace reports it so its readers can set aside runs a page wrapper may have misattributed; it
+  // never affects acceptance.
+  const fetchLooks = (() => {
+    try {
+      return Function.prototype.toString.call(original).includes('[native code]') ? 'native' : 'wrapped';
+    } catch {
+      return 'wrapped';
+    }
+  })();
   const originalDocument = document;
   const originalPath = location.pathname;
   let conversationId = originalPath.match(/^\/c\/([a-zA-Z0-9-]+)$/)?.[1] ?? null;
@@ -80,6 +91,45 @@
     // payload and guard references in that closure too, not just the global record.
     cfg = dispatch = assertCurrent = temporary = expected = null;
   };
+  // Stream-end trace for the terminal gate (I-1 step 3, logging only). Watches Resource Timing,
+  // which gets a request's entry once its response has fully arrived; it never touches the request
+  // or response. The witnessed POST starts inside one synchronous fetch call, so only an entry to
+  // the conversation endpoint whose start falls between the clock readings just before and after
+  // that call is attributed to it; a second such entry makes the trace unavailable. Records a fixed
+  // state and, once ended, whole milliseconds from the request's start to its response end; never
+  // a URL, header, status or body. A failure here leaves the page's fetch untouched.
+  const traceStreamEnd = witnessId => {
+    let started = null, called = null, matched = 0, observer = null;
+    const mark = (state, ms) => {
+      const current = window.__oracleStreamEnd;
+      if (current && current.witnessId !== witnessId && state !== 'pending') return;
+      window.__oracleStreamEnd = Object.freeze({version:1,witnessId,state,ms,fetch:fetchLooks});
+    };
+    try {
+      started = performance.now();
+      mark('pending', null);
+      observer = new PerformanceObserver(list => {
+        try {
+          for (const item of list.getEntries()) {
+            if (called === null || item.initiatorType !== 'fetch' || item.startTime < started || item.startTime > called ||
+                item.name !== 'https://chatgpt.com/backend-api/f/conversation') continue;
+            if (++matched === 1) mark('ended', Math.max(0, Math.round(item.responseEnd - item.startTime)));
+            else mark('unavailable', null);
+          }
+        } catch {
+          try { mark('unavailable', null); } catch {}
+        }
+      });
+      observer.observe({type:'resource'});
+      // shortcut: a fixed 4 hour watch outlasts any answer wait and still sees a late second entry;
+      // an unended record stays pending.
+      setTimeout(() => observer.disconnect(), 4 * 3600000);
+    } catch {
+      try { observer?.disconnect(); mark('unavailable', null); } catch {}
+      return () => {};
+    }
+    return () => { try { called = performance.now(); } catch {} };
+  };
   const read = phase => {
     if (closed && sealedResult) return sealedResult;
     try {
@@ -97,6 +147,7 @@
     }
   };
   function observedFetch(input, init) {
+    let traced = null;
     if (!closed && Date.now() >= expires) { try { record.stop(); } catch {} }
     if (!closed && dispatch.admitted) {
       try {
@@ -134,6 +185,7 @@
                 witness = Object.freeze({version:1,owner,witnessId:cfg.witnessId,dispatchGuardId:cfg.dispatchGuardId,
                   messageId:message.id,promptSha256:cfg.promptSha256,source:'chatgpt-fetch-v1',
                   requestPath:url.pathname,historyDisabled:true});
+                traced = cfg.witnessId;
               }
             }
           }
@@ -142,8 +194,13 @@
         invalidate('submission-witness-unavailable', 'collector-probe-unavailable', 'matched-fetch');
       }
     }
+    const called = traced ? traceStreamEnd(traced) : null;
     // Preserve the caller, input object and argument list, including synchronous errors.
-    return Reflect.apply(original, this, arguments);
+    try {
+      return Reflect.apply(original, this, arguments);
+    } finally {
+      called?.();
+    }
   }
   const record = Object.freeze({
     witnessId:cfg.witnessId,

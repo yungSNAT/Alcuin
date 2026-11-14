@@ -230,6 +230,7 @@ enum Fault {
     UiWarningTimeout,
     PageStallAfterSend,
     PrivacyRefusalAfterSend,
+    StreamEndThrows,
     ImageUiWarning,
     StaleConversationCookie,
 }
@@ -702,6 +703,14 @@ impl Exchange {
         }
         if expression.contains("alcuin-dom:submission-witness-clean") {
             return json!(true);
+        }
+        if expression.contains("alcuin-dom:stream-end") {
+            assert!(
+                args[0]["witnessId"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty())
+            );
+            return json!({"state":"ended","ms":1234});
         }
         if expression.contains("alcuin-dom:image-buttons") {
             if matches!(self.fault, Fault::SequentialNamedFirstThenFile) && self.turns.len() == 2 {
@@ -1473,6 +1482,22 @@ impl Exchange {
                     continue;
                 }
                 let thrown = json!({"id":request["id"],"result":{"result":{"type":"object","subtype":"error"},"exceptionDetails":{"text":"Uncaught","exception":{"description":"TypeError: PUBLIC page replaced"}}}});
+                if socket
+                    .send(Message::Text(thrown.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            if matches!(self.fault, Fault::StreamEndThrows)
+                && request["method"] == "Runtime.evaluate"
+                && request["params"]["expression"]
+                    .as_str()
+                    .is_some_and(|expression| expression.contains("alcuin-dom:stream-end"))
+            {
+                let thrown = json!({"id":request["id"],"result":{"result":{"type":"object","subtype":"error"},"exceptionDetails":{"text":"Uncaught"}}});
                 if socket
                     .send(Message::Text(thrown.to_string().into()))
                     .await
@@ -3448,6 +3473,10 @@ async fn parent_adoption_completes_then_retires_only_selected_child_and_duplicat
     let parent_log = f.store.log(&parent_id).unwrap();
     assert!(parent_log.contains("[browser] Model selection evidence: "));
     assert!(parent_log.contains("[browser] ChatGPT archive skipped (temporary-chat).\n"));
+    assert!(
+        parent_log
+            .contains("[browser] Stream-end trace: ended 1234 ms after send; gate confirmed ")
+    );
     assert_eq!(
         f.store.require(&parent_id).unwrap()["browser"]["archive"]["reason"],
         "temporary-chat"
@@ -3767,6 +3796,17 @@ async fn a_marked_answer_completes_and_keeps_its_marker_in_the_saved_text() {
         assert!(saved.ends_with(&format!("\n{marker}\n")), "{saved}");
         stop(f).await;
     }
+}
+#[tokio::test]
+async fn a_failed_stream_end_read_is_logged_and_the_answer_is_still_accepted() {
+    let f = fixture(Fault::StreamEndThrows, false).await;
+    assert_eq!(run(&f).await.unwrap()["status"], "completed");
+    let log = f.store.log(&f.id).unwrap();
+    assert!(
+        log.contains("[browser] Stream-end trace: not observed; gate confirmed "),
+        "{log}"
+    );
+    stop(f).await;
 }
 #[tokio::test]
 async fn a_run_without_the_option_keeps_its_prompt_and_completes_unmarked() {
@@ -10060,4 +10100,45 @@ fn a_failed_attempt_reports_nothing_sent_only_without_dispatch_or_tab() {
         .unwrap();
     let unlinked = attempt_failure(&store, parent, child);
     assert!(unlinked.contains("recovery evidence"), "{unlinked}");
+}
+#[test]
+fn stream_end_line_writes_only_a_known_state_and_whole_milliseconds() {
+    assert_eq!(
+        stream_end_line(&json!({"state":"ended","ms":41234}), 43000),
+        "[browser] Stream-end trace: ended 41234 ms after send; gate confirmed 43000 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"pending","ms":null}), 7),
+        "[browser] Stream-end trace: pending; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"ended","ms":5,"fetch":"wrapped"}), 7),
+        "[browser] Stream-end trace: ended 5 ms after send; fetch looked wrapped; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"pending","ms":null,"fetch":"native"}), 7),
+        "[browser] Stream-end trace: pending; fetch looked native; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(
+            &json!({"state":"pending","ms":null,"fetch":"PUBLIC text"}),
+            7
+        ),
+        "[browser] Stream-end trace: pending; gate confirmed 7 ms into the wait."
+    );
+    for trace in [
+        json!(null),
+        json!({"state":"PUBLIC answer text","ms":null}),
+        json!({"state":"streaming","ms":1}),
+        json!({"state":"pending","ms":1}),
+        json!({"state":"ended","ms":-1}),
+        json!({"state":"ended","ms":1.5}),
+        json!({"state":"ended","ms":null}),
+    ] {
+        assert_eq!(
+            stream_end_line(&trace, 7),
+            "[browser] Stream-end trace: not observed; gate confirmed 7 ms into the wait.",
+            "{trace}"
+        );
+    }
 }
