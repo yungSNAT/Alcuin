@@ -31,7 +31,7 @@ With `alcuin` and `alcuin-mcp` on your `PATH`, add this repository as a plugin m
 /plugin install alcuin@alcuin
 ```
 
-The plugin runs `alcuin-mcp` with `ORACLE_ENGINE=browser` and the default session folder and browser profile, the same server as `alcuin bridge claude-config --local-browser` prints, and adds the `alcuin` skill. `/mcp` lists it as `plugin:alcuin:alcuin`; if it shows as failed, `alcuin-mcp` is not on the `PATH` Claude Code started with. The plugin's files come from this repository's default branch; the binaries are the ones you downloaded. For another session folder or profile, use the entry printed below instead.
+The plugin runs `alcuin-mcp` with `ORACLE_ENGINE=browser` and the default session folder and browser profile, the same server as `alcuin bridge claude-config --local-browser` prints, and adds the `alcuin` skill. `/mcp` lists it as `plugin:alcuin:alcuin`; if it shows as failed, check first that `alcuin-mcp` is on the `PATH` Claude Code started with. The plugin's files come from this repository's default branch; the binaries are the ones you downloaded. For another session folder or profile, use the entry printed below instead.
 
 ## Claude Code and Codex on the browser's machine
 

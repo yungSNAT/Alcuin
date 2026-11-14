@@ -1,5 +1,6 @@
 //! The Claude Code plugin installs the same server entry that
 //! `alcuin bridge claude-config --local-browser` prints, and the repository's skill.
+use alcuin::config::{self, Environment};
 use serde_json::Value;
 use std::{path::Path, time::Duration};
 
@@ -65,4 +66,22 @@ async fn plugin_server_matches_the_local_browser_claude_config() {
         serde_json::json!(home.path().join(".oracle").join("browser-profile"))
     );
     assert_eq!(manifest("plugin.json")["mcpServers"]["alcuin"], expected);
+}
+
+#[test]
+fn server_defaults_match_the_paths_the_plugin_leaves_out() {
+    let home = tempfile::tempdir().unwrap();
+    let text = home.path().to_string_lossy().into_owned();
+    let env = Environment::from_iter([
+        ("HOME".into(), text.clone()),
+        ("USERPROFILE".into(), text.clone()),
+    ]);
+    assert_eq!(
+        config::oracle_home(&env).unwrap(),
+        home.path().join(".oracle")
+    );
+    assert_eq!(
+        config::manual_login_profile_dir([None], &env, &text).unwrap(),
+        home.path().join(".oracle").join("browser-profile")
+    );
 }
