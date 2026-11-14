@@ -2,9 +2,9 @@ name: release
 
 # Builds alcuin and alcuin-mcp for Linux and Windows and bundles alcuin-mcp as an MCP bundle
 # (.mcpb) for Claude Desktop. A tag such as v0.1.0 attests the archives and publishes them as a
-# GitHub release; a manual run attests and uploads artefacts; a pull request that changes this
-# workflow or the bundle manifest only uploads them. The tests run in ci.yml on every commit to
-# main, so this workflow only builds.
+# GitHub release and then lists the bundle on the MCP Registry; a manual run attests and uploads
+# artefacts; a pull request that changes this workflow, the bundle manifest or server.json only
+# uploads them. The tests run in ci.yml on every commit to main, so this workflow only builds.
 on:
   push:
     tags: ["v*"]
@@ -13,10 +13,17 @@ on:
       - .github/workflows/release.yml
       - packaging/mcpb/manifest.json
       - packaging/smoke.sh
+      - server.json
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# The MCP Registry's publisher CLI and the SHA-256 of its Linux archive (from the release's
+# checksums file), shared by the bundle and registry jobs.
+env:
+  PUBLISHER_VERSION: v1.8.9
+  PUBLISHER_SHA256: 4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8
 
 jobs:
   build:
@@ -104,6 +111,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
+          pattern: alcuin-*
           merge-multiple: true
       - name: Bundle alcuin-mcp for Claude Desktop
         run: |
@@ -147,6 +155,31 @@ jobs:
           name: alcuin-mcpb
           path: ${{ runner.temp }}/out/*
           if-no-files-found: error
+      # server.json holds the MCP Registry listing; its version, bundle URL and SHA-256 are set
+      # here from Cargo.toml and the bundle just built, so every run checks what a tag publishes.
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --proto-redir '=https' -fsSLo "$RUNNER_TEMP/mcp-publisher.tar.gz" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${PUBLISHER_SHA256}  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+      - name: Write and validate the registry listing
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          sha=$(cut -d' ' -f1 "$RUNNER_TEMP/out/alcuin.mcpb.sha256")
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}/alcuin.mcpb"
+          mkdir -p "$RUNNER_TEMP/registry"
+          jq --arg v "$version" --arg u "$url" --arg s "$sha" \
+            '.version = $v | .packages[0].identifier = $u | .packages[0].fileSha256 = $s' \
+            server.json > "$RUNNER_TEMP/registry/server.json"
+          "$RUNNER_TEMP/mcp-publisher" validate "$RUNNER_TEMP/registry/server.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: registry-listing
+          path: ${{ runner.temp }}/registry/server.json
+          if-no-files-found: error
 
   # Attestations go to the public Sigstore log, so pull request runs skip this job.
   attest:
@@ -162,6 +195,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
+          pattern: alcuin-*
           merge-multiple: true
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -182,6 +216,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
+          pattern: alcuin-*
           merge-multiple: true
       - name: Publish the release
         env:
@@ -191,3 +226,36 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
             --notes "Prebuilt alcuin and alcuin-mcp for Linux (x86_64, glibc 2.39 or later) and Windows (x86_64), each archive with a SHA-256 checksum and a build provenance attestation, and an MCP bundle (alcuin.mcpb) for Claude Desktop. See CHANGELOG.md for what changed."
+
+  # Lists the release on the MCP Registry. GitHub OIDC proves the io.github.yungSNAT namespace,
+  # so no registry secret is stored. It runs after the release job, so the bundle URL resolves.
+  registry:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: registry-listing
+          path: registry
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --proto-redir '=https' -fsSLo "$RUNNER_TEMP/mcp-publisher.tar.gz" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${PUBLISHER_SHA256}  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+      - name: Publish the listing
+        run: |
+          set -euo pipefail
+          listed=$(jq -r .version registry/server.json)
+          test "$listed" = "${GITHUB_REF_NAME#v}" || {
+            echo "::error::Listing version ${listed} does not match tag ${GITHUB_REF_NAME}"
+            exit 1
+          }
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish registry/server.json
