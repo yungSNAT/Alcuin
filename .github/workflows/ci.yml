@@ -20,6 +20,37 @@ env:
   ORACLE_DISABLE_NOTIFICATIONS: "1"
 
 jobs:
+  # A change only to Markdown at the root, docs/ or .github/assets/ skips the Windows shards'
+  # steps and native-chrome; the Linux leg still runs every test. No test or lint reads those
+  # files except README.md, which tests/docs_contracts.rs reads the same way on every platform.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.diff.outputs.docs-only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A pull request is checked out as its merge commit, whose first parent is main. Any
+      # other event, or a range git cannot diff, counts as a code change.
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) base=HEAD^1 ;;
+            push) base=$BEFORE ;;
+            *) base= ;;
+          esac
+          docs=false
+          if [ -n "$base" ] && files=$(git diff --name-only "$base" HEAD) && [ -n "$files" ] &&
+            ! grep -qvE '^[^/]+\.md$|^docs/|^\.github/assets/' <<< "$files"; then
+            docs=true
+          fi
+          echo "docs-only=$docs" >> "$GITHUB_OUTPUT"
+
   # Offline checks only. Tests that need a signed-in browser or a live provider are
   # #[ignore]d and run locally; live receipts never run in CI. The native-Chrome job
   # below runs the privacy and Grok fixture test, which needs only an installed Chrome.
@@ -36,29 +67,40 @@ jobs:
             shard: 1
           - os: windows-latest
             shard: 2
+    # If changes fails, its output is empty and every leg runs in full.
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      # The shards keep their required checks by starting and skipping each step, rather than
+      # by a job-level condition on the matrix.
+      SKIP: ${{ matrix.os == 'windows-latest' && needs.changes.outputs.docs-only == 'true' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: env.SKIP != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup toolchain install
+      - if: env.SKIP != 'true'
+        run: rustup toolchain install
       - name: Check browser script syntax
+        if: env.SKIP != 'true'
         shell: bash
         run: for script in browser-scripts/*.js; do node --check "$script"; done
       # Only main saves: a pull request's cache can be restored only by that pull request's
       # reruns, and its copies pushed the repository over the 10 GB cache limit.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: env.SKIP != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Real-time scanning can hold newly written files, so atomic renames retry past the tests'
       # durable-write budgets. The runner is disposable.
-      - if: runner.os == 'Windows'
+      - if: runner.os == 'Windows' && env.SKIP != 'true'
         shell: pwsh
         run: Set-MpPreference -DisableRealtimeMonitoring $true
-      - if: matrix.shard != 2
+      - if: matrix.shard != 2 && env.SKIP != 'true'
         run: cargo fmt --check
-      - if: matrix.shard != 2
+      - if: matrix.shard != 2 && env.SKIP != 'true'
         run: cargo clippy --all-targets --locked -- -D warnings
       # Coverage needs llvm-tools and a prebuilt cargo-llvm-cov, with no fallback to compiling it.
       - if: runner.os == 'Linux'
@@ -68,7 +110,7 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
           fallback: none
-      - if: runner.os == 'Windows'
+      - if: runner.os == 'Windows' && env.SKIP != 'true'
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
         with:
           tool: cargo-nextest@0.9.150
@@ -78,7 +120,7 @@ jobs:
       # Temporary files stay on the workspace drive: a durable write's median was 6 to 9 ms on the
       # Windows system drive and 0.2 to 0.6 ms there (3 runners, 30 October 2026). The crate has no
       # doc tests, so nextest runs every test cargo test did.
-      - if: runner.os == 'Windows'
+      - if: runner.os == 'Windows' && env.SKIP != 'true'
         run: cargo nextest run --locked --no-fail-fast --partition hash:${{ matrix.shard }}/2 --test-threads=1
         env:
           TEMP: ${{ runner.temp }}
@@ -99,6 +141,8 @@ jobs:
   # This fixture test is #[ignore]d only because it needs an installed Chrome. It drives
   # intercepted, offline DOM fixtures in headless Chrome, which the runner image has.
   native-chrome:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
