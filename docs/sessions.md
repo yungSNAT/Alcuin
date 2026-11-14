@@ -88,7 +88,7 @@ What it checks:
 - **Quotes:** each quoted span of 8 or more characters found in neither the sent files nor the prompt. Fenced code blocks are skipped, as they usually propose code.
 - **Which bytes:** the copy the session saved when it sent its files. When no copy remains, as after a browser run closes its tab cleanly, it reads the files as they are now, says so and lists any that changed since the session began.
 
-It exits 1 when it flags anything, 0 when it flags nothing and 2 when it cannot check, such as for an unknown session. `--json` prints every citation and quote with its status (`grounded`, `out-of-range`, `host` and so on) and `found` for each quote, plus `sentFiles` (`saved` when it read the saved copy) and any `changedFiles`.
+It exits 1 when it flags anything, 0 when it flags nothing and 2 when it cannot check, such as for an unknown session. `--json` prints every citation and quote with its status (`grounded`, `out-of-range`, `host` and so on) and `found` for each quote, plus `sentFiles` (`saved` when it read the saved copy) and any `changedFiles`. MCP clients get the same check from the server's `ground` tool ([MCP](mcp.md)).
 
 Limits: inline code counts as a quote, so a name the answer proposes is flagged; a quote that wraps across 2 lines of the answer is not checked; `file#L10` citations are ignored, as are names without an extension other than dotfiles and conventional ones such as `Dockerfile` and `Makefile`; a name such as `example.com:8080` reads as a host, listed with status `host` and not flagged, unless a sent file has that name.
 

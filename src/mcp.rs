@@ -1,6 +1,6 @@
 use crate::{
     config::{self, Environment},
-    execution,
+    execution, grounding,
     process::ProcessIdentity,
     project_sources, prompts,
     providers::{self, HttpProvider},
@@ -132,6 +132,7 @@ impl AlcuinMcp {
         match name {
             "sessions" => self.sessions(&arguments),
             "wait" => self.wait(&arguments, cancel).await,
+            "ground" => self.ground(&arguments),
             "consult" => self.consult(arguments, cancel).await,
             "project_sources" => {
                 // Reference buildProjectSourcesBrowserConfig: the environment names apply here too.
@@ -290,8 +291,10 @@ impl AlcuinMcp {
         add_summaries(&mut structured, &meta);
         tool_result(text, structured)
     }
-    pub(crate) fn configured(&self) -> Value {
-        config::load(
+    /// Refuses a configuration file that failed to load: its warning would reach only the
+    /// server's stderr, and the run would go ahead without the settings it holds.
+    pub(crate) fn configured(&self) -> Result<Value> {
+        let loaded = config::load(
             self.store.home(),
             &self.cwd,
             self.env
@@ -299,8 +302,13 @@ impl AlcuinMcp {
                 .map(PathBuf::from)
                 .as_deref(),
             true,
-        )
-        .config
+        );
+        anyhow::ensure!(
+            loaded.warnings.is_empty(),
+            "{}. Fix or remove that file, then retry.",
+            loaded.warnings.join("; ")
+        );
+        Ok(loaded.config)
     }
     fn opted_in(&self, name: &str) -> bool {
         self.env.get(name).is_some_and(|s| {
@@ -322,7 +330,18 @@ impl AlcuinMcp {
             .filter_map(Value::as_str)
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        prompts::confine_inputs(&files, &self.cwd)
+        prompts::confine_inputs(&files, &self.cwd, &self.cwd)
+    }
+    fn ground(&self, input: &Value) -> Result<CallToolResult> {
+        let id = input["id"].as_str().context("Session id is required.")?;
+        let meta = self.project_session(id)?;
+        // Applies only when the session kept no copy of what it sent and its files are read.
+        let root = (!self.opted_in("ORACLE_MCP_ALLOW_EXTERNAL_INPUT")).then_some(&*self.cwd);
+        let report = grounding::session_report(&self.store, id, root)?;
+        let mut structured = serde_json::to_value(&report)?;
+        structured["sessionId"] = meta["id"].clone();
+        structured["flagged"] = json!(report.flagged());
+        tool_result(grounding::format_report(&report), structured)
     }
     async fn consult(
         &self,
@@ -341,7 +360,7 @@ impl AlcuinMcp {
             }
         }
         self.confine_files(&input)?;
-        let config = self.configured();
+        let config = self.configured()?;
         input["waitPreference"] = json!(input["waitForCompletion"] != false);
         let request = execution::resolve_mcp(&input, &config, &self.env, &self.cwd)?;
         if input["dryRun"] == true {
@@ -458,7 +477,7 @@ impl AlcuinMcp {
         // shortcut: the perf trace is process-global, so concurrent traced consults share one
         // trace; a per-run trace handle is the upgrade path.
         let traced =
-            crate::perf::detached_value(self.env.get("ORACLE_PERF_TRACE").map(String::as_str), id);
+            crate::perf::session_value(self.env.get("ORACLE_PERF_TRACE").map(String::as_str), id);
         let tracing = traced.is_some();
         if tracing {
             crate::perf::start(traced, &[], &self.cwd);
@@ -541,7 +560,7 @@ impl AlcuinMcp {
             operation != "add" || input["dryRun"] == true,
             "Temporary Chat policy forbids persistent Project Sources uploads; use dryRun to preview locally."
         );
-        let mut config = self.configured();
+        let mut config = self.configured()?;
         if !config["browser"].is_object() {
             config["browser"] = json!({});
         }

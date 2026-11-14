@@ -190,6 +190,35 @@ async fn dry_runs_print_the_reference_summary_resolved_lines_and_guidance() {
 }
 
 #[tokio::test]
+async fn a_config_file_that_fails_to_load_refuses_the_call() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("config.json");
+    let server = server(home.path(), Environment::new());
+    for (raw, reason) in [
+        ("{ engine: ", "invalid JSON5 configuration"),
+        ("[]", "config must be an object"),
+    ] {
+        std::fs::write(&path, raw).unwrap();
+        for (tool, input) in [
+            (
+                "consult",
+                json!({"prompt":PROMPT,"engine":"api","dryRun":true}),
+            ),
+            ("project_sources", json!({"operation":"list","dryRun":true})),
+        ] {
+            let error = call(&server, tool, input).await.unwrap_err().to_string();
+            assert_eq!(
+                error,
+                format!(
+                    "Failed to read {}: {reason}. Fix or remove that file, then retry.",
+                    path.display()
+                )
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn validation_and_engine_texts_match_the_reference() {
     let home = tempfile::tempdir().unwrap();
     let server = server(home.path(), Environment::new());
@@ -334,6 +363,7 @@ fn tool_annotations_mark_which_tools_reach_chatgpt_and_which_only_read() {
             ("project_sources", sends),
             ("sessions", reads),
             ("wait", reads),
+            ("ground", reads),
         ]
         .map(|(name, (read_only, destructive, open_world))| (
             name.to_owned(),
@@ -450,6 +480,19 @@ async fn inline_api_consults_log_the_reference_run_and_trace() {
     let id = message["Session ".len()..].split_once(' ').unwrap().0;
     let log = server.store.log(id).unwrap();
     assert!(log.contains("Run failed: "), "{log}");
+    // The process-wide trace the first consult left must not make this untraced server trace
+    // too; when it did, a test running alongside took over the first consult's trace.
+    let traces = std::fs::read_dir(home.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("PUBLIC-trace.")
+        })
+        .count();
+    assert_eq!(traces, 1);
 }
 
 #[tokio::test]

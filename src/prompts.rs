@@ -268,14 +268,14 @@ pub(crate) fn within(path: &Path, root: &Path) -> bool {
         path.starts_with(root)
     }
 }
-/// MCP file inputs must stay inside `cwd`. Each is checked lexically, so an absolute or `..`
-/// path is refused before anything outside is touched, then by its resolved target, so a link
-/// cannot lead out. A pattern is checked by the folder `resolve_files_with` walks from, after
-/// the same normalisation; walks skip links, so they reach nothing else outside. A pattern is
-/// refused when the working directory's own path holds glob characters, as its walk would
-/// start above it. Exclusions only narrow the selection, and MCP inputs are never split at
-/// commas.
-pub fn confine_inputs(inputs: &[String], cwd: &Path) -> Result<()> {
+/// MCP file inputs, resolved against `cwd` as `resolve_files` resolves them, must stay inside
+/// `root`. Each is checked lexically, so an absolute or `..` path is refused before anything
+/// outside is touched, then by its resolved target, so a link cannot lead out. A pattern is
+/// checked by the folder `resolve_files_with` walks from, after the same normalisation; walks
+/// skip links, so they reach nothing else outside. A pattern is refused when the working
+/// directory's own path holds glob characters, as its walk would start above it. Exclusions
+/// only narrow the selection, and MCP inputs are never split at commas.
+pub fn confine_inputs(inputs: &[String], cwd: &Path, root: &Path) -> Result<()> {
     let mut inputs = inputs
         .iter()
         .map(|s| crate::policy::trim(s))
@@ -284,7 +284,7 @@ pub fn confine_inputs(inputs: &[String], cwd: &Path) -> Result<()> {
     if inputs.peek().is_none() {
         return Ok(());
     }
-    let root = absolute(cwd, ".");
+    let root = absolute(root, ".");
     let resolved_root = fs::canonicalize(&root)
         .with_context(|| format!("Cannot resolve the working directory {}", root.display()))?;
     for raw in inputs {
