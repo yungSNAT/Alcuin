@@ -329,6 +329,36 @@ fn ctrl_c_without_a_browser_hook_cancels_the_run() {
     assert!(alive(&run.chrome) && exists(&run.profile));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "subprocess-only early interrupt fixture"]
+async fn early_interrupt_fixture() {
+    let cancel = CancellationToken::new();
+    let listener = cancel_on_ctrl_c(cancel.clone());
+    // The current-thread runtime has not yet run the listener task.
+    raise_interrupt();
+    tokio::time::timeout(Duration::from_secs(5), cancel.cancelled())
+        .await
+        .unwrap();
+    listener.await.unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn ctrl_c_before_the_listener_task_runs_still_cancels_the_run() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "browser_signal::tests::early_interrupt_fixture",
+            "--ignored",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}\n{stdout}", output.status);
+    assert!(stdout.contains("1 passed"), "{stdout}");
+}
+
 #[test]
 fn mcp_ctrl_c_without_a_browser_hook_keeps_the_default_action() {
     let run = interrupt("mcp-none");

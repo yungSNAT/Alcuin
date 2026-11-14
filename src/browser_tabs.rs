@@ -208,6 +208,14 @@ async fn inspect_page(
         .await?;
     summary(endpoint, target, &info)
 }
+/// Without copied Markdown the answer's page text stands in, marked as such: it keeps the
+/// words but can lose Markdown formatting.
+fn page_text_fallback(observed: &mut Value) {
+    if observed["lastAssistantMarkdown"].is_null() {
+        observed["lastAssistantMarkdown"] = observed["lastAssistantText"].clone();
+        observed["captureSource"] = json!("page-text");
+    }
+}
 pub async fn inspect(
     endpoint: &AttachmentEndpoint,
     target: &Value,
@@ -259,8 +267,8 @@ pub async fn inspect(
                 observed["lastAssistantMarkdown"] = json!(text);
             }
         }
-        if markdown && observed["lastAssistantMarkdown"].is_null() {
-            observed["lastAssistantMarkdown"] = observed["lastAssistantText"].clone();
+        if markdown {
+            page_text_fallback(&mut observed);
         }
         Ok(observed)
     }

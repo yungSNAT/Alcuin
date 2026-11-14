@@ -266,3 +266,15 @@ fn page_identity_checks_accept_project_conversation_routes() {
         assert!(!script.contains(r"pathname.match(/^\/c\/([a-zA-Z0-9-]+)/)"));
     }
 }
+#[test]
+fn page_text_stands_in_for_missing_markdown_and_says_so() {
+    let mut observed = json!({"lastAssistantText":"PUBLIC page text","lastAssistantMarkdown":null});
+    page_text_fallback(&mut observed);
+    assert_eq!(observed["lastAssistantMarkdown"], "PUBLIC page text");
+    assert_eq!(observed["captureSource"], "page-text");
+    let mut copied =
+        json!({"lastAssistantText":"PUBLIC page text","lastAssistantMarkdown":"**PUBLIC**"});
+    page_text_fallback(&mut copied);
+    assert_eq!(copied["lastAssistantMarkdown"], "**PUBLIC**");
+    assert!(copied.get("captureSource").is_none());
+}

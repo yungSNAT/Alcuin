@@ -120,8 +120,6 @@ Options:
                                         false)
   --partial <mode>                      Multi-model failure policy (fail | ok).
                                         (choices: "fail", "ok")
-  --verbose-render                      Show render/TTY diagnostics when
-                                        replaying sessions. (default: false)
   --base-url <url>                      Override the OpenAI-compatible base URL
                                         for API runs (e.g. LiteLLM proxy
                                         endpoint).
@@ -168,12 +166,6 @@ Options:
                                         Web Search; deep activates Deep
                                         Research. (choices: "off", "search",
                                         "deep")
-  --browser-capture-provider-native     Save ChatGPT’s full conversation record
-                                        and independent text digests as private
-                                        session artifacts (opt-in; includes
-                                        prior turns).
-  --no-browser-capture-provider-native  Disable provider-native evidence
-                                        capture.
   --browser-archive <mode>              Archive completed ChatGPT browser
                                         conversations after local artifacts are
                                         saved (auto archives successful
@@ -234,9 +226,6 @@ Options:
                                         --file and use --generate-image for
                                         output.
   --output <file>                       Output file path for image operations.
-  --retain-hours <hours>                Prune stored sessions older than this
-                                        many hours before running (set 0 to
-                                        disable).
   --force                               Force start a new session even if an
                                         identical prompt is already running.
                                         (default: false)

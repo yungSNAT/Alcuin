@@ -229,6 +229,9 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
         .await
         .context("Failed upload settlement regression")?;
     witness_cases(page).await.context("Witness regression")?;
+    receipt_privacy_read_cases(page)
+        .await
+        .context("Receipt privacy read regression")?;
     witness_closure_release_cases(page)
         .await
         .context("Witness closure regression")?;
@@ -2666,6 +2669,23 @@ async fn retirement_marker_cases(page: &Cdp) -> Result<()> {
 async fn witness_cases(page: &Cdp) -> Result<()> {
     let cancel = CancellationToken::new();
     const MESSAGE: &str = "11111111-2222-4333-8444-555555555555";
+    // The trace says whether the fetch below the hook looked like the browser's own: the fixture's
+    // stub transport reads as wrapped (checked in the cases below), the untouched fetch as native.
+    mount(page, ACTIVE, "/", "").await?;
+    let looks = page.evaluate_with_arguments(&format!(r#"(cfg)=>{{
+        window.PUBLIC_nativeFetch ??= window.fetch;
+        const saved=window.fetch;window.fetch=window.PUBLIC_nativeFetch;
+        const witness={{owner:{{claimId:'PUBLIC-native-claim',reservationId:'PUBLIC-native-reservation'}},prompt:'PUBLIC native prompt',witnessId:'PUBLIC-native-witness',dispatchGuardId:'PUBLIC-native-guard',promptSha256:'PUBLIC-digest',expectations:[]}};
+        ({collector})(witness,{{admitted:true}},()=>{{}},()=>true);
+        window.fetch('/backend-api/f/conversation',{{method:'POST',body:JSON.stringify({{action:'next',history_and_training_disabled:true,messages:[{{id:cfg.id,author:{{role:'user'}},content:{{content_type:'text',parts:['PUBLIC native prompt']}}}}]}})}}).catch(()=>{{}});
+        const record=window.__oracleStreamEnd;
+        window.__oracleSubmissionWitness.cleanup();window.fetch=saved;
+        return record&&record.witnessId==='PUBLIC-native-witness'?record.fetch:null;
+    }}"#, collector = include_str!("../browser-scripts/submission-witness.js")), &json!([{"id":MESSAGE}]), SHORT, &cancel).await?;
+    anyhow::ensure!(
+        looks == "native",
+        "Untouched fetch did not read as native: {looks}"
+    );
     for case in [
         "immediate",
         "delayed",
@@ -2714,8 +2734,10 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             sessionStorage.removeItem('oracle:target-claim');
             window.PUBLIC_nativeFetch ??= window.fetch;
             window.PUBLIC_fetchCalls=0;
+            window.PUBLIC_observers=[];
+            window.PerformanceObserver=class{constructor(callback){this.callback=callback;this.resource=false;window.PUBLIC_observers.push(this);}observe(options){this.resource=options?.type==='resource';}disconnect(){this.resource=false;}};
             window.PUBLIC_fetchReceiver={public:true};
-            window.PUBLIC_transport=function(){window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
+            window.PUBLIC_transport=function(){window.PUBLIC_fetchStart=performance.now();window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
             window.fetch=window.PUBLIC_transport;
             document.querySelector('form').onsubmit=e=>{
                 e.preventDefault();
@@ -2857,6 +2879,57 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             (observed["state"]["state"] == "captured") == valid,
             "{case}: {observed}"
         );
+        // The stream-end trace takes a Resource Timing entry only for the request the witness
+        // matched: same endpoint, started within that fetch call. A later same-endpoint request
+        // that finishes first, or another path, leaves it pending; a second entry inside the call
+        // makes it unavailable. It keeps exactly a version, the witness ID, a state and whole ms.
+        if valid {
+            let feed = |path: &'static str, own: bool, ms: u64| {
+                let args = json!([{"path":path,"own":own,"ms":ms}]);
+                let cancel = &cancel;
+                async move {
+                    page.evaluate_with_arguments("(cfg)=>{const url='https://chatgpt.com/backend-api/f/'+cfg.path;const start=cfg.own?window.PUBLIC_fetchStart:performance.now();const list={getEntries:()=>[{initiatorType:'fetch',name:url,startTime:start,responseEnd:start+cfg.ms}]};for(const observer of window.PUBLIC_observers.filter(item=>item.resource))observer.callback(list);const r=window.__oracleStreamEnd;return r&&r.witnessId===window.__oracleSubmissionWitness?.witnessId?{keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,text:JSON.stringify(r)}:null;}", &args, SHORT, cancel)
+                        .await
+                }
+            };
+            for (path, own) in [("conversation", false), ("other", true)] {
+                let trace = feed(path, own, 5).await?;
+                anyhow::ensure!(
+                    trace["record"]["state"] == "pending" && trace["record"]["ms"].is_null(),
+                    "{case} stream-end trace took a foreign entry ({path}, own {own}): {trace}"
+                );
+            }
+            let trace = feed("conversation", true, 1234).await?;
+            anyhow::ensure!(
+                trace["keys"] == json!(["fetch", "ms", "state", "version", "witnessId"])
+                    && trace["record"]["fetch"] == "wrapped"
+                    && trace["frozen"] == true
+                    && trace["record"]["version"] == 1
+                    && trace["record"]["state"] == "ended"
+                    && trace["record"]["ms"] == 1234,
+                "{case} stream-end trace: {trace}"
+            );
+            let text = trace["text"].as_str().unwrap_or_default();
+            anyhow::ensure!(
+                // The fixture's prompt and response body both carry the PUBLIC marker.
+                !text.contains("PUBLIC"),
+                "{case} stream-end trace kept content: {text}"
+            );
+            // The runner's read returns this record only for its own witness.
+            let witness = trace["record"]["witnessId"].clone();
+            for (id, expected) in [
+                (witness, json!({"state":"ended","ms":1234,"fetch":"wrapped"})),
+                (json!("PUBLIC-other-witness"), Value::Null),
+            ] {
+                let read = page.evaluate_with_arguments(crate::browser_runner::STREAM_END,&json!([{"witnessId":id}]),SHORT,&cancel).await?;
+                anyhow::ensure!(read == expected, "{case} stream-end read: {read}");
+            }
+            let trace = feed("conversation", true, 9).await?;
+            anyhow::ensure!(
+                trace["record"]["state"] == "unavailable" && trace["record"]["ms"].is_null(),
+                "{case} stream-end trace kept an ambiguous entry: {trace}"
+            );
+        }
         if matches!(case, "search-inline" | "search-suffix") {
             // The committed user turn stores the pill token where the witness saw it; only a
             // verified Web search intent lets the original-source probe accept it.
@@ -3021,6 +3094,38 @@ async fn unknown_privacy_send_case(page: &Cdp) -> Result<()> {
         &cancel,
     )
     .await?;
+    Ok(())
+}
+
+/// A receipt read of a retained witness on a conversation route evaluates the Temporary Chat
+/// predicate, a walk of `main`, once before source inspection and once for the final state.
+async fn receipt_privacy_read_cases(page: &Cdp) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let view = "()=>{const root={return:null,stateNode:{}};root.stateNode.current=root;document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:{scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}};}";
+    mount(page, ACTIVE, "/c/PUBLIC-id", view).await?;
+    let owner = json!({"claimId":"PUBLIC-claim","reservationId":"PUBLIC-reservation"});
+    let intent = json!({"witnessId":"PUBLIC-witness","dispatchGuardId":"PUBLIC-guard","promptSha256":"PUBLIC-sha"});
+    page.evaluate_with_arguments(r#"(cfg)=>{
+        sessionStorage.setItem('oracle:target-claim',JSON.stringify({id:cfg.owner.claimId,retiring:false,
+            submission:{id:cfg.owner.reservationId,state:'quarantined',dispatch:'acknowledged'}}));
+        window.__oracleSubmissionWitness=Object.freeze({witnessId:cfg.intent.witnessId,dispatchGuardId:cfg.intent.dispatchGuardId,
+            owner:cfg.owner,document,conversationId:'PUBLIC-id',result:{state:'pending'},candidate:{messageId:'PUBLIC-message'}});
+        window.PUBLIC_walks=0;
+        document.querySelectorAll=function(selector){if(selector==='main *')window.PUBLIC_walks++;return Document.prototype.querySelectorAll.call(this,selector);};
+        return true;
+    }"#,&json!([{"owner":owner,"intent":intent}]),SHORT,&cancel).await?;
+    let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+        &json!([{"owner":owner,"ids":[],"prompt":"PUBLIC prompt","intent":intent,"saved":null}]),SHORT,&cancel).await?;
+    let walks=page.evaluate_with_arguments("()=>{const walks=window.PUBLIC_walks;delete document.querySelectorAll;delete window.PUBLIC_walks;delete window.__oracleSubmissionWitness;sessionStorage.removeItem('oracle:target-claim');return walks;}",&json!([]),SHORT,&cancel).await?;
+    assert!(
+        receipt["probe"].is_object(),
+        "Source was not inspected: {receipt}"
+    );
+    assert_eq!(
+        receipt["submission"]["state"], "captured",
+        "Retained witness was not read: {receipt}"
+    );
+    assert_eq!(walks, 2, "Receipt probe walked main {walks} times");
     Ok(())
 }
 

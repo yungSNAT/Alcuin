@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, time::Duration};
 use tokio_util::sync::CancellationToken;
-/// `owned_commit.js` with the shared stored-message reader in scope.
+/// `owned_commit.js` with the shared stored-message reader in scope. The Oracle sources it was
+/// derived from, and the changes since, are recorded in `owned_commit-source.json`.
 const PROBE: &str = concat!(
     "(...args) => {\n",
     include_str!("../browser-scripts/user-source.js"),
@@ -73,7 +74,13 @@ pub struct SubmissionWitness {
     request_path: String,
     history_disabled: bool,
 }
-const WITNESS_READ: &str = r#"(cfg) => {
+impl SubmissionWitness {
+    pub(crate) fn witness_id(&self) -> &str {
+        &self.witness_id
+    }
+}
+/// `privacy` is the Temporary Chat state the caller read in this renderer task.
+const WITNESS_READ: &str = r#"(cfg, privacy) => {
     const record=window.__oracleSubmissionWitness;
     if(!record || record.witnessId!==cfg.intent.witnessId || record.dispatchGuardId!==cfg.intent.dispatchGuardId ||
         record.owner.claimId!==cfg.owner.claimId || record.owner.reservationId!==cfg.owner.reservationId) return {state:'unavailable'};
@@ -82,7 +89,7 @@ const WITNESS_READ: &str = r#"(cfg) => {
     if(record.document!==document || window!==window.top || location.origin!=='https://chatgpt.com' ||
         record.conversationId && current!==record.conversationId) return {state:'invalid'};
     if(record.result.state==='invalid')return record.result;
-    if(oracleTemporaryChat()!==true)return {state:'pending'};
+    if(privacy!==true)return {state:'pending'};
     if(record.result.state==='pending' && record.candidate)
         return {state:'captured',witness:record.candidate};
     return record.result;
@@ -103,7 +110,7 @@ pub(crate) fn receipt_probe() -> String {
                         return {{state:'invalid'}};
                     return privacy===true ? {{state:'captured',witness:cfg.saved}} : {{state:'pending'}};
                 }}
-                if(cfg.intent)return ({WITNESS_READ})(cfg);
+                if(cfg.intent)return ({WITNESS_READ})(cfg,privacy);
                 return {{state:privacy===true?'none':'pending'}};
             }};
             if(oracleTemporaryChat()!==true)return {{probe:null,submission:readSubmission()}};

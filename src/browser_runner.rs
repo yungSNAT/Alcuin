@@ -277,16 +277,20 @@ fn prepare_with_base(
         Duration::from_secs(10),
     )?;
     if source.is_none() && request.options["force"] != true {
+        // The API guard's rule: the trimmed prompt and follow-ups, refused as DuplicatePrompt.
         // A run whose worker and controller are verifiably dead no longer counts as running.
-        // Summaries skip finished sessions' model runs, which status and prompt do not need.
+        // Summaries skip finished sessions' model runs, which status and options do not need.
+        let signature = crate::execution::run_signature(&request.options);
         for current in store.list(true)? {
-            let id = current["id"].as_str().unwrap_or("unknown");
-            anyhow::ensure!(
-                !matches!(current["status"].as_str(), Some("pending" | "running"))
-                    || current["options"]["prompt"] != request.options["prompt"]
-                    || store.verified_dead_run(&current),
-                "An identical prompt is already running ({id}); reattach to the retained session with \"alcuin session {id}\""
-            );
+            if matches!(current["status"].as_str(), Some("pending" | "running"))
+                && crate::execution::run_signature(&current["options"]) == signature
+                && !store.verified_dead_run(&current)
+            {
+                return Err(crate::execution::DuplicatePrompt(
+                    current["id"].as_str().unwrap_or("unknown").into(),
+                )
+                .into());
+            }
         }
     }
     let meta = store.create(request.options.clone(), cwd, source)?;
@@ -3445,7 +3449,7 @@ async fn deliver(
     witness.require(&store.require(id)?)?;
     crate::perf::phase("capture", None);
     let initial_markdown =
-        capture_markdown(&store.require(id)?, reservation, &observed, limits, cancel).await?;
+        capture_markdown(store, id, witness, reservation, &observed, limits, cancel).await?;
     remember_turn(
         store,
         id,
@@ -3574,7 +3578,7 @@ async fn deliver(
         .await?;
         crate::perf::phase("capture", None);
         let markdown =
-            capture_markdown(&store.require(id)?, reservation, &observed, limits, cancel).await?;
+            capture_markdown(store, id, witness, reservation, &observed, limits, cancel).await?;
         outcome_witness.require(&store.require(id)?, witness, None, cancel)?;
         remember_turn(
             store,
@@ -4611,12 +4615,15 @@ pub(crate) fn result_expression() -> String {
     ))
 }
 async fn capture_markdown(
-    metadata: &Value,
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
     reservation: &RendererReservation,
     observed: &Value,
     limits: &RunnerLimits,
     cancel: &CancellationToken,
 ) -> Result<String> {
+    let metadata = &store.require(id)?;
     crate::browser_privacy::require(reservation.page(), limits.command, cancel).await?;
     if observed["kind"] == "deep-research-report" {
         let current = crate::browser_research::observe_report(reservation.page(), metadata,
@@ -4710,17 +4717,29 @@ async fn capture_markdown(
         );
         Ok(markdown)
     } else {
+        let status = copied["status"].as_str();
         anyhow::ensure!(
-            matches!(
-                copied["status"].as_str(),
-                Some("missing-button" | "timeout")
-            ),
+            matches!(status, Some("missing-button" | "timeout")),
             "Unknown Markdown capture outcome; preserve recovery"
         );
-        Ok(observed["text"]
+        let text = observed["text"]
             .as_str()
-            .context("Owned fallback text is unavailable")?
-            .into())
+            .context("Owned fallback text is unavailable")?;
+        // The page text keeps the words but can lose Markdown formatting, so say so and record it.
+        runtime_patch(store, id, witness, json!({"captureSource":"page-text"}))?;
+        let copy = if status == Some("timeout") {
+            "timed out"
+        } else {
+            "was missing"
+        };
+        automation_log(
+            store,
+            id,
+            &format!(
+                "[browser] Markdown capture fallback: ChatGPT's Copy button {copy}; saved the answer's page text, which can lose Markdown formatting."
+            ),
+        )?;
+        Ok(text.into())
     }
 }
 #[allow(clippy::too_many_arguments)] // Recovery retains all original dispatch and allocation witnesses.
@@ -4900,6 +4919,25 @@ impl PageStalls {
             Err(error) => Err(error),
         }
     }
+}
+/// Reads the submission witness's stream-end trace (I-1 step 3, logging only) for this witness.
+pub(crate) const STREAM_END: &str = "(cfg)=>{ /* alcuin-dom:stream-end */ const r=window.__oracleStreamEnd; return r&&r.witnessId===cfg.witnessId?{state:r.state,ms:r.ms,fetch:r.fetch}:null; }";
+/// The trace line beside the terminal gate. It writes only a state from the collector's fixed
+/// vocabulary, whole milliseconds once ended, and whether the page's fetch looked native (advisory);
+/// anything else reads as not observed or is left out.
+fn stream_end_line(trace: &Value, gate_ms: u64) -> String {
+    let observed = match (trace["state"].as_str(), &trace["ms"]) {
+        (Some("ended"), ms) if ms.is_u64() => format!("ended {ms} ms after send"),
+        (Some(state @ ("pending" | "unavailable")), Value::Null) => state.to_owned(),
+        _ => "not observed".to_owned(),
+    };
+    let fetch = match trace["fetch"].as_str() {
+        Some(looks @ ("native" | "wrapped")) => format!("; fetch looked {looks}"),
+        _ => String::new(),
+    };
+    format!(
+        "[browser] Stream-end trace: {observed}{fetch}; gate confirmed {gate_ms} ms into the wait."
+    )
 }
 #[allow(clippy::too_many_arguments)] // Acceptance binds source, selection, ownership and the polling deadline.
 async fn wait_answer(
@@ -5146,6 +5184,28 @@ async fn wait_answer(
                 strong_thinking_active: observed["strongThinkingActive"] != false,
             };
             if gate.observe(&sample, limits.confirm_cycles, limits.stable_ms) {
+                // A recovery read may follow the saved answer block, so only a first wait logs the trace.
+                if !recovery && let Some(witness) = &receipt.submission_witness {
+                    // Logging only: a failed read is logged as not observed, and neither it nor a failed
+                    // append changes acceptance.
+                    let trace = reservation
+                        .page()
+                        .evaluate_with_arguments(
+                            STREAM_END,
+                            &json!([{"witnessId":witness.witness_id()}]),
+                            limits.command,
+                            cancel,
+                        )
+                        .await
+                        .unwrap_or(Value::Null);
+                    if let Ok(log) = store.require(&progress) {
+                        let _ = store.append_log(
+                            &progress,
+                            log["model"].as_str(),
+                            &format!("{}\n", stream_end_line(&trace, sample.now_ms)),
+                        );
+                    }
+                }
                 anyhow::ensure!(
                     !deep || research_observed,
                     "deep-research-not-started: ChatGPT completed a normal answer without starting Deep Research; recover the retained target without sending again"

@@ -187,6 +187,8 @@ enum Fault {
     FileExportNoAnswer,
     FileExportChangedSource,
     FileExportFormatted,
+    CopyMissing,
+    CopyTimeout,
     FormattedMarkdown,
     FormattedImage,
     TwoFilePartial,
@@ -228,6 +230,7 @@ enum Fault {
     UiWarningTimeout,
     PageStallAfterSend,
     PrivacyRefusalAfterSend,
+    StreamEndThrows,
     ImageUiWarning,
     StaleConversationCookie,
 }
@@ -701,6 +704,14 @@ impl Exchange {
         if expression.contains("alcuin-dom:submission-witness-clean") {
             return json!(true);
         }
+        if expression.contains("alcuin-dom:stream-end") {
+            assert!(
+                args[0]["witnessId"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty())
+            );
+            return json!({"state":"ended","ms":1234});
+        }
         if expression.contains("alcuin-dom:image-buttons") {
             if matches!(self.fault, Fault::SequentialNamedFirstThenFile) && self.turns.len() == 2 {
                 return json!([{"url":"https://chatgpt.com/backend-api/files/file_public/download","candidateId":"3:0","filename":"PUBLIC.txt","label":"Download PUBLIC.txt","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}]);
@@ -737,6 +748,12 @@ impl Exchange {
             return json!(buttons);
         }
         if expression.contains("alcuin-dom:copy-markdown") {
+            if matches!(self.fault, Fault::CopyMissing) {
+                return json!({"success":false,"status":"missing-button"});
+            }
+            if matches!(self.fault, Fault::CopyTimeout) {
+                return json!({"success":false,"status":"timeout"});
+            }
             if self.sequential() {
                 return json!({"success":true,"markdown":format!("PUBLIC owned answer {}",self.turns.len())});
             }
@@ -1465,6 +1482,22 @@ impl Exchange {
                     continue;
                 }
                 let thrown = json!({"id":request["id"],"result":{"result":{"type":"object","subtype":"error"},"exceptionDetails":{"text":"Uncaught","exception":{"description":"TypeError: PUBLIC page replaced"}}}});
+                if socket
+                    .send(Message::Text(thrown.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            if matches!(self.fault, Fault::StreamEndThrows)
+                && request["method"] == "Runtime.evaluate"
+                && request["params"]["expression"]
+                    .as_str()
+                    .is_some_and(|expression| expression.contains("alcuin-dom:stream-end"))
+            {
+                let thrown = json!({"id":request["id"],"result":{"result":{"type":"object","subtype":"error"},"exceptionDetails":{"text":"Uncaught"}}});
                 if socket
                     .send(Message::Text(thrown.to_string().into()))
                     .await
@@ -3440,6 +3473,10 @@ async fn parent_adoption_completes_then_retires_only_selected_child_and_duplicat
     let parent_log = f.store.log(&parent_id).unwrap();
     assert!(parent_log.contains("[browser] Model selection evidence: "));
     assert!(parent_log.contains("[browser] ChatGPT archive skipped (temporary-chat).\n"));
+    assert!(
+        parent_log
+            .contains("[browser] Stream-end trace: ended 1234 ms after send; gate confirmed ")
+    );
     assert_eq!(
         f.store.require(&parent_id).unwrap()["browser"]["archive"]["reason"],
         "temporary-chat"
@@ -3761,6 +3798,17 @@ async fn a_marked_answer_completes_and_keeps_its_marker_in_the_saved_text() {
     }
 }
 #[tokio::test]
+async fn a_failed_stream_end_read_is_logged_and_the_answer_is_still_accepted() {
+    let f = fixture(Fault::StreamEndThrows, false).await;
+    assert_eq!(run(&f).await.unwrap()["status"], "completed");
+    let log = f.store.log(&f.id).unwrap();
+    assert!(
+        log.contains("[browser] Stream-end trace: not observed; gate confirmed "),
+        "{log}"
+    );
+    stop(f).await;
+}
+#[tokio::test]
 async fn a_run_without_the_option_keeps_its_prompt_and_completes_unmarked() {
     let f = fixture(Fault::None, false).await;
     let committed = request(&f.store, &f.id).unwrap();
@@ -3768,6 +3816,33 @@ async fn a_run_without_the_option_keeps_its_prompt_and_completes_unmarked() {
     assert!(!committed.extra.contains_key("endMarker"));
     assert_eq!(run(&f).await.unwrap()["status"], "completed");
     stop(f).await;
+}
+#[tokio::test]
+async fn a_missing_or_timed_out_copy_button_saves_the_page_text_and_says_so() {
+    for (fault, copy) in [
+        (Fault::None, None),
+        (Fault::CopyMissing, Some("was missing")),
+        (Fault::CopyTimeout, Some("timed out")),
+    ] {
+        let f = fixture(fault, false).await;
+        assert_eq!(run(&f).await.unwrap()["status"], "completed");
+        let meta = f.store.require(&f.id).unwrap();
+        let receipt: CaptureReceipt =
+            serde_json::from_value(meta["browser"]["capturedAnswer"].clone()).unwrap();
+        let text = artifacts::verify_capture(&f.store, &receipt).unwrap();
+        assert_eq!(text, b"PUBLIC exact owned answer\n\nEnd\n");
+        assert_eq!(
+            meta["browser"]["runtime"]["captureSource"],
+            json!(copy.map(|_| "page-text")),
+            "{fault:?}"
+        );
+        let log = f.store.log(&f.id).unwrap();
+        match copy {
+            Some(copy) => assert!(log.contains(&format!("[browser] Markdown capture fallback: ChatGPT's Copy button {copy}; saved the answer's page text, which can lose Markdown formatting.")), "{log}"),
+            None => assert!(!log.contains("Markdown capture fallback"), "{log}"),
+        }
+        stop(f).await;
+    }
 }
 #[tokio::test]
 async fn parent_cleanup_retries_once_without_replaying_or_closing_changed_targets() {
@@ -8431,11 +8506,63 @@ fn duplicate_guard_admits_only_a_run_whose_worker_and_controller_are_dead() {
         let result = prepare(&store, &resolved, home.path());
         // The refusal names the blocking session, so its owner knows what to reattach.
         assert_eq!(
-            result.as_ref().err().map(ToString::to_string),
-            blocked.then(|| format!("An identical prompt is already running ({earlier}); reattach to the retained session with \"alcuin session {earlier}\"")),
+            result.as_ref().err().and_then(duplicate_of),
+            blocked.then_some(earlier),
             "{saved} {result:?}"
         );
+        // An admitted run is prepared, not refused for some other reason.
+        assert_eq!(result.is_ok(), !blocked, "{saved} {result:?}");
         assert_eq!(store.stored_for_update(earlier).unwrap(), before);
+    }
+}
+fn duplicate_of(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<crate::execution::DuplicatePrompt>()
+        .map(|duplicate| duplicate.0.as_str())
+}
+#[test]
+fn duplicate_guard_matches_the_api_guard_on_the_trimmed_prompt_and_follow_ups() {
+    let live = ProcessIdentity::current().unwrap();
+    let running = json!({"status":"running","lifecycle":{"processIdentity":live,"workerPid":live.pid,"workerProcessStartedAtMs":live.started_at_ms}});
+    let asked = json!({"prompt":"PUBLIC repeated question","engine":"browser","browserFollowUps":["PUBLIC follow-up"]});
+    for (later, blocked) in [
+        (asked.clone(), true),
+        (
+            json!({"prompt":"  PUBLIC repeated question\n","engine":"browser","browserFollowUps":[" PUBLIC follow-up ",""]}),
+            true,
+        ),
+        (
+            json!({"prompt":"PUBLIC repeated question","engine":"browser"}),
+            false,
+        ),
+        (
+            json!({"prompt":"PUBLIC repeated question","engine":"browser","browserFollowUps":["PUBLIC other follow-up"]}),
+            false,
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path().join(".oracle"));
+        let resolve = |input: &Value| {
+            crate::execution::resolve(input, &json!({}), &Environment::new(), home.path()).unwrap()
+        };
+        let earlier = store
+            .create(resolve(&asked).options, home.path(), None)
+            .unwrap();
+        let earlier = earlier["id"].as_str().unwrap();
+        store
+            .update(earlier, |_| Ok(Some(running.clone())))
+            .unwrap();
+        let result = prepare(&store, &resolve(&later), home.path());
+        assert_eq!(
+            result.as_ref().err().and_then(duplicate_of),
+            blocked.then_some(earlier),
+            "{later} {result:?}"
+        );
+        assert_eq!(result.is_ok(), !blocked, "{later} {result:?}");
+        if blocked {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("--force"), "{error}");
+        }
     }
 }
 #[tokio::test]
@@ -9973,4 +10100,45 @@ fn a_failed_attempt_reports_nothing_sent_only_without_dispatch_or_tab() {
         .unwrap();
     let unlinked = attempt_failure(&store, parent, child);
     assert!(unlinked.contains("recovery evidence"), "{unlinked}");
+}
+#[test]
+fn stream_end_line_writes_only_a_known_state_and_whole_milliseconds() {
+    assert_eq!(
+        stream_end_line(&json!({"state":"ended","ms":41234}), 43000),
+        "[browser] Stream-end trace: ended 41234 ms after send; gate confirmed 43000 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"pending","ms":null}), 7),
+        "[browser] Stream-end trace: pending; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"ended","ms":5,"fetch":"wrapped"}), 7),
+        "[browser] Stream-end trace: ended 5 ms after send; fetch looked wrapped; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"pending","ms":null,"fetch":"native"}), 7),
+        "[browser] Stream-end trace: pending; fetch looked native; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(
+            &json!({"state":"pending","ms":null,"fetch":"PUBLIC text"}),
+            7
+        ),
+        "[browser] Stream-end trace: pending; gate confirmed 7 ms into the wait."
+    );
+    for trace in [
+        json!(null),
+        json!({"state":"PUBLIC answer text","ms":null}),
+        json!({"state":"streaming","ms":1}),
+        json!({"state":"pending","ms":1}),
+        json!({"state":"ended","ms":-1}),
+        json!({"state":"ended","ms":1.5}),
+        json!({"state":"ended","ms":null}),
+    ] {
+        assert_eq!(
+            stream_end_line(&trace, 7),
+            "[browser] Stream-end trace: not observed; gate confirmed 7 ms into the wait.",
+            "{trace}"
+        );
+    }
 }
