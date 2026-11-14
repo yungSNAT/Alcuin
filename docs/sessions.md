@@ -47,7 +47,7 @@ alcuin session <id> --live
 
 ## Partial answers
 
-A run that saved an answer which may be cut ends as `partial`, with `response.status: incomplete` and the reason in `response.incompleteReason`. `--browser-end-marker` asks ChatGPT to finish with a line unique to the run, and saves any answer without it as `partial`. A foreground or `--wait` run saved as `partial` prints a notice and exits 1; the text is still kept in the session.
+A run that saved an answer which may be cut ends as `partial`, with `response.status: incomplete` and the reason in `response.incompleteReason`. `--browser-end-marker` (MCP `browserEndMarker`, config `browser.endMarker`) asks ChatGPT to finish with a line unique to the run, and saves any answer without it as `partial`; the marker stays in the saved answer. It needs one turn and a local browser. Without a marker, a local 1 or 2 character answer to a prompt of 1,000 tokens or more is also `partial`; results from `--remote-host` are not size checked. A foreground or `--wait` run saved as `partial` prints a notice and exits 1; the text is still kept in the session and any `--write-output` file. `alcuin session <id>` shows the same notice and exits 0.
 
 ## Check an answer's evidence
 
@@ -84,7 +84,7 @@ Quotes not found in the files sent:
 
 What it checks:
 
-- **Citations:** each `path:line` or `path:start-end` that runs past the end of a sent file (`out-of-range`) or names a file the session did not send. Relative and home (`~/`) citations match any sent file whose path ends with them; absolute ones match only that file. A sent unified diff counts on both sides.
+- **Citations:** each `path:line` or `path:start-end` that runs past the end of a sent file (`out-of-range`) or names a file the session did not send. Relative and home (`~/`) citations match any sent file whose path ends with them; absolute ones match only that file. A sent unified diff counts on both sides: a citation it covers is grounded when one hunk shows those lines on either side.
 - **Quotes:** each quoted span of 8 or more characters found in neither the sent files nor the prompt. Fenced code blocks are skipped, as they usually propose code.
 - **Which bytes:** the copy the session saved when it sent its files. When no copy remains, as after a browser run closes its tab cleanly, it reads the files as they are now, says so and lists any that changed since the session began.
 
