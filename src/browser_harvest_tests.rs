@@ -288,3 +288,29 @@ fn linked_transcripts_and_fifo_entries_are_unverified_without_following_or_block
         ["artifact-directory"]
     );
 }
+#[test]
+fn a_page_text_harvest_is_recorded_and_logged_and_a_markdown_one_clears_it() {
+    let (_home, store, id) = setup();
+    saved(
+        &store,
+        &id,
+        json!({"runtime":{"conversationId":"public-a"}}),
+        json!([]),
+    );
+    let mut page_text = observed();
+    page_text["captureSource"] = json!("page-text");
+    persist(&store, &id, &page_text, false).unwrap();
+    assert_eq!(
+        store.require(&id).unwrap()["browser"]["harvest"]["captureSource"],
+        "page-text"
+    );
+    let line = "[browser] Markdown capture fallback: ChatGPT's Copy button gave no Markdown; saved the answer's page text, which can lose Markdown formatting.";
+    assert_eq!(store.log(&id).unwrap().matches(line).count(), 1);
+    persist(&store, &id, &observed(), false).unwrap();
+    assert!(
+        store.require(&id).unwrap()["browser"]["harvest"]
+            .get("captureSource")
+            .is_none()
+    );
+    assert_eq!(store.log(&id).unwrap().matches(line).count(), 1);
+}

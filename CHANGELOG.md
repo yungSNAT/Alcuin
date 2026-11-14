@@ -4,6 +4,7 @@
 
 - Releases are listed on the MCP Registry as `io.github.yungSNAT/alcuin`: the release workflow writes `server.json` for the tag's bundle and publishes it by GitHub OIDC, with no stored secret.
 - `--help` no longer lists options that Alcuin refuses: `--verbose-render`, the provider-native capture pair and `--retain-hours`. Its verbose form (`--help --verbose`, `--debug-help`) also drops the browser recheck and auto-reattach timings and `--browser-reuse-wait`, and subcommand help hides `--clear` and `--browser-reuse-wait`. Passing one is still refused (#121).
+- When reattaching to a session (harvest) finds no Markdown from ChatGPT's Copy button, Alcuin still saves the answer's page text, but now logs that it did and records `captureSource: "page-text"` in the session's harvest, as a live run has since #126. It did so silently before.
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).
 - A Ctrl-C pressed just after a CLI command starts, such as `alcuin status <id>`, now prints 'Cancelled.' and exits 130 as a later one does. The listener was installed only when its task first ran, so an earlier Ctrl-C killed the process by signal (#128).
 - The 'Did you mean' suggestion for an unknown option no longer offers hidden options, such as the refused `--clear` and `--browser-reuse-wait` (#128).
