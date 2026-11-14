@@ -703,7 +703,9 @@ impl TargetJournal {
         let excess = rows.len().saturating_sub(FAILED_SWEEP_CURSORS);
         rows.drain(..excess);
         let written = atomic_json_until(&path, &json!({"version":1,"cursors":rows}), deadline);
-        if let Err(error) = lock.release() {
+        // The lock's own deadline is the 250 ms acquisition cap, often spent by now: release
+        // within the write's deadline so a contended recovery mutex is waited for.
+        if let Err(error) = lock.release_until(deadline) {
             eprintln!("Failed-run sweep cursor lock release remains pending: {error:#}");
         }
         written
@@ -1373,6 +1375,36 @@ mod tests {
         let creator = record["creator"].clone();
         atomic_json(&journal.file(&creator["allocationId"]).unwrap(), &record).unwrap();
         creator
+    }
+    #[test]
+    fn a_sweep_cursor_write_past_its_lock_cap_still_releases_a_contended_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path().join(".oracle"));
+        let journal = TargetJournal::open(&store).unwrap();
+        let key = sha256(b"PUBLIC-browser-a");
+        let lock = journal.path.join("failed-sweep-cursor.lock");
+        let holder = std::cell::Cell::new(None);
+        journal
+            .write_failed_sweep_cursor(
+                &key,
+                "00000000-0000-4000-8000-000000000001",
+                Instant::now() + Duration::from_secs(5),
+                &|| {
+                    // Spend the 250 ms acquisition cap, then hold the release's recovery mutex.
+                    std::thread::sleep(Duration::from_millis(300));
+                    holder.set(Some(crate::storage::hold_recovery_mutex(
+                        &lock,
+                        Duration::from_millis(300),
+                    )));
+                },
+            )
+            .unwrap();
+        holder.take().unwrap().join().unwrap();
+        assert!(!lock.exists(), "the cursor lock was left held");
+        assert_eq!(
+            journal.failed_sweep_cursor(&key),
+            "00000000-0000-4000-8000-000000000001"
+        );
     }
     #[test]
     fn concurrent_failed_sweep_cursor_writes_keep_both_browsers() {
