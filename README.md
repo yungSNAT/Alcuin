@@ -55,6 +55,13 @@ Expand-Archive "$t.zip" -DestinationPath "$env:LOCALAPPDATA\Programs\Alcuin" -Fo
 
 For Claude Desktop, the same release has [`alcuin.mcpb`](https://github.com/yungSNAT/Alcuin/releases/latest/download/alcuin.mcpb), an MCP bundle holding `alcuin-mcp` for both platforms; open it with Claude Desktop to install the server as an extension.
 
+For Claude Code, with both binaries on your `PATH`, install the plugin from this repository. It runs `alcuin-mcp` with the browser profile you sign in to under [Use](#use) and adds the skill below ([MCP setup](docs/mcp.md#claude-code-plugin)):
+
+```text
+/plugin marketplace add yungSNAT/Alcuin
+/plugin install alcuin@alcuin
+```
+
 For Codex or Claude Code on the machine that runs the browser, `alcuin bridge codex-config --local-browser` and `alcuin bridge claude-config --local-browser` print a server entry that uses the browser profile you sign in to under [Use](#use). Without `--local-browser` they print entries for the remote browser bridge: the Codex entry points at an `alcuin serve` host, and the Claude Code entry uses a remote host only when your config or `ORACLE_REMOTE_HOST` names one, otherwise a separate `~/.oracle-local` home and browser profile.
 
 Browser runs need a Chromium-based browser. Alcuin looks for Chrome and Edge on Windows, and for Chrome, Chromium, Brave and Edge on Linux; to use another, such as Brave on Windows, set `CHROME_PATH` to its executable.
@@ -77,7 +84,7 @@ cargo build --release
 To teach a coding agent to use Alcuin, add its skill with the [Skills CLI](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills add yungSNAT/Alcuin --skill alcuin --global --agent '*' --yes
+npx skills add yungSNAT/Alcuin --skill alcuin --global --agent "*" --yes
 ```
 
 ## Use
