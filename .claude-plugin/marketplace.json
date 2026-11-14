@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "alcuin",
+  "description": "Alcuin for Claude Code: a ChatGPT second opinion on the files you choose.",
+  "owner": {
+    "name": "yungSNAT",
+    "url": "https://github.com/yungSNAT"
+  },
+  "plugins": [
+    {
+      "name": "alcuin",
+      "description": "Ask ChatGPT about the source files you choose, from Claude Code, and keep each answer as a durable session.",
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}
