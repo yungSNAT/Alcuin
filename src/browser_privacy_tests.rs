@@ -2717,7 +2717,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             window.PUBLIC_observers=[];
             window.PerformanceObserver=class{constructor(callback){this.callback=callback;this.resource=false;window.PUBLIC_observers.push(this);}observe(options){this.resource=options?.type==='resource';}disconnect(){this.resource=false;}};
             window.PUBLIC_fetchReceiver={public:true};
-            window.PUBLIC_transport=function(){window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
+            window.PUBLIC_transport=function(){window.PUBLIC_fetchStart=performance.now();window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
             window.fetch=window.PUBLIC_transport;
             document.querySelector('form').onsubmit=e=>{
                 e.preventDefault();
@@ -2859,15 +2859,29 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             (observed["state"]["state"] == "captured") == valid,
             "{case}: {observed}"
         );
-        // The stream-end trace takes only the matched request's Resource Timing entry, ignores
-        // others, and keeps exactly a version, the witness ID, a state and whole milliseconds.
+        // The stream-end trace takes a Resource Timing entry only for the request the witness
+        // matched: same endpoint, started within that fetch call. A later same-endpoint request
+        // that finishes first, or another path, leaves it pending; a second entry inside the call
+        // makes it unavailable. It keeps exactly a version, the witness ID, a state and whole ms.
         if valid {
-            let trace = page.evaluate_with_arguments("()=>{const now=performance.now();const list={getEntries:()=>[{initiatorType:'fetch',name:'https://chatgpt.com/backend-api/f/other',startTime:now,responseEnd:now+5},{initiatorType:'fetch',name:'https://chatgpt.com/backend-api/f/conversation',startTime:now,responseEnd:now+1234}]};const before=window.__oracleStreamEnd?.state;for(const observer of window.PUBLIC_observers.filter(item=>item.resource))observer.callback(list);const r=window.__oracleStreamEnd;return {before,observing:window.PUBLIC_observers.filter(item=>item.resource).length,keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,current:r.witnessId===window.__oracleSubmissionWitness?.witnessId,text:JSON.stringify(r)};}",&json!([]),SHORT,&cancel).await?;
+            let feed = |path: &'static str, own: bool, ms: u64| {
+                let args = json!([{"path":path,"own":own,"ms":ms}]);
+                let cancel = &cancel;
+                async move {
+                    page.evaluate_with_arguments("(cfg)=>{const url='https://chatgpt.com/backend-api/f/'+cfg.path;const start=cfg.own?window.PUBLIC_fetchStart:performance.now();const list={getEntries:()=>[{initiatorType:'fetch',name:url,startTime:start,responseEnd:start+cfg.ms}]};for(const observer of window.PUBLIC_observers.filter(item=>item.resource))observer.callback(list);const r=window.__oracleStreamEnd;return r&&r.witnessId===window.__oracleSubmissionWitness?.witnessId?{keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,text:JSON.stringify(r)}:null;}", &args, SHORT, cancel)
+                        .await
+                }
+            };
+            for (path, own) in [("conversation", false), ("other", true)] {
+                let trace = feed(path, own, 5).await?;
+                anyhow::ensure!(
+                    trace["record"]["state"] == "pending" && trace["record"]["ms"].is_null(),
+                    "{case} stream-end trace took a foreign entry ({path}, own {own}): {trace}"
+                );
+            }
+            let trace = feed("conversation", true, 1234).await?;
             anyhow::ensure!(
-                trace["before"] == "pending"
-                    && trace["observing"] == 0
-                    && trace["current"] == true
-                    && trace["keys"] == json!(["ms", "state", "version", "witnessId"])
+                trace["keys"] == json!(["ms", "state", "version", "witnessId"])
                     && trace["frozen"] == true
                     && trace["record"]["version"] == 1
                     && trace["record"]["state"] == "ended"
@@ -2889,6 +2903,11 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 let read = page.evaluate_with_arguments(crate::browser_runner::STREAM_END,&json!([{"witnessId":id}]),SHORT,&cancel).await?;
                 anyhow::ensure!(read == expected, "{case} stream-end read: {read}");
             }
+            let trace = feed("conversation", true, 9).await?;
+            anyhow::ensure!(
+                trace["record"]["state"] == "unavailable" && trace["record"]["ms"].is_null(),
+                "{case} stream-end trace kept an ambiguous entry: {trace}"
+            );
         }
         if matches!(case, "search-inline" | "search-suffix") {
             // The committed user turn stores the pill token where the witness saw it; only a
