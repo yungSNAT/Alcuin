@@ -1261,6 +1261,132 @@
         "readOnlyHint": true,
         "openWorldHint": false
       }
+    },
+    {
+      "name": "ground",
+      "title": "Check an Alcuin answer's evidence",
+      "description": "Check an Alcuin session's saved answer against what the session sent, as `alcuin ground` does: each path:line citation that runs past the end of a sent file or names a file the session did not send, and each quoted span of 8 or more characters found in neither the sent files nor the prompt. flagged is true when it finds any; that is a result, not an error. It reads the copy the session saved when it sent its files; when none remains, it reads the session's files as they are now, which must lie inside the MCP server working directory unless the user sets ORACLE_MCP_ALLOW_EXTERNAL_INPUT=1. Like `sessions`, it sees only sessions started in or below that directory unless the user sets ORACLE_MCP_ALL_SESSIONS=1.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Alcuin session id or slug."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ]
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "flagged": {
+            "type": "boolean",
+            "description": "True when a citation is out of range or names a file not sent, or a quote is not found."
+          },
+          "sentFiles": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "current"
+            ],
+            "description": "saved: the copy the session kept when it sent its files; current: its files as they are now."
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "answerLine": {
+                  "type": "integer"
+                },
+                "reference": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "grounded",
+                    "out-of-range",
+                    "not-sent",
+                    "host"
+                  ],
+                  "description": "host: a name such as example.com:8080 that no sent file has, read as a host and port and not flagged."
+                },
+                "fileLines": {
+                  "type": "integer",
+                  "description": "Line count of the longest sent file the citation matched."
+                }
+              },
+              "required": [
+                "answerLine",
+                "reference",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "answerLine": {
+                  "type": "integer"
+                },
+                "quote": {
+                  "type": "string"
+                },
+                "found": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "answerLine",
+                "quote",
+                "found"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "changedFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "With current files only: those modified after the session was created."
+          },
+          "skippedFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sent files that are not UTF-8 text, so nothing was checked against them."
+          }
+        },
+        "required": [
+          "sessionId",
+          "flagged",
+          "sentFiles",
+          "references",
+          "quotes",
+          "changedFiles",
+          "skippedFiles"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
     }
   ]
 }

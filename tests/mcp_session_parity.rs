@@ -206,6 +206,51 @@ async fn wait_returns_the_saved_browser_answer_and_only_the_named_evidence() {
 }
 
 #[tokio::test]
+async fn ground_reports_every_status_within_its_output_schema() {
+    let home = tempfile::tempdir().unwrap();
+    let server = server(home.path());
+    let cancel = CancellationToken::new();
+    fs::write(home.path().join("engine.rs"), "fn run() {}\n").unwrap();
+    let meta = server
+        .store
+        .create(
+            json!({"prompt":"PUBLIC ground","file":["engine.rs"],"mode":"api"}),
+            home.path(),
+            None,
+        )
+        .unwrap();
+    let id = meta["id"].as_str().unwrap();
+    let answer = "engine.rs:1, engine.rs:9, other.rs:1 and example.com:8080.\n'fn run() {}' and 'PUBLIC not sent'.\n";
+    let capture =
+        alcuin::artifacts::capture(&server.store, id, "answer.md", answer.as_bytes(), &cancel)
+            .unwrap();
+    server
+        .store
+        .update(id, |_| {
+            Ok(Some(json!({"status":"completed","capturedAnswer":capture})))
+        })
+        .unwrap();
+    let ground = structured(
+        server
+            .invoke("ground", json!({"id":id}), &cancel)
+            .await
+            .unwrap(),
+    );
+    conforms(&ground, &output_schema("ground"), "ground");
+    let statuses = ground["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|reference| reference["status"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, ["grounded", "out-of-range", "not-sent", "host"]);
+    assert_eq!(ground["quotes"][0]["found"], true);
+    assert_eq!(ground["quotes"][1]["found"], false);
+    assert_eq!(ground["flagged"], true);
+    assert_eq!(ground["sentFiles"], "current");
+}
+
+#[tokio::test]
 async fn wait_without_a_saved_answer_keeps_the_log_apart_from_the_output() {
     let home = tempfile::tempdir().unwrap();
     let server = server(home.path());

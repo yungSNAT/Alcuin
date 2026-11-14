@@ -879,7 +879,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                 require_flags(sub, &["session", "json"])?;
                 let id = text(sub, "session").context("ground requires a session ID")?;
                 // Exit 1 means the answer has findings, so a check that cannot run exits 2.
-                let report = match crate::grounding::session_report(&store, id) {
+                let report = match crate::grounding::session_report(&store, id, None) {
                     Ok(report) => report,
                     Err(error) => {
                         eprintln!("✖ {error:#}");

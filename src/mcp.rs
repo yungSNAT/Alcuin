@@ -1,6 +1,6 @@
 use crate::{
     config::{self, Environment},
-    execution,
+    execution, grounding,
     process::ProcessIdentity,
     project_sources, prompts,
     providers::{self, HttpProvider},
@@ -132,6 +132,7 @@ impl AlcuinMcp {
         match name {
             "sessions" => self.sessions(&arguments),
             "wait" => self.wait(&arguments, cancel).await,
+            "ground" => self.ground(&arguments),
             "consult" => self.consult(arguments, cancel).await,
             "project_sources" => {
                 // Reference buildProjectSourcesBrowserConfig: the environment names apply here too.
@@ -329,7 +330,18 @@ impl AlcuinMcp {
             .filter_map(Value::as_str)
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        prompts::confine_inputs(&files, &self.cwd)
+        prompts::confine_inputs(&files, &self.cwd, &self.cwd)
+    }
+    fn ground(&self, input: &Value) -> Result<CallToolResult> {
+        let id = input["id"].as_str().context("Session id is required.")?;
+        let meta = self.project_session(id)?;
+        // Applies only when the session kept no copy of what it sent and its files are read.
+        let root = (!self.opted_in("ORACLE_MCP_ALLOW_EXTERNAL_INPUT")).then_some(&*self.cwd);
+        let report = grounding::session_report(&self.store, id, root)?;
+        let mut structured = serde_json::to_value(&report)?;
+        structured["sessionId"] = meta["id"].clone();
+        structured["flagged"] = json!(report.flagged());
+        tool_result(grounding::format_report(&report), structured)
     }
     async fn consult(
         &self,

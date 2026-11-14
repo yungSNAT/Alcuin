@@ -23,7 +23,8 @@
     { "name": "consult", "description": "Run an Alcuin session through the API or ChatGPT in the browser, with the files you attach." },
     { "name": "project_sources", "description": "List a ChatGPT Project's Sources tab, or preview which files an upload would add." },
     { "name": "sessions", "description": "List recent Alcuin sessions or fetch one by ID." },
-    { "name": "wait", "description": "Wait for a session to finish without polling." }
+    { "name": "wait", "description": "Wait for a session to finish without polling." },
+    { "name": "ground", "description": "Check a saved answer's citations and quotes against the files its session sent." }
   ],
   "compatibility": { "platforms": ["win32", "linux"] }
 }
