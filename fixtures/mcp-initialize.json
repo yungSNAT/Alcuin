@@ -1,6 +1,9 @@
 {
   "protocolVersion": "2025-11-25",
   "capabilities": {
+    "extensions": {
+      "io.modelcontextprotocol/tasks": {}
+    },
     "logging": {},
     "tools": {
       "listChanged": true

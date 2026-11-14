@@ -9,9 +9,11 @@
 - When reattaching to a session (harvest) finds no Markdown from ChatGPT's Copy button, Alcuin still saves the answer's page text, but now logs that it did and records `captureSource: "page-text"` in the session's harvest, as a live run has since #126. It did so silently before.
 - Such a page-text answer is now committed to the target journal as `text`, not `markdown`, so the journal no longer claims Markdown formatting it does not have.
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).
+- Claude Code users can install Alcuin as a plugin: `/plugin marketplace add yungSNAT/Alcuin`, then `/plugin install alcuin@alcuin`. The plugin runs the same `alcuin-mcp` server as the entry `alcuin bridge claude-config --local-browser` prints and adds the `alcuin` skill; the binaries still come from the release.
 - A Ctrl-C pressed just after a CLI command starts, such as `alcuin status <id>`, now prints 'Cancelled.' and exits 130 as a later one does. The listener was installed only when its task first ran, so an earlier Ctrl-C killed the process by signal (#128).
 - The 'Did you mean' suggestion for an unknown option no longer offers hidden options, such as the refused `--clear` and `--browser-reuse-wait` (#128).
 - A receipt read of a retained submission witness checks Temporary Chat twice, not 3 times: it reuses the state the read already checked, so a long conversation's page is walked one time fewer (#135).
+- MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, so the client need not hold the call open whilst the consultation runs. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`; closing the server cancels it too. Other clients, and every other tool, get the same results as before. The server now advertises the extension, and a `tasks/*` request from a client that has not declared it fails with -32021 (missing client capability) in place of -32601.
 
 ## 0.1.0 (2026-11-12)
 
