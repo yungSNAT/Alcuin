@@ -626,12 +626,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                     "Browser health timeout must be between 1ms and 5m."
                 );
                 let cancel = CancellationToken::new();
-                let signal_cancel = cancel.clone();
-                let signal = tokio::spawn(async move {
-                    if tokio::signal::ctrl_c().await.is_ok() {
-                        signal_cancel.cancel();
-                    }
-                });
+                let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
                 let result = crate::browser_health::inspect(
                     &input,
                     &env,
@@ -951,12 +946,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                 )
                 .context("recover-native requires --request <path> and --write-output <path>")?;
                 let cancel = CancellationToken::new();
-                let signal_cancel = cancel.clone();
-                let signal = tokio::spawn(async move {
-                    if tokio::signal::ctrl_c().await.is_ok() {
-                        signal_cancel.cancel();
-                    }
-                });
+                let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
                 let result = crate::native_reply::recover(
                     &store,
                     &env,
@@ -2419,12 +2409,7 @@ async fn session_command(
             );
         }
         let cancel = CancellationToken::new();
-        let signal_cancel = cancel.clone();
-        let signal = tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                signal_cancel.cancel();
-            }
-        });
+        let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
         let result = crate::browser_sessions::tabs_status(store, &cancel).await;
         signal.abort();
         if cancel.is_cancelled() {
@@ -2565,12 +2550,7 @@ async fn inspect_session(
         bail!("The --browser-tab reference must not be empty.");
     }
     let cancel = CancellationToken::new();
-    let signal_cancel = cancel.clone();
-    let signal = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal_cancel.cancel();
-        }
-    });
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
     let result = async {
         let options = crate::browser_inspection::InspectionOptions {
             reference: reference.map(str::to_owned),
@@ -2681,12 +2661,7 @@ async fn attach(
     environment: &Environment,
 ) -> Result<i32> {
     let cancel = CancellationToken::new();
-    let signal_cancel = cancel.clone();
-    let signal = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal_cancel.cancel();
-        }
-    });
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
     let result = crate::session_attach::attach(
         store,
         id,
