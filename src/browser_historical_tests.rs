@@ -1052,7 +1052,10 @@ fn legacy_completion_commits_a_page_text_fallback_as_text() {
     let journal = TargetJournal::open(&store).unwrap();
     let record = journal.read(&creator["allocationId"]).unwrap();
     journal.verify(&record).unwrap();
-    assert_eq!(record["commit"]["assistantContent"]["representation"], "text");
+    assert_eq!(
+        record["commit"]["assistantContent"]["representation"],
+        "text"
+    );
 }
 #[test]
 fn failed_required_output_keeps_the_original_session_and_never_finalises() {
