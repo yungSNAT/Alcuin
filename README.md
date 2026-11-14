@@ -77,7 +77,7 @@ cargo build --release
 To teach a coding agent to use Alcuin, add its skill with the [Skills CLI](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills add yungSNAT/Alcuin --skill alcuin --global --agent '*' --yes
+npx skills add yungSNAT/Alcuin --skill alcuin --global --agent "*" --yes
 ```
 
 ## Use
