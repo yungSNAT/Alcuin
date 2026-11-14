@@ -657,9 +657,16 @@ pub fn detached_value(environment: Option<&str>, session: &str) -> Option<String
     match option.as_deref() {
         Some("1") => Some("1".into()),
         Some(path) => Some(derive_detached(path, session)),
-        None => environment.map(|value| derive_detached(value, session)),
+        None => session_value(environment, session),
     }
     .filter(|value| !value.is_empty())
+}
+/// An MCP consult's trace: the server's ORACLE_PERF_TRACE with the session ID. It ignores the
+/// process-wide trace, which another consult may have started.
+pub fn session_value(environment: Option<&str>, session: &str) -> Option<String> {
+    environment
+        .map(|value| derive_detached(value, session))
+        .filter(|value| !value.is_empty())
 }
 /// Final `exit` mark and complete write; a failed write is reported on stderr.
 pub fn flush(code: i32) {

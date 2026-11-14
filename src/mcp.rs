@@ -465,7 +465,7 @@ impl AlcuinMcp {
         // shortcut: the perf trace is process-global, so concurrent traced consults share one
         // trace; a per-run trace handle is the upgrade path.
         let traced =
-            crate::perf::detached_value(self.env.get("ORACLE_PERF_TRACE").map(String::as_str), id);
+            crate::perf::session_value(self.env.get("ORACLE_PERF_TRACE").map(String::as_str), id);
         let tracing = traced.is_some();
         if tracing {
             crate::perf::start(traced, &[], &self.cwd);

@@ -479,6 +479,19 @@ async fn inline_api_consults_log_the_reference_run_and_trace() {
     let id = message["Session ".len()..].split_once(' ').unwrap().0;
     let log = server.store.log(id).unwrap();
     assert!(log.contains("Run failed: "), "{log}");
+    // The process-wide trace the first consult left must not make this untraced server trace
+    // too; when it did, a test running alongside took over the first consult's trace.
+    let traces = std::fs::read_dir(home.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("PUBLIC-trace.")
+        })
+        .count();
+    assert_eq!(traces, 1);
 }
 
 #[tokio::test]
