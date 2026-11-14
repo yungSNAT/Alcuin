@@ -291,8 +291,10 @@ impl AlcuinMcp {
         add_summaries(&mut structured, &meta);
         tool_result(text, structured)
     }
-    pub(crate) fn configured(&self) -> Value {
-        config::load(
+    /// Refuses a configuration file that failed to load: its warning would reach only the
+    /// server's stderr, and the run would go ahead without the settings it holds.
+    pub(crate) fn configured(&self) -> Result<Value> {
+        let loaded = config::load(
             self.store.home(),
             &self.cwd,
             self.env
@@ -300,8 +302,13 @@ impl AlcuinMcp {
                 .map(PathBuf::from)
                 .as_deref(),
             true,
-        )
-        .config
+        );
+        anyhow::ensure!(
+            loaded.warnings.is_empty(),
+            "{}. Fix or remove that file, then retry.",
+            loaded.warnings.join("; ")
+        );
+        Ok(loaded.config)
     }
     fn opted_in(&self, name: &str) -> bool {
         self.env.get(name).is_some_and(|s| {
@@ -353,7 +360,7 @@ impl AlcuinMcp {
             }
         }
         self.confine_files(&input)?;
-        let config = self.configured();
+        let config = self.configured()?;
         input["waitPreference"] = json!(input["waitForCompletion"] != false);
         let request = execution::resolve_mcp(&input, &config, &self.env, &self.cwd)?;
         if input["dryRun"] == true {
@@ -553,7 +560,7 @@ impl AlcuinMcp {
             operation != "add" || input["dryRun"] == true,
             "Temporary Chat policy forbids persistent Project Sources uploads; use dryRun to preview locally."
         );
-        let mut config = self.configured();
+        let mut config = self.configured()?;
         if !config["browser"].is_object() {
             config["browser"] = json!({});
         }
