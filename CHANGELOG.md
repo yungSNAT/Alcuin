@@ -14,6 +14,7 @@
 - The 'Did you mean' suggestion for an unknown option no longer offers hidden options, such as the refused `--clear` and `--browser-reuse-wait` (#128).
 - A receipt read of a retained submission witness checks Temporary Chat twice, not 3 times: it reuses the state the read already checked, so a long conversation's page is walked one time fewer (#135).
 - MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, so the client need not hold the call open whilst the consultation runs. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`; closing the server cancels it too. Other clients, and every other tool, get the same results as before. The server now advertises the extension, and a `tasks/*` request from a client that has not declared it fails with -32021 (missing client capability) in place of -32601.
+- The MCP server has a `ground` tool, 'Check an Alcuin answer's evidence', so an MCP client can check a saved answer's citations and quotes as `alcuin ground` does. It returns the `--json` report with `sessionId` and `flagged`, sees the sessions `sessions` and `wait` see, and reads a session's files as they are now only inside the server's working directory unless `ORACLE_MCP_ALLOW_EXTERNAL_INPUT=1` is set.
 
 ## 0.1.0 (2026-11-12)
 

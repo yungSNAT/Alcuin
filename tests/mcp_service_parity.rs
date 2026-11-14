@@ -334,6 +334,7 @@ fn tool_annotations_mark_which_tools_reach_chatgpt_and_which_only_read() {
             ("project_sources", sends),
             ("sessions", reads),
             ("wait", reads),
+            ("ground", reads),
         ]
         .map(|(name, (read_only, destructive, open_world))| (
             name.to_owned(),

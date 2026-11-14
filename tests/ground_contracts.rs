@@ -2,9 +2,11 @@ use alcuin::{
     browser_runner::BrowserRequest,
     config::Environment,
     execution,
+    mcp::AlcuinMcp,
     providers::{ApiTransport, Route},
     sessions::SessionStore,
 };
+use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -12,6 +14,7 @@ use std::{
     process::{Command, Output},
     time::{Duration, SystemTime},
 };
+use tokio_util::sync::CancellationToken;
 
 const ENGINE: &str =
     "fn run() {\n    let status = \"BLOCKED\";\n    // A blank ReviewGroup is refused\n}\n";
@@ -44,10 +47,14 @@ fn fixture() -> (tempfile::TempDir, SessionStore, std::path::PathBuf) {
 /// A completed session that names `engine.rs` in `work` but kept no saved request, as an older
 /// or remote session can, and saved `answer`.
 fn answered(store: &SessionStore, work: &Path, answer: &str) -> String {
+    answered_selecting(store, work, "engine.rs", answer)
+}
+/// As `answered`, for a session started in `cwd` that selected `file`.
+fn answered_selecting(store: &SessionStore, cwd: &Path, file: &str, answer: &str) -> String {
     let meta = store
         .create(
-            json!({"prompt":"Review the engine for silent refusals.","file":["engine.rs"],"model":"gpt-6-pro","mode":"api"}),
-            work,
+            json!({"prompt":"Review the engine for silent refusals.","file":[file],"model":"gpt-6-pro","mode":"api"}),
+            cwd,
             None,
         )
         .unwrap();
@@ -173,6 +180,92 @@ fn a_missing_session_or_unreadable_input_fails_with_exit_2() {
         "{}",
         text(&output.stderr)
     );
+}
+
+fn mcp(home: &Path, cwd: &Path, env: Environment) -> AlcuinMcp {
+    AlcuinMcp {
+        store: SessionStore::new(home),
+        cwd: cwd.into(),
+        env,
+    }
+}
+async fn mcp_ground(server: &AlcuinMcp, id: &str) -> anyhow::Result<CallToolResult> {
+    server
+        .invoke("ground", json!({"id":id}), &CancellationToken::new())
+        .await
+}
+
+#[tokio::test]
+async fn the_mcp_ground_tool_returns_the_cli_report() {
+    let (home, store, work) = fixture();
+    let server = mcp(home.path(), home.path(), Environment::new());
+    for (answer, code) in [
+        ("engine.rs:30 says 'A blank ReviewGroup is refused'.\n", 1),
+        ("engine.rs:3 says 'A blank ReviewGroup is refused'.\n", 0),
+    ] {
+        let id = answered(&store, &work, answer);
+        let cli = ground(home.path(), &[&id, "--json"]);
+        assert_eq!(cli.status.code(), Some(code), "{}", text(&cli.stderr));
+        let mut expected: Value = serde_json::from_slice(&cli.stdout).unwrap();
+        expected["sessionId"] = json!(id);
+        expected["flagged"] = json!(code == 1);
+        // A flagged answer is a result, not a tool error.
+        let result = mcp_ground(&server, &id).await.unwrap();
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(result.structured_content, Some(expected));
+        let report = &result.content[0].as_text().unwrap().text;
+        assert_eq!(
+            format!("{report}\n"),
+            text(&ground(home.path(), &[&id]).stdout)
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_mcp_ground_tool_reads_current_files_only_inside_its_directory() {
+    let (home, store, work) = fixture();
+    let server = mcp(home.path(), &work, Environment::new());
+    // Resolved against the session's directory, and inside the server's.
+    let nested = work.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let id = answered_selecting(&store, &nested, "../engine.rs", "engine.rs:3 is cited.\n");
+    let result = mcp_ground(&server, &id).await.unwrap();
+    assert_eq!(
+        result.structured_content.unwrap()["references"][0]["status"],
+        "grounded"
+    );
+
+    let secret = home.path().join("secret.rs");
+    fs::write(&secret, "PUBLIC outside\n").unwrap();
+    let opted_in = mcp(
+        home.path(),
+        &work,
+        Environment::from([("ORACLE_MCP_ALLOW_EXTERNAL_INPUT".into(), "1".into())]),
+    );
+    for file in ["../secret.rs", &secret.to_string_lossy()] {
+        let id = answered_selecting(&store, &work, file, "secret.rs:1 is cited.\n");
+        let error = mcp_ground(&server, &id).await.unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!(
+                "MCP file \"{file}\" is outside the working directory"
+            )),
+            "{error}"
+        );
+        assert_eq!(ground(home.path(), &[&id]).status.code(), Some(0));
+        let result = mcp_ground(&opted_in, &id).await.unwrap();
+        assert_eq!(result.structured_content.unwrap()["flagged"], false);
+    }
+
+    let elsewhere = answered(&store, home.path(), "nothing cited\n");
+    let error = mcp_ground(&server, &elsewhere).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("was started outside this MCP server's working directory"),
+        "{error}"
+    );
+    let error = mcp_ground(&server, "no-such-session").await.unwrap_err();
+    assert_eq!(error.to_string(), "Session \"no-such-session\" not found.");
 }
 
 /// Marks a session completed with `answer` saved.

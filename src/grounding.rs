@@ -548,8 +548,14 @@ fn saved_files(
     Ok(Some((files, skipped)))
 }
 /// The session's prompt and file selection as they are now, with the files modified since the
-/// session was created and those that are not text.
-fn current_files(meta: &Value, cwd: &str, id: &str) -> Result<(Vec<SentFile>, [Vec<String>; 2])> {
+/// session was created and those that are not text. With `root`, the selection must stay inside
+/// it, as an MCP `consult`'s must.
+fn current_files(
+    meta: &Value,
+    cwd: &str,
+    id: &str,
+    root: Option<&Path>,
+) -> Result<(Vec<SentFile>, [Vec<String>; 2])> {
     let created = meta["createdAt"]
         .as_str()
         .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
@@ -562,6 +568,9 @@ fn current_files(meta: &Value, cwd: &str, id: &str) -> Result<(Vec<SentFile>, [V
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect();
+    if let Some(root) = root {
+        crate::prompts::confine_inputs(&inputs, Path::new(cwd), root)?;
+    }
     let mut files = vec![SentFile {
         path: PROMPT.into(),
         text: options["prompt"].as_str().unwrap_or_default().into(),
@@ -590,8 +599,8 @@ fn current_files(meta: &Value, cwd: &str, id: &str) -> Result<(Vec<SentFile>, [V
     Ok((files, [changed, skipped]))
 }
 /// Checks a session's saved answer against what it sent: the bytes its saved request kept, or,
-/// when none remain, its prompt and file selection as they are now.
-pub fn session_report(store: &SessionStore, id: &str) -> Result<Report> {
+/// when none remain, its prompt and file selection as they are now, kept inside `root` if given.
+pub fn session_report(store: &SessionStore, id: &str, root: Option<&Path>) -> Result<Report> {
     let meta = store.require(id)?;
     anyhow::ensure!(
         meta["browser"]["capturedAnswer"].is_object() || meta["capturedAnswer"].is_object(),
@@ -605,7 +614,7 @@ pub fn session_report(store: &SessionStore, id: &str) -> Result<Report> {
     let (files, sent_files, [changed, skipped]) = match saved_files(store, id, &meta)? {
         Some((files, skipped)) => (files, SentFiles::Saved, [vec![], skipped]),
         None => {
-            let (files, lists) = current_files(&meta, cwd, id)?;
+            let (files, lists) = current_files(&meta, cwd, id, root)?;
             (files, SentFiles::Current, lists)
         }
     };
