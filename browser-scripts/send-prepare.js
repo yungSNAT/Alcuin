@@ -318,25 +318,35 @@ return (() => {
     // payload and guard references in that closure too, not just the global record.
     cfg = dispatch = assertCurrent = temporary = expected = null;
   };
-  // Stream-end trace for the terminal gate (I-1 step 3, logging only). Reads the matched
-  // response on a clone and discards every chunk. Records a fixed state and whole
-  // milliseconds since the request; never a body, header, URL or status.
-  const traceStreamEnd = (witnessId, result) => {
-    const started = Date.now();
-    const mark = state => {
+  // Stream-end trace for the terminal gate (I-1 step 3, logging only). Watches Resource Timing,
+  // which gets the matched request's entry once its response has fully arrived; it never touches
+  // the request or response. Records a fixed state and, once ended, whole milliseconds from the
+  // request's start to its response end; never a URL, header, status or body.
+  const traceStreamEnd = witnessId => {
+    const started = performance.now();
+    const mark = (state, ms) => {
       const current = window.__oracleStreamEnd;
       if (current && current.witnessId !== witnessId && state !== 'pending') return;
-      window.__oracleStreamEnd = Object.freeze({version:1,witnessId,state,ms:Date.now() - started});
+      window.__oracleStreamEnd = Object.freeze({version:1,witnessId,state,ms});
     };
-    mark('pending');
-    Promise.resolve(result).then(response => {
-      const body = response instanceof Response ? response.clone().body : null;
-      if (!body) return mark('unavailable');
-      mark('streaming');
-      const reader = body.getReader();
-      const pump = () => reader.read().then(chunk => chunk.done ? mark('ended') : pump());
-      return pump();
-    }).catch(() => mark('errored'));
+    mark('pending', null);
+    let observer = null, timer = null;
+    try {
+      observer = new PerformanceObserver(list => {
+        const entry = list.getEntries().find(item => item.initiatorType === 'fetch' && item.startTime >= started &&
+          item.name === 'https://chatgpt.com/backend-api/f/conversation');
+        if (!entry) return;
+        observer.disconnect();
+        clearTimeout(timer);
+        mark('ended', Math.max(0, Math.round(entry.responseEnd - entry.startTime)));
+      });
+      observer.observe({type:'resource'});
+      // shortcut: a fixed 4 hour watch outlasts any answer wait; an unended record stays pending.
+      timer = setTimeout(() => observer.disconnect(), 4 * 3600000);
+    } catch {
+      observer?.disconnect();
+      mark('unavailable', null);
+    }
   };
   const read = phase => {
     if (closed && sealedResult) return sealedResult;
@@ -402,10 +412,9 @@ return (() => {
         invalidate('submission-witness-unavailable', 'collector-probe-unavailable', 'matched-fetch');
       }
     }
+    if (traced) traceStreamEnd(traced);
     // Preserve the caller, input object and argument list, including synchronous errors.
-    const result = Reflect.apply(original, this, arguments);
-    if (traced) traceStreamEnd(traced, result);
-    return result;
+    return Reflect.apply(original, this, arguments);
   }
   const record = Object.freeze({
     witnessId:cfg.witnessId,

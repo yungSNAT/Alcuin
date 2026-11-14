@@ -2714,6 +2714,8 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             sessionStorage.removeItem('oracle:target-claim');
             window.PUBLIC_nativeFetch ??= window.fetch;
             window.PUBLIC_fetchCalls=0;
+            window.PUBLIC_observers=[];
+            window.PerformanceObserver=class{constructor(callback){this.callback=callback;this.resource=false;window.PUBLIC_observers.push(this);}observe(options){this.resource=options?.type==='resource';}disconnect(){this.resource=false;}};
             window.PUBLIC_fetchReceiver={public:true};
             window.PUBLIC_transport=function(){window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
             window.fetch=window.PUBLIC_transport;
@@ -2857,23 +2859,19 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             (observed["state"]["state"] == "captured") == valid,
             "{case}: {observed}"
         );
-        // The stream-end trace follows only the captured request, to its body's end, and keeps
-        // exactly a version, the witness ID, a state and whole milliseconds.
-        let deadline = tokio::time::Instant::now() + SHORT;
-        let trace = loop {
-            let trace = page.evaluate_with_arguments("()=>{const r=window.__oracleStreamEnd;return r&&r.witnessId===window.__oracleSubmissionWitness?.witnessId?{keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,text:JSON.stringify(r)}:null;}",&json!([]),SHORT,&cancel).await?;
-            if !valid || trace["record"]["state"] == "ended" || tokio::time::Instant::now() >= deadline {
-                break trace;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        };
+        // The stream-end trace takes only the matched request's Resource Timing entry, ignores
+        // others, and keeps exactly a version, the witness ID, a state and whole milliseconds.
         if valid {
+            let trace = page.evaluate_with_arguments("()=>{const now=performance.now();const list={getEntries:()=>[{initiatorType:'fetch',name:'https://chatgpt.com/backend-api/f/other',startTime:now,responseEnd:now+5},{initiatorType:'fetch',name:'https://chatgpt.com/backend-api/f/conversation',startTime:now,responseEnd:now+1234}]};const before=window.__oracleStreamEnd?.state;for(const observer of window.PUBLIC_observers.filter(item=>item.resource))observer.callback(list);const r=window.__oracleStreamEnd;return {before,observing:window.PUBLIC_observers.filter(item=>item.resource).length,keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,current:r.witnessId===window.__oracleSubmissionWitness?.witnessId,text:JSON.stringify(r)};}",&json!([]),SHORT,&cancel).await?;
             anyhow::ensure!(
-                trace["keys"] == json!(["ms", "state", "version", "witnessId"])
+                trace["before"] == "pending"
+                    && trace["observing"] == 0
+                    && trace["current"] == true
+                    && trace["keys"] == json!(["ms", "state", "version", "witnessId"])
                     && trace["frozen"] == true
                     && trace["record"]["version"] == 1
                     && trace["record"]["state"] == "ended"
-                    && trace["record"]["ms"].as_u64().is_some(),
+                    && trace["record"]["ms"] == 1234,
                 "{case} stream-end trace: {trace}"
             );
             let text = trace["text"].as_str().unwrap_or_default();
@@ -2882,6 +2880,15 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 !text.contains("PUBLIC"),
                 "{case} stream-end trace kept content: {text}"
             );
+            // The runner's read returns this record only for its own witness.
+            let witness = trace["record"]["witnessId"].clone();
+            for (id, expected) in [
+                (witness, json!({"state":"ended","ms":1234})),
+                (json!("PUBLIC-other-witness"), Value::Null),
+            ] {
+                let read = page.evaluate_with_arguments(crate::browser_runner::STREAM_END,&json!([{"witnessId":id}]),SHORT,&cancel).await?;
+                anyhow::ensure!(read == expected, "{case} stream-end read: {read}");
+            }
         }
         if matches!(case, "search-inline" | "search-suffix") {
             // The committed user turn stores the pill token where the witness saw it; only a
