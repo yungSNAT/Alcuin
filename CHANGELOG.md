@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Releases are listed on the MCP Registry as `io.github.yungSNAT/alcuin`: the release workflow writes `server.json` for the tag's bundle and publishes it by GitHub OIDC, with no stored secret.
+- The failed-run sweep no longer leaves its cursor lock held when another sweep contends for it as the lock is released. Such a lock stayed until the process exited, every later cursor write in that process was skipped as busy, and stderr showed 'Failed-run sweep cursor lock release remains pending'.
 - `--help` no longer lists options that Alcuin refuses: `--verbose-render`, the provider-native capture pair and `--retain-hours`. Its verbose form (`--help --verbose`, `--debug-help`) also drops the browser recheck and auto-reattach timings and `--browser-reuse-wait`, and subcommand help hides `--clear` and `--browser-reuse-wait`. Passing one is still refused (#121).
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).
 - A Ctrl-C pressed just after a CLI command starts, such as `alcuin status <id>`, now prints 'Cancelled.' and exits 130 as a later one does. The listener was installed only when its task first ran, so an earlier Ctrl-C killed the process by signal (#128).
