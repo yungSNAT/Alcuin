@@ -14,6 +14,7 @@
 - The 'Did you mean' suggestion for an unknown option no longer offers hidden options, such as the refused `--clear` and `--browser-reuse-wait` (#128).
 - A receipt read of a retained submission witness checks Temporary Chat twice, not 3 times: it reuses the state the read already checked, so a long conversation's page is walked one time fewer (#135).
 - MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, so the client need not hold the call open whilst the consultation runs. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`; closing the server cancels it too. Other clients, and every other tool, get the same results as before. The server now advertises the extension, and a `tasks/*` request from a client that has not declared it fails with -32021 (missing client capability) in place of -32601.
+- An MCP `consult` that waits for its answer takes its perf trace only from the server's `ORACLE_PERF_TRACE`. It used the process-wide trace first, so after one traced consult every later one in the same server named its file after both session IDs (`trace.<first>.<later>.json`).
 
 ## 0.1.0 (2026-11-12)
 
