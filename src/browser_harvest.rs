@@ -326,12 +326,15 @@ pub fn persist(
     let integrity = persist_with(store, id, harvested, explicit, |meta, directory| {
         Ok(inspect(meta, harvested, explicit, directory))
     })?;
-    if harvested["captureSource"] == "page-text" {
-        crate::browser_runner::automation_log(
+    // The harvest is saved by now, so a log line that cannot be written must not fail it.
+    if harvested["captureSource"] == "page-text"
+        && let Err(error) = crate::browser_runner::automation_log(
             store,
             id,
             "[browser] Markdown capture fallback: ChatGPT's Copy button gave no Markdown; saved the answer's page text, which can lose Markdown formatting.",
-        )?;
+        )
+    {
+        eprintln!("Markdown capture fallback was not logged: {error:#}");
     }
     Ok(integrity)
 }

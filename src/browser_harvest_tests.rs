@@ -314,3 +314,26 @@ fn a_page_text_harvest_is_recorded_and_logged_and_a_markdown_one_clears_it() {
     );
     assert_eq!(store.log(&id).unwrap().matches(line).count(), 1);
 }
+#[test]
+fn a_saved_page_text_harvest_succeeds_when_its_log_line_cannot_be_written() {
+    let (_home, store, id) = setup();
+    saved(
+        &store,
+        &id,
+        json!({"runtime":{"conversationId":"public-a"}}),
+        json!([]),
+    );
+    // A directory where the session log goes makes every log append fail.
+    let dir = store.directory(&id).unwrap();
+    for log in ["output.log", "models/gpt-6-astra.log"] {
+        let _ = std::fs::remove_file(dir.join(log));
+        std::fs::create_dir_all(dir.join(log)).unwrap();
+    }
+    let mut page_text = observed();
+    page_text["captureSource"] = json!("page-text");
+    persist(&store, &id, &page_text, false).unwrap();
+    assert_eq!(
+        store.require(&id).unwrap()["browser"]["harvest"]["captureSource"],
+        "page-text"
+    );
+}
