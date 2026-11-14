@@ -2857,6 +2857,32 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             (observed["state"]["state"] == "captured") == valid,
             "{case}: {observed}"
         );
+        // The stream-end trace follows only the captured request, to its body's end, and keeps
+        // exactly a version, the witness ID, a state and whole milliseconds.
+        let deadline = tokio::time::Instant::now() + SHORT;
+        let trace = loop {
+            let trace = page.evaluate_with_arguments("()=>{const r=window.__oracleStreamEnd;return r&&r.witnessId===window.__oracleSubmissionWitness?.witnessId?{keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,text:JSON.stringify(r)}:null;}",&json!([]),SHORT,&cancel).await?;
+            if !valid || trace["record"]["state"] == "ended" || tokio::time::Instant::now() >= deadline {
+                break trace;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        if valid {
+            anyhow::ensure!(
+                trace["keys"] == json!(["ms", "state", "version", "witnessId"])
+                    && trace["frozen"] == true
+                    && trace["record"]["version"] == 1
+                    && trace["record"]["state"] == "ended"
+                    && trace["record"]["ms"].as_u64().is_some(),
+                "{case} stream-end trace: {trace}"
+            );
+            let text = trace["text"].as_str().unwrap_or_default();
+            anyhow::ensure!(
+                // The fixture's prompt and response body both carry the PUBLIC marker.
+                !text.contains("PUBLIC"),
+                "{case} stream-end trace kept content: {text}"
+            );
+        }
         if matches!(case, "search-inline" | "search-suffix") {
             // The committed user turn stores the pill token where the witness saw it; only a
             // verified Web search intent lets the original-source probe accept it.

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- ChatGPT runs log when the answer's response stream ended, beside the completion check: `[browser] Stream-end trace: <state> <ms> ms after send; gate confirmed <ms> ms into the wait.` The page reads a copy of the response and keeps only that state and the elapsed time, never its content. This gathers the evidence needed before the stream end can decide completion.
 - Releases are listed on the MCP Registry as `io.github.yungSNAT/alcuin`: the release workflow writes `server.json` for the tag's bundle and publishes it by GitHub OIDC, with no stored secret.
 - `--help` no longer lists options that Alcuin refuses: `--verbose-render`, the provider-native capture pair and `--retain-hours`. Its verbose form (`--help --verbose`, `--debug-help`) also drops the browser recheck and auto-reattach timings and `--browser-reuse-wait`, and subcommand help hides `--clear` and `--browser-reuse-wait`. Passing one is still refused (#121).
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).

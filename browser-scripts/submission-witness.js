@@ -80,6 +80,26 @@
     // payload and guard references in that closure too, not just the global record.
     cfg = dispatch = assertCurrent = temporary = expected = null;
   };
+  // Stream-end trace for the terminal gate (I-1 step 3, logging only). Reads the matched
+  // response on a clone and discards every chunk. Records a fixed state and whole
+  // milliseconds since the request; never a body, header, URL or status.
+  const traceStreamEnd = (witnessId, result) => {
+    const started = Date.now();
+    const mark = state => {
+      const current = window.__oracleStreamEnd;
+      if (current && current.witnessId !== witnessId && state !== 'pending') return;
+      window.__oracleStreamEnd = Object.freeze({version:1,witnessId,state,ms:Date.now() - started});
+    };
+    mark('pending');
+    Promise.resolve(result).then(response => {
+      const body = response instanceof Response ? response.clone().body : null;
+      if (!body) return mark('unavailable');
+      mark('streaming');
+      const reader = body.getReader();
+      const pump = () => reader.read().then(chunk => chunk.done ? mark('ended') : pump());
+      return pump();
+    }).catch(() => mark('errored'));
+  };
   const read = phase => {
     if (closed && sealedResult) return sealedResult;
     try {
@@ -97,6 +117,7 @@
     }
   };
   function observedFetch(input, init) {
+    let traced = null;
     if (!closed && Date.now() >= expires) { try { record.stop(); } catch {} }
     if (!closed && dispatch.admitted) {
       try {
@@ -134,6 +155,7 @@
                 witness = Object.freeze({version:1,owner,witnessId:cfg.witnessId,dispatchGuardId:cfg.dispatchGuardId,
                   messageId:message.id,promptSha256:cfg.promptSha256,source:'chatgpt-fetch-v1',
                   requestPath:url.pathname,historyDisabled:true});
+                traced = cfg.witnessId;
               }
             }
           }
@@ -143,7 +165,9 @@
       }
     }
     // Preserve the caller, input object and argument list, including synchronous errors.
-    return Reflect.apply(original, this, arguments);
+    const result = Reflect.apply(original, this, arguments);
+    if (traced) traceStreamEnd(traced, result);
+    return result;
   }
   const record = Object.freeze({
     witnessId:cfg.witnessId,

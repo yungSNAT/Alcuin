@@ -74,6 +74,11 @@ pub struct SubmissionWitness {
     request_path: String,
     history_disabled: bool,
 }
+impl SubmissionWitness {
+    pub(crate) fn witness_id(&self) -> &str {
+        &self.witness_id
+    }
+}
 const WITNESS_READ: &str = r#"(cfg) => {
     const record=window.__oracleSubmissionWitness;
     if(!record || record.witnessId!==cfg.intent.witnessId || record.dispatchGuardId!==cfg.intent.dispatchGuardId ||

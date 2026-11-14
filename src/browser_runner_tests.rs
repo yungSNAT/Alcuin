@@ -703,6 +703,14 @@ impl Exchange {
         if expression.contains("alcuin-dom:submission-witness-clean") {
             return json!(true);
         }
+        if expression.contains("alcuin-dom:stream-end") {
+            assert!(
+                args[0]["witnessId"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty())
+            );
+            return json!({"state":"ended","ms":1234});
+        }
         if expression.contains("alcuin-dom:image-buttons") {
             if matches!(self.fault, Fault::SequentialNamedFirstThenFile) && self.turns.len() == 2 {
                 return json!([{"url":"https://chatgpt.com/backend-api/files/file_public/download","candidateId":"3:0","filename":"PUBLIC.txt","label":"Download PUBLIC.txt","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}]);
@@ -3448,6 +3456,10 @@ async fn parent_adoption_completes_then_retires_only_selected_child_and_duplicat
     let parent_log = f.store.log(&parent_id).unwrap();
     assert!(parent_log.contains("[browser] Model selection evidence: "));
     assert!(parent_log.contains("[browser] ChatGPT archive skipped (temporary-chat).\n"));
+    assert!(
+        parent_log
+            .contains("[browser] Stream-end trace: ended 1234 ms after send; gate confirmed ")
+    );
     assert_eq!(
         f.store.require(&parent_id).unwrap()["browser"]["archive"]["reason"],
         "temporary-chat"
@@ -10057,4 +10069,24 @@ fn a_failed_attempt_reports_nothing_sent_only_without_dispatch_or_tab() {
         .unwrap();
     let unlinked = attempt_failure(&store, parent, child);
     assert!(unlinked.contains("recovery evidence"), "{unlinked}");
+}
+#[test]
+fn stream_end_line_writes_only_a_known_state_and_whole_milliseconds() {
+    assert_eq!(
+        stream_end_line(&json!({"state":"ended","ms":41234}), 43000),
+        "[browser] Stream-end trace: ended 41234 ms after send; gate confirmed 43000 ms into the wait."
+    );
+    for trace in [
+        json!(null),
+        json!({"state":"PUBLIC answer text","ms":1}),
+        json!({"state":"ended","ms":-1}),
+        json!({"state":"ended","ms":1.5}),
+        json!({"state":"ended"}),
+    ] {
+        assert_eq!(
+            stream_end_line(&trace, 7),
+            "[browser] Stream-end trace: not observed; gate confirmed 7 ms into the wait.",
+            "{trace}"
+        );
+    }
 }
