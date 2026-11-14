@@ -8510,6 +8510,8 @@ fn duplicate_guard_admits_only_a_run_whose_worker_and_controller_are_dead() {
             blocked.then_some(earlier),
             "{saved} {result:?}"
         );
+        // An admitted run is prepared, not refused for some other reason.
+        assert_eq!(result.is_ok(), !blocked, "{saved} {result:?}");
         assert_eq!(store.stored_for_update(earlier).unwrap(), before);
     }
 }
@@ -8556,6 +8558,7 @@ fn duplicate_guard_matches_the_api_guard_on_the_trimmed_prompt_and_follow_ups() 
             blocked.then_some(earlier),
             "{later} {result:?}"
         );
+        assert_eq!(result.is_ok(), !blocked, "{later} {result:?}");
         if blocked {
             let error = result.unwrap_err().to_string();
             assert!(error.contains("--force"), "{error}");

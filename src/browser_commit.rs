@@ -79,7 +79,8 @@ impl SubmissionWitness {
         &self.witness_id
     }
 }
-const WITNESS_READ: &str = r#"(cfg) => {
+/// `privacy` is the Temporary Chat state the caller read in this renderer task.
+const WITNESS_READ: &str = r#"(cfg, privacy) => {
     const record=window.__oracleSubmissionWitness;
     if(!record || record.witnessId!==cfg.intent.witnessId || record.dispatchGuardId!==cfg.intent.dispatchGuardId ||
         record.owner.claimId!==cfg.owner.claimId || record.owner.reservationId!==cfg.owner.reservationId) return {state:'unavailable'};
@@ -88,7 +89,7 @@ const WITNESS_READ: &str = r#"(cfg) => {
     if(record.document!==document || window!==window.top || location.origin!=='https://chatgpt.com' ||
         record.conversationId && current!==record.conversationId) return {state:'invalid'};
     if(record.result.state==='invalid')return record.result;
-    if(oracleTemporaryChat()!==true)return {state:'pending'};
+    if(privacy!==true)return {state:'pending'};
     if(record.result.state==='pending' && record.candidate)
         return {state:'captured',witness:record.candidate};
     return record.result;
@@ -109,7 +110,7 @@ pub(crate) fn receipt_probe() -> String {
                         return {{state:'invalid'}};
                     return privacy===true ? {{state:'captured',witness:cfg.saved}} : {{state:'pending'}};
                 }}
-                if(cfg.intent)return ({WITNESS_READ})(cfg);
+                if(cfg.intent)return ({WITNESS_READ})(cfg,privacy);
                 return {{state:privacy===true?'none':'pending'}};
             }};
             if(oracleTemporaryChat()!==true)return {{probe:null,submission:readSubmission()}};

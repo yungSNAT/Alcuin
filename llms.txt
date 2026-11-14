@@ -7,7 +7,9 @@
 Version 0.1.0. Release archives carry both binaries for Linux (x86_64, glibc 2.39 or later)
 and Windows (x86_64), and `alcuin.mcpb` installs the MCP server in Claude Desktop. To build
 instead, use Rust 1.99 or later: `cargo install --locked --path .` in a checkout. Browser runs
-also need Google Chrome.
+need a Chromium-based browser: Alcuin looks for Chrome and Edge on Windows, and for Chrome,
+Chromium, Brave and Edge on Linux; to use another, such as Brave on Windows, set `CHROME_PATH`
+to its executable.
 
 ## Start
 

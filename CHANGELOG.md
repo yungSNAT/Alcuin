@@ -8,6 +8,7 @@
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).
 - A Ctrl-C pressed just after a CLI command starts, such as `alcuin status <id>`, now prints 'Cancelled.' and exits 130 as a later one does. The listener was installed only when its task first ran, so an earlier Ctrl-C killed the process by signal (#128).
 - The 'Did you mean' suggestion for an unknown option no longer offers hidden options, such as the refused `--clear` and `--browser-reuse-wait` (#128).
+- A receipt read of a retained submission witness checks Temporary Chat twice, not 3 times: it reuses the state the read already checked, so a long conversation's page is walked one time fewer (#135).
 
 ## 0.1.0 (2026-11-12)
 
