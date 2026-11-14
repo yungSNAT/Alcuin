@@ -195,19 +195,46 @@ fn another_sessions_staged_uploads_are_not_read_as_this_ones() {
             .unwrap()
             .to_owned()
     };
-    let (own, other) = (prepare("PUBLIC own"), prepare("PUBLIC other"));
+    let sent_files = |id: &str| {
+        complete(&store, id, "nothing cited\n");
+        let output = ground(home.path(), &[id, "--json"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["sentFiles"].clone()
+    };
     let path = |id: &str| store.directory(id).unwrap().join("browser-request.json");
-    let mut request: Value = serde_json::from_slice(&fs::read(path(&own)).unwrap()).unwrap();
-    let theirs: Value = serde_json::from_slice(&fs::read(path(&other)).unwrap()).unwrap();
+    let read = |id: &str| serde_json::from_slice::<Value>(&fs::read(path(id)).unwrap()).unwrap();
+
+    // A receipt naming the other session's folder.
+    let (own, other) = (prepare("PUBLIC own"), prepare("PUBLIC other"));
+    let (mut request, theirs) = (read(&own), read(&other));
     for key in ["stagedUploads", "uploadPaths"] {
         request[key] = theirs[key].clone();
     }
     fs::write(path(&own), serde_json::to_vec(&request).unwrap()).unwrap();
-    complete(&store, &own, "nothing cited\n");
-    let output = ground(home.path(), &[&own, "--json"]);
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["sentFiles"], "current");
+    assert_eq!(sent_files(&own), "current");
+
+    // The session's own folder replaced by a link to the other session's.
+    let (own, other) = (prepare("PUBLIC linked"), prepare("PUBLIC target"));
+    let staged = |id: &str| {
+        std::path::PathBuf::from(read(id)["stagedUploads"]["directory"].as_str().unwrap())
+    };
+    let (link, target) = (staged(&own), staged(&other));
+    fs::remove_dir_all(&link).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    #[cfg(windows)]
+    {
+        // A junction needs no symlink privilege.
+        let status = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    assert_eq!(sent_files(&own), "current");
 }
 
 fn mcp(home: &Path, cwd: &Path, env: Environment) -> AlcuinMcp {

@@ -525,8 +525,12 @@ fn saved_files(
         return Ok(none.then_some((files, skipped)));
     };
     // A run that closes its tab cleanly removes its staged uploads. Uploads staged anywhere but
-    // this session's own folder are not its saved copy.
-    if !staged.directory.is_dir() || staged.directory.parent() != Some(directory.as_path()) {
+    // this session's own folder, links resolved, are not its saved copy.
+    let owned = fs::canonicalize(&staged.directory)
+        .ok()
+        .zip(fs::canonicalize(&directory).ok())
+        .is_some_and(|(staged, session)| staged.parent() == Some(session.as_path()));
+    if !staged.directory.is_dir() || !owned {
         return Ok(None);
     }
     let text_bundle = request
