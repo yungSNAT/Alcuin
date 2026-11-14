@@ -28,7 +28,7 @@ Alcuin uses its own browser profile under `~/.oracle`, separate from your normal
 alcuin --engine browser --browser-manual-login --browser-keep-browser -p "Reply with OK."
 ```
 
-Alcuin needs Chrome, Edge, Chromium or Brave; see [Troubleshooting](troubleshooting.md#no-browser-found) if it finds none.
+Alcuin needs a Chromium-based browser. It looks for Chrome and Edge on Windows, and for Chrome, Chromium, Brave and Edge on Linux; to use another, such as Brave on Windows, set `CHROME_PATH` to its executable. See [Troubleshooting](troubleshooting.md#no-browser-found) if it finds none.
 
 ## 4. Ask your first question
 
