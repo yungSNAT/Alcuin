@@ -735,6 +735,10 @@ async fn actual_stdio_discovery_sessions_wait_and_resources_match_reference_shap
         .call(10, "wait", json!({"id":id,"unknown":true}))
         .await;
     assert_eq!(invalid["result"]["isError"], true);
+    let missing = server
+        .call(11, "ground", json!({"id":"PUBLIC-missing"}))
+        .await;
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
     server.shutdown().await;
 }
 #[tokio::test]
