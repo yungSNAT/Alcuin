@@ -4,6 +4,12 @@ updates:
     directories: [/, /fuzz]
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # One pull request bumps a crate in both lockfiles, not one per directory.
+      cargo:
+        group-by: dependency-name
     # vendor/hyper is patched; upgrading hyper means reapplying vendor/hyper/PATCH.json.
     ignore:
       - dependency-name: hyper
@@ -11,6 +17,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       # CodeQL refuses a workflow whose init, analyze and upload-sarif steps differ in version.
       codeql-action:
