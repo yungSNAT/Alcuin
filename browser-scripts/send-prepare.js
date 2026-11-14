@@ -233,6 +233,17 @@ return (() => {
   if (previous) throw Error('An earlier submission witness requires exact cleanup');
   if (typeof window.fetch !== 'function') throw Error('Submission transport is unavailable');
   const original = window.fetch;
+  // Advisory and easily fooled (a bound function or an edited toString looks native): whether the
+  // fetch below this hook looked like the browser's own when the hook was installed. The stream-end
+  // trace reports it so its readers can set aside runs a page wrapper may have misattributed; it
+  // never affects acceptance.
+  const fetchLooks = (() => {
+    try {
+      return Function.prototype.toString.call(original).includes('[native code]') ? 'native' : 'wrapped';
+    } catch {
+      return 'wrapped';
+    }
+  })();
   const originalDocument = document;
   const originalPath = location.pathname;
   let conversationId = originalPath.match(/^\/c\/([a-zA-Z0-9-]+)$/)?.[1] ?? null;
@@ -330,7 +341,7 @@ return (() => {
     const mark = (state, ms) => {
       const current = window.__oracleStreamEnd;
       if (current && current.witnessId !== witnessId && state !== 'pending') return;
-      window.__oracleStreamEnd = Object.freeze({version:1,witnessId,state,ms});
+      window.__oracleStreamEnd = Object.freeze({version:1,witnessId,state,ms,fetch:fetchLooks});
     };
     try {
       started = performance.now();

@@ -4921,16 +4921,23 @@ impl PageStalls {
     }
 }
 /// Reads the submission witness's stream-end trace (I-1 step 3, logging only) for this witness.
-pub(crate) const STREAM_END: &str = "(cfg)=>{ /* alcuin-dom:stream-end */ const r=window.__oracleStreamEnd; return r&&r.witnessId===cfg.witnessId?{state:r.state,ms:r.ms}:null; }";
+pub(crate) const STREAM_END: &str = "(cfg)=>{ /* alcuin-dom:stream-end */ const r=window.__oracleStreamEnd; return r&&r.witnessId===cfg.witnessId?{state:r.state,ms:r.ms,fetch:r.fetch}:null; }";
 /// The trace line beside the terminal gate. It writes only a state from the collector's fixed
-/// vocabulary and, once ended, whole milliseconds; anything else reads as not observed.
+/// vocabulary, whole milliseconds once ended, and whether the page's fetch looked native (advisory);
+/// anything else reads as not observed or is left out.
 fn stream_end_line(trace: &Value, gate_ms: u64) -> String {
     let observed = match (trace["state"].as_str(), &trace["ms"]) {
         (Some("ended"), ms) if ms.is_u64() => format!("ended {ms} ms after send"),
         (Some(state @ ("pending" | "unavailable")), Value::Null) => state.to_owned(),
         _ => "not observed".to_owned(),
     };
-    format!("[browser] Stream-end trace: {observed}; gate confirmed {gate_ms} ms into the wait.")
+    let fetch = match trace["fetch"].as_str() {
+        Some(looks @ ("native" | "wrapped")) => format!("; fetch looked {looks}"),
+        _ => String::new(),
+    };
+    format!(
+        "[browser] Stream-end trace: {observed}{fetch}; gate confirmed {gate_ms} ms into the wait."
+    )
 }
 #[allow(clippy::too_many_arguments)] // Acceptance binds source, selection, ownership and the polling deadline.
 async fn wait_answer(

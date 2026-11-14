@@ -10108,6 +10108,21 @@ fn stream_end_line_writes_only_a_known_state_and_whole_milliseconds() {
         stream_end_line(&json!({"state":"pending","ms":null}), 7),
         "[browser] Stream-end trace: pending; gate confirmed 7 ms into the wait."
     );
+    assert_eq!(
+        stream_end_line(&json!({"state":"ended","ms":5,"fetch":"wrapped"}), 7),
+        "[browser] Stream-end trace: ended 5 ms after send; fetch looked wrapped; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(&json!({"state":"pending","ms":null,"fetch":"native"}), 7),
+        "[browser] Stream-end trace: pending; fetch looked native; gate confirmed 7 ms into the wait."
+    );
+    assert_eq!(
+        stream_end_line(
+            &json!({"state":"pending","ms":null,"fetch":"PUBLIC text"}),
+            7
+        ),
+        "[browser] Stream-end trace: pending; gate confirmed 7 ms into the wait."
+    );
     for trace in [
         json!(null),
         json!({"state":"PUBLIC answer text","ms":null}),

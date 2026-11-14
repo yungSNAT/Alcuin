@@ -2666,6 +2666,23 @@ async fn retirement_marker_cases(page: &Cdp) -> Result<()> {
 async fn witness_cases(page: &Cdp) -> Result<()> {
     let cancel = CancellationToken::new();
     const MESSAGE: &str = "11111111-2222-4333-8444-555555555555";
+    // The trace says whether the fetch below the hook looked like the browser's own: the fixture's
+    // stub transport reads as wrapped (checked in the cases below), the untouched fetch as native.
+    mount(page, ACTIVE, "/", "").await?;
+    let looks = page.evaluate_with_arguments(&format!(r#"(cfg)=>{{
+        window.PUBLIC_nativeFetch ??= window.fetch;
+        const saved=window.fetch;window.fetch=window.PUBLIC_nativeFetch;
+        const witness={{owner:{{claimId:'PUBLIC-native-claim',reservationId:'PUBLIC-native-reservation'}},prompt:'PUBLIC native prompt',witnessId:'PUBLIC-native-witness',dispatchGuardId:'PUBLIC-native-guard',promptSha256:'PUBLIC-digest',expectations:[]}};
+        ({collector})(witness,{{admitted:true}},()=>{{}},()=>true);
+        window.fetch('/backend-api/f/conversation',{{method:'POST',body:JSON.stringify({{action:'next',history_and_training_disabled:true,messages:[{{id:cfg.id,author:{{role:'user'}},content:{{content_type:'text',parts:['PUBLIC native prompt']}}}}]}})}}).catch(()=>{{}});
+        const record=window.__oracleStreamEnd;
+        window.__oracleSubmissionWitness.cleanup();window.fetch=saved;
+        return record&&record.witnessId==='PUBLIC-native-witness'?record.fetch:null;
+    }}"#, collector = include_str!("../browser-scripts/submission-witness.js")), &json!([{"id":MESSAGE}]), SHORT, &cancel).await?;
+    anyhow::ensure!(
+        looks == "native",
+        "Untouched fetch did not read as native: {looks}"
+    );
     for case in [
         "immediate",
         "delayed",
@@ -2881,7 +2898,8 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             }
             let trace = feed("conversation", true, 1234).await?;
             anyhow::ensure!(
-                trace["keys"] == json!(["ms", "state", "version", "witnessId"])
+                trace["keys"] == json!(["fetch", "ms", "state", "version", "witnessId"])
+                    && trace["record"]["fetch"] == "wrapped"
                     && trace["frozen"] == true
                     && trace["record"]["version"] == 1
                     && trace["record"]["state"] == "ended"
@@ -2897,7 +2915,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             // The runner's read returns this record only for its own witness.
             let witness = trace["record"]["witnessId"].clone();
             for (id, expected) in [
-                (witness, json!({"state":"ended","ms":1234})),
+                (witness, json!({"state":"ended","ms":1234,"fetch":"wrapped"})),
                 (json!("PUBLIC-other-witness"), Value::Null),
             ] {
                 let read = page.evaluate_with_arguments(crate::browser_runner::STREAM_END,&json!([{"witnessId":id}]),SHORT,&cancel).await?;
