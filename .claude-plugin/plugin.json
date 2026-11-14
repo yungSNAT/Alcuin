@@ -1,0 +1,22 @@
+{
+  "name": "alcuin",
+  "description": "Ask ChatGPT about the source files you choose, from Claude Code, and keep each answer as a durable session. Runs the alcuin-mcp server and adds the alcuin skill; install the alcuin and alcuin-mcp binaries on your PATH first.",
+  "author": {
+    "name": "yungSNAT",
+    "url": "https://github.com/yungSNAT"
+  },
+  "homepage": "https://github.com/yungSNAT/Alcuin",
+  "repository": "https://github.com/yungSNAT/Alcuin",
+  "license": "FSL-1.1-ALv2 AND MIT",
+  "keywords": ["chatgpt", "second-opinion", "code-review", "mcp"],
+  "mcpServers": {
+    "alcuin": {
+      "type": "stdio",
+      "command": "alcuin-mcp",
+      "args": [],
+      "env": {
+        "ORACLE_ENGINE": "browser"
+      }
+    }
+  }
+}
