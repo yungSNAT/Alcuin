@@ -12,6 +12,7 @@
 - A Ctrl-C pressed just after a CLI command starts, such as `alcuin status <id>`, now prints 'Cancelled.' and exits 130 as a later one does. The listener was installed only when its task first ran, so an earlier Ctrl-C killed the process by signal (#128).
 - The 'Did you mean' suggestion for an unknown option no longer offers hidden options, such as the refused `--clear` and `--browser-reuse-wait` (#128).
 - A receipt read of a retained submission witness checks Temporary Chat twice, not 3 times: it reuses the state the read already checked, so a long conversation's page is walked one time fewer (#135).
+- MCP `consult` runs as a task (the MCP Tasks extension, `io.modelcontextprotocol/tasks`) for a client that declares that extension, so the client need not hold the call open whilst the consultation runs. The client polls `tasks/get` for the same result the call returned before and can stop the run with `tasks/cancel`; closing the server cancels it too. Other clients, and every other tool, get the same results as before. The server now advertises the extension, and a `tasks/*` request from a client that has not declared it fails with -32021 (missing client capability) in place of -32601.
 
 ## 0.1.0 (2026-11-12)
 

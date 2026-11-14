@@ -7,7 +7,12 @@ use crate::{
     sessions::{self, SessionStore},
 };
 use anyhow::{Context, Result, bail};
-use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
+use rmcp::{
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
+    model::*,
+    service::{Peer, RequestContext},
+    task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
+};
 use serde_json::{Value, json};
 use std::{
     path::PathBuf,
@@ -94,6 +99,15 @@ pub struct AlcuinMcp {
     pub cwd: PathBuf,
     pub env: Environment,
 }
+/// SEP-2663 tasks: consults from clients that declare the tasks extension.
+// shortcut: one store per process, which fits the one stdio server a process runs and keeps
+// `AlcuinMcp` constructible as before; a field on the server is the upgrade path if a process
+// ever serves several clients.
+static TASKS: std::sync::LazyLock<TaskManager> = std::sync::LazyLock::new(TaskManager::new);
+/// Cancelled when the stdio server stops, so a task consult is cancelled at EOF as a synchronous
+/// one is, through rmcp's request token.
+static SHUTDOWN: std::sync::LazyLock<CancellationToken> =
+    std::sync::LazyLock::new(CancellationToken::new);
 impl AlcuinMcp {
     pub fn tools() -> Vec<Tool> {
         serde_json::from_str::<ListToolsResult>(include_str!("../fixtures/mcp-tools.json"))
@@ -129,6 +143,71 @@ impl AlcuinMcp {
             }
             _ => bail!("Unknown MCP tool"),
         }
+    }
+    /// Runs a tool, forwarding its log lines to the client as logging notifications.
+    async fn logged_invoke(
+        &self,
+        peer: Peer<RoleServer>,
+        name: &str,
+        arguments: Value,
+        cancel: &CancellationToken,
+    ) -> CallToolResult {
+        let (log, mut lines) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // The maintained 2025 MCP surface still carries logging notifications.
+        #[allow(deprecated)]
+        let forward = tokio::spawn(async move {
+            while let Some(text) = lines.recv().await {
+                let bytes = text.len();
+                let _ = peer
+                    .notify_logging_message(LoggingMessageNotificationParam::new(
+                        LoggingLevel::Info,
+                        json!({"text":text,"bytes":bytes}),
+                    ))
+                    .await;
+            }
+        });
+        let result = match LOG.scope(log, self.invoke(name, arguments, cancel)).await {
+            Ok(value) => value,
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+        };
+        // Log lines precede the result, as the reference awaits each send in order.
+        let _ = forward.await;
+        result
+    }
+    /// Runs a consult as an SEP-2663 task. `tasks/cancel`, or the server stopping, cancels the
+    /// run, which settles as `cancelled` with the run's error as its status message if it then
+    /// fails, and as `completed` if its answer was already saved.
+    async fn consult_task(
+        self,
+        peer: Peer<RoleServer>,
+        arguments: Value,
+        task: TaskContext,
+    ) -> std::result::Result<CallToolResult, TaskExit> {
+        let cancel = SHUTDOWN.child_token();
+        let relay = tokio::spawn({
+            let cancel = cancel.clone();
+            let task = task.clone();
+            async move {
+                task.cancelled().await;
+                cancel.cancel();
+            }
+        });
+        let result = self
+            .logged_invoke(peer, "consult", arguments, &cancel)
+            .await;
+        relay.abort();
+        if cancel.is_cancelled() && result.is_error == Some(true) {
+            // Keeps the session ID and any warning that the request may have been sent.
+            let text = result
+                .content
+                .iter()
+                .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            task.set_status_message(text);
+            return Err(TaskExit::Cancelled);
+        }
+        Ok(result)
     }
     /// MCP callers see only sessions started in or below the server's working directory unless
     /// the user opts in; a session without a recorded directory counts as outside.
@@ -619,31 +698,50 @@ impl ServerHandler for AlcuinMcp {
             return Err(ErrorData::invalid_params("Unknown MCP tool", None));
         }
         let arguments = Value::Object(request.arguments.unwrap_or_default());
-        let (log, mut lines) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let peer = context.peer.clone();
-        // The maintained 2025 MCP surface still carries logging notifications.
-        #[allow(deprecated)]
-        let forward = tokio::spawn(async move {
-            while let Some(text) = lines.recv().await {
-                let bytes = text.len();
-                let _ = peer
-                    .notify_logging_message(LoggingMessageNotificationParam::new(
-                        LoggingLevel::Info,
-                        json!({"text":text,"bytes":bytes}),
-                    ))
-                    .await;
-            }
-        });
-        let result = match LOG
-            .scope(log, self.invoke(&request.name, arguments, &context.ct))
-            .await
+        // A consult runs as a task only for a request that declares the tasks extension, so a
+        // client that backgrounds tasks need not hold the call open; every other client keeps
+        // the synchronous result.
+        if request.name == "consult"
+            && context
+                .client_capabilities()
+                .is_some_and(|capabilities| capabilities.supports_tasks())
         {
-            Ok(value) => value,
-            Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-        };
-        // Log lines precede the result, as the reference awaits each send in order.
-        let _ = forward.await;
-        Ok(result.into())
+            let server = self.clone();
+            let peer = context.peer.clone();
+            // shortcut: no TTL, because rmcp fails a task when its TTL passes and a consult has
+            // no upper bound, so finished tasks stay until the server exits; evicting them a
+            // while after they finish is the upgrade path.
+            let task = TASKS.spawn(TaskOptions::new().with_ttl_ms(None), move |task| {
+                Box::pin(server.consult_task(peer, arguments, task))
+            });
+            return Ok(CreateTaskResult::new(task).into());
+        }
+        Ok(self
+            .logged_invoke(context.peer.clone(), &request.name, arguments, &context.ct)
+            .await
+            .into())
+    }
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _: RequestContext<RoleServer>,
+    ) -> std::result::Result<GetTaskResult, ErrorData> {
+        TASKS.get_task(&request.task_id).map(GetTaskResult::new)
+    }
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        _: RequestContext<RoleServer>,
+    ) -> std::result::Result<(), ErrorData> {
+        // A consult asks for no input, so every response is to an unknown key and is ignored.
+        TASKS.update_task(&request.task_id, request.input_responses)
+    }
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _: RequestContext<RoleServer>,
+    ) -> std::result::Result<(), ErrorData> {
+        TASKS.cancel_task(&request.task_id)
     }
     // The maintained 2025 MCP surface still advertises logging.
     #[allow(deprecated)]
@@ -705,11 +803,18 @@ pub async fn serve(server: AlcuinMcp) -> Result<()> {
     let cancellation = running.cancellation_token();
     let watcher = tokio::spawn(async move {
         closed.cancelled().await;
+        SHUTDOWN.cancel();
         cancellation.cancel();
     });
     let result = running.waiting().await;
     watcher.abort();
     let _ = watcher.await;
+    // Task consults get the drain rmcp gives synchronous requests at EOF to settle as cancelled.
+    SHUTDOWN.cancel();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while TASKS.running_task_count() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     result?;
     Ok(())
 }

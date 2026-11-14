@@ -9,7 +9,7 @@
 | `sessions` | Lists recent sessions or fetches one by ID |
 | `wait` | Waits for a session to finish without polling |
 
-`consult` and `wait` return the whole saved answer in `output` and the end of the session log in `log`, with `modelSelection` and `thinkingSelection` naming the model and effort the browser verified. The server shares sessions, settings and the browser profile with the CLI, so sign in once with the CLI first ([Quickstart](quickstart.md#3-sign-in-once)).
+`consult` and `wait` return the whole saved answer in `output` and the end of the session log in `log`, with `modelSelection` and `thinkingSelection` naming the model and effort the browser verified. A client that declares the MCP Tasks extension gets `consult` back as a task to poll with `tasks/get` and stop with `tasks/cancel`; other clients wait for the result as before. The server shares sessions, settings and the browser profile with the CLI, so sign in once with the CLI first ([Quickstart](quickstart.md#3-sign-in-once)).
 
 ## Claude Desktop
 
