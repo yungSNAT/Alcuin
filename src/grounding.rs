@@ -524,8 +524,9 @@ fn saved_files(
         let none = meta["options"]["file"].as_array().is_none_or(Vec::is_empty);
         return Ok(none.then_some((files, skipped)));
     };
-    // A run that closes its tab cleanly removes its staged uploads.
-    if !staged.directory.is_dir() {
+    // A run that closes its tab cleanly removes its staged uploads. Uploads staged anywhere but
+    // this session's own folder are not its saved copy.
+    if !staged.directory.is_dir() || staged.directory.parent() != Some(directory.as_path()) {
         return Ok(None);
     }
     let text_bundle = request

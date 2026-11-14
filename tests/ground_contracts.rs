@@ -182,6 +182,34 @@ fn a_missing_session_or_unreadable_input_fails_with_exit_2() {
     );
 }
 
+#[test]
+fn another_sessions_staged_uploads_are_not_read_as_this_ones() {
+    let (home, store, work) = fixture();
+    let prepare = |prompt: &str| {
+        let request = resolved(
+            &work,
+            json!({"prompt":prompt,"engine":"browser","files":["engine.rs"]}),
+        );
+        alcuin::browser_runner::prepare(&store, &request, &work).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (own, other) = (prepare("PUBLIC own"), prepare("PUBLIC other"));
+    let path = |id: &str| store.directory(id).unwrap().join("browser-request.json");
+    let mut request: Value = serde_json::from_slice(&fs::read(path(&own)).unwrap()).unwrap();
+    let theirs: Value = serde_json::from_slice(&fs::read(path(&other)).unwrap()).unwrap();
+    for key in ["stagedUploads", "uploadPaths"] {
+        request[key] = theirs[key].clone();
+    }
+    fs::write(path(&own), serde_json::to_vec(&request).unwrap()).unwrap();
+    complete(&store, &own, "nothing cited\n");
+    let output = ground(home.path(), &[&own, "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["sentFiles"], "current");
+}
+
 fn mcp(home: &Path, cwd: &Path, env: Environment) -> AlcuinMcp {
     AlcuinMcp {
         store: SessionStore::new(home),
