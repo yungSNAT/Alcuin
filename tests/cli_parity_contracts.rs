@@ -733,20 +733,34 @@ fn duplicate_prompts_compare_trimmed_text_and_print_the_reference_notice() {
     store
         .update(&id, |_| Ok(Some(json!({"status":"running"}))))
         .unwrap();
-    let output = command(home.path())
-        .env("OPENAI_API_KEY", "sk-PUBLIC-synthetic-1234")
-        .args(["-p", "  PUBLIC duplicate guard prompt  ", "--engine", "api"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert_eq!(stderr(&output), "");
-    assert_eq!(
-        stdout(&output),
-        format!(
-            "A session with the same prompt is already running ({id}). Reattach with \"alcuin session {id}\" or rerun with --force to start another run.\n"
-        )
-    );
-    assert_eq!(store.list(false).unwrap().len(), 1);
+    // Both engines refuse with the same notice on stdout.
+    for engine in ["api", "browser"] {
+        let output = command(home.path())
+            .env("OPENAI_API_KEY", "sk-PUBLIC-synthetic-1234")
+            .args([
+                "-p",
+                "  PUBLIC duplicate guard prompt  ",
+                "--engine",
+                engine,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{engine}: {}",
+            stderr(&output)
+        );
+        assert_eq!(stderr(&output), "", "{engine}");
+        assert_eq!(
+            stdout(&output),
+            format!(
+                "A session with the same prompt is already running ({id}). Reattach with \"alcuin session {id}\" or rerun with --force to start another run.\n"
+            ),
+            "{engine}"
+        );
+        assert_eq!(store.list(false).unwrap().len(), 1, "{engine}");
+    }
 }
 
 #[test]
