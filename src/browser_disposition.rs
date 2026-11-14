@@ -915,6 +915,7 @@ impl TargetJournal {
             "Historical observation cannot replace native commitment authority"
         );
         let (answer, representation) = match observed["lastAssistantMarkdown"].as_str() {
+            Some(answer) if observed["captureSource"] == "page-text" => (answer, "text"),
             Some(answer) => (answer, "markdown"),
             None => (
                 observed["lastAssistantText"]

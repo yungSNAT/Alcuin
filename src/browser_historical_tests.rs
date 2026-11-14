@@ -1024,6 +1024,39 @@ fn legacy_completion_saves_full_outputs_before_model_session_and_finalisation() 
     assert!(record["finalisedAt"].as_str().is_some());
     assert_eq!(record["disposition"]["absence"], "unknown");
 }
+/// Page text that stood in for copied Markdown is committed as text, not as Markdown.
+#[test]
+fn legacy_completion_commits_a_page_text_fallback_as_text() {
+    let (_home, store, saved, mut snapshot, creator) = fixture();
+    let id = saved["id"].as_str().unwrap();
+    snapshot.tab["lastAssistantMarkdown"] = snapshot.tab["lastAssistantText"].clone();
+    snapshot.tab["captureSource"] = json!("page-text");
+    let owned = eligible(&saved, &snapshot).unwrap().unwrap();
+    let completed = commit_legacy(
+        &store,
+        id,
+        &saved,
+        &snapshot,
+        &owned,
+        &creator,
+        &CancellationToken::new(),
+    )
+    .unwrap()
+    .unwrap();
+    let capture: artifacts::CaptureReceipt =
+        serde_json::from_value(completed["browser"]["capturedAnswer"].clone()).unwrap();
+    assert_eq!(
+        artifacts::verify_capture(&store, &capture).unwrap(),
+        b"PUBLIC answer"
+    );
+    let journal = TargetJournal::open(&store).unwrap();
+    let record = journal.read(&creator["allocationId"]).unwrap();
+    journal.verify(&record).unwrap();
+    assert_eq!(
+        record["commit"]["assistantContent"]["representation"],
+        "text"
+    );
+}
 #[test]
 fn failed_required_output_keeps_the_original_session_and_never_finalises() {
     let (_home, store, saved, snapshot, creator) = fixture();
