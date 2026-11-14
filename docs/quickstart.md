@@ -52,6 +52,7 @@ To continue a conversation, pass `--followup <id>` with a new `-p`.
 
 ## Next
 
+- [Sessions and checking answers](sessions.md) to list, continue, recover and ground saved sessions.
 - [MCP setup](mcp.md) to call Alcuin from Claude Desktop, Claude Code or Codex.
 - [Troubleshooting](troubleshooting.md).
 - `alcuin --help --verbose` for every option.
