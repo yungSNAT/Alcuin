@@ -456,6 +456,10 @@ impl AlcuinMcp {
                 &executable,
                 worker_env.as_ref().unwrap_or(&self.env),
                 request.cookie_bootstrap.as_ref(),
+                crate::perf::session_value(
+                    self.env.get("ORACLE_PERF_TRACE").map(String::as_str),
+                    id,
+                ),
             )
             .await
             .map_err(|error| anyhow::anyhow!("Unable to start detached session {id}: {error}"))?;
