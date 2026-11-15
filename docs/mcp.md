@@ -1,6 +1,6 @@
 # MCP setup
 
-`alcuin-mcp` is a stdio MCP server. It offers 4 tools:
+`alcuin-mcp` is a stdio MCP server. It offers 5 tools:
 
 | Tool | What it does |
 | --- | --- |
