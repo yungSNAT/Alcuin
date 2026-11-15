@@ -299,6 +299,126 @@ fn a_failed_update_puts_the_old_binary_back() {
     assert_eq!(left.len(), 2, "{left:?}");
 }
 
+/// An update stopped by a signal between its 2 renames puts the first old binary back.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_interrupted_update_puts_the_old_binary_back() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    fs::create_dir_all(&dir).unwrap();
+    for bin in ["alcuin", "alcuin-mcp"] {
+        fs::write(dir.join(bin), "PUBLIC old").unwrap();
+    }
+    // An mv that sends the installer TERM in place of the second rename.
+    let shim = root.path().join("shim");
+    fs::create_dir(&shim).unwrap();
+    fs::write(
+        shim.join("mv"),
+        "#!/bin/sh\ncase \"$*\" in\n*.alcuin-mcp.new*) kill -TERM \"$PPID\"; exit 0 ;;\nesac\nexec /bin/mv \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(shim.join("mv"), fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new("sh")
+        .args([
+            "-c",
+            &format!(
+                "curl -fsSL {url}/release/install.sh | PATH={}:$PATH sh",
+                shim.display()
+            ),
+        ])
+        .env("ALCUIN_DOWNLOAD_URL", format!("{url}/release"))
+        .env("ALCUIN_INSTALL_DIR", &dir)
+        .env("HOME", root.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    for bin in ["alcuin", "alcuin-mcp"] {
+        assert!(
+            fs::read(dir.join(bin)).unwrap() == b"PUBLIC old",
+            "{bin}: {}",
+            text(&output.stderr)
+        );
+    }
+    for leftover in [
+        ".alcuin.new",
+        ".alcuin.old",
+        ".alcuin-mcp.new",
+        ".alcuin-mcp.old",
+    ] {
+        assert!(!dir.join(leftover).exists(), "{leftover}");
+    }
+}
+
+/// An old binary that cannot be moved back is kept, and the new one stays in place rather than
+/// being removed by the failed move.
+#[cfg(windows)]
+#[test]
+fn an_old_binary_that_cannot_be_put_back_loses_nothing() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("alcuin.exe"), "PUBLIC old").unwrap();
+    // As in the test above, alcuin-mcp.exe cannot be moved aside, so the update fails after
+    // replacing alcuin.exe. Copies left by earlier installs slow the step between the two, so
+    // the watcher below opens the old alcuin.exe, without delete sharing, before it is put back.
+    let held = dir.join("alcuin-mcp.exe");
+    fs::create_dir(&held).unwrap();
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .share_mode(0)
+        .open(held.join("held"))
+        .unwrap();
+    for n in 0..300 {
+        fs::write(dir.join(format!("alcuin-mcp.exe.{n}.old")), "").unwrap();
+    }
+    let (release_hold, released) = std::sync::mpsc::channel::<()>();
+    let watched = dir.clone();
+    let watcher = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
+            for entry in fs::read_dir(&watched).unwrap().flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("alcuin.exe.") && name.ends_with(".old") {
+                    let Ok(file) = fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(1) // FILE_SHARE_READ: no delete, so no rename
+                        .open(entry.path())
+                    else {
+                        continue;
+                    };
+                    released.recv().unwrap();
+                    drop(file);
+                    return Some(name);
+                }
+            }
+        }
+        None
+    });
+    let output = install(&format!("{url}/release"), &dir, root.path());
+    let _ = release_hold.send(());
+    let old = watcher
+        .join()
+        .unwrap()
+        .expect("the old alcuin.exe was not held");
+    drop(lock);
+    let said = format!("{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(!output.status.success(), "{said}");
+    assert!(
+        fs::read(dir.join("alcuin.exe")).ok() == fs::read(env!("CARGO_BIN_EXE_alcuin")).ok(),
+        "{said}"
+    );
+    assert_eq!(fs::read(dir.join(&old)).unwrap(), b"PUBLIC old");
+    assert!(said.contains(&old), "{said}");
+}
+
 #[cfg(windows)]
 const ENVIRONMENT: &str = r"HKCU\Environment";
 
