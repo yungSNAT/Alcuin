@@ -336,6 +336,8 @@ pub fn model_settings(model: &str, options: &Value) -> Result<ModelSettings> {
         api_model: model.into(),
         reasoning_effort: Some("xhigh".into()),
         input_limit: 272000,
+        // GPT-6 Astra's standard input and output rates per 1M tokens on
+        // https://platform.openai.com/docs/pricing, read 15 November 2026.
         pricing: Some((10.0 / 1_000_000.0, 50.0 / 1_000_000.0)),
     };
     if model == "gpt-6-astra"
@@ -391,6 +393,12 @@ pub fn model_settings(model: &str, options: &Value) -> Result<ModelSettings> {
     }
     Ok(settings)
 }
+/// Cached input and cache writes as multiples of the input rate, for GPT-5.6 and later models other
+/// than GPT-6.1 Sol and Terra (https://platform.openai.com/docs/guides/prompt-caching, read 15
+/// November 2026). Requests set no cache retention, so writes take the default 30-minute rate. For
+/// GPT-6 Astra these give the $1.00 and $12.50 per 1M tokens its pricing page lists.
+const CACHED_INPUT_RATE: f64 = 0.1;
+const CACHE_WRITE_RATE: f64 = 1.25;
 pub fn usage_summary(response: &Value, estimated_input: u64, pricing: Option<(f64, f64)>) -> Value {
     let input = response["usage"]["input_tokens"]
         .as_u64()
@@ -401,10 +409,19 @@ pub fn usage_summary(response: &Value, estimated_input: u64, pricing: Option<(f6
         .or(response["usage"]["output_tokens_details"]["reasoning_tokens"].as_u64())
         .unwrap_or(0);
     let mut usage = json!({"inputTokens":input,"outputTokens":output,"reasoningTokens":reasoning,"totalTokens":response["usage"]["total_tokens"].as_u64().unwrap_or(input.saturating_add(output))});
-    if let Some((input_rate, output_rate)) = pricing {
-        // Same source calculation as tokentally: reasoning is already in output.
-        // These rates are reference configuration, not a claim about current billing.
-        usage["cost"] = json!(input as f64 * input_rate + output as f64 * output_rate);
+    let details = &response["usage"]["input_tokens_details"];
+    let cached = details["cached_tokens"].as_u64().unwrap_or(0);
+    let written = details["cache_write_tokens"].as_u64().unwrap_or(0);
+    // Input tokens are uncached, cached or written, each at its own rate; reasoning is already in
+    // output. A cache split larger than the input is inconsistent, so it gets no cost.
+    if let Some((input_rate, output_rate)) = pricing
+        && let Some(uncached) = cached
+            .checked_add(written)
+            .and_then(|used| input.checked_sub(used))
+    {
+        let input_cost =
+            uncached as f64 + cached as f64 * CACHED_INPUT_RATE + written as f64 * CACHE_WRITE_RATE;
+        usage["cost"] = json!(input_cost * input_rate + output as f64 * output_rate);
     }
     usage
 }
