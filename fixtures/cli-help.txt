@@ -120,9 +120,9 @@ Options:
                                         false)
   --partial <mode>                      Multi-model failure policy (fail | ok).
                                         (choices: "fail", "ok")
-  --base-url <url>                      Override the OpenAI-compatible base URL
-                                        for API runs (e.g. LiteLLM proxy
-                                        endpoint).
+  --base-url <url>                      Override the OpenAI API base URL for
+                                        API runs (an api.openai.com host; other
+                                        URLs are refused).
   --provider <provider>                 Choose API provider routing: auto,
                                         openai, or azure. Use openai to ignore
                                         Azure env/config. (choices: "auto",

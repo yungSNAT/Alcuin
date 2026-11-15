@@ -103,7 +103,7 @@ alcuin --engine browser --browser-manual-login --browser-keep-browser -p "Reply 
 
 Then run consultations with `--engine browser`. Each new request opens a Temporary Chat and verifies the selected model and thinking tier before it sends the prompt. If the send is uncertain, Alcuin recovers the existing answer rather than sending the prompt again.
 
-**API.** Set `OPENAI_API_KEY` (optionally `OPENAI_BASE_URL`), or `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`, then run with `--engine api`. Without `--engine`, Alcuin uses the API when `OPENAI_API_KEY` is set and the browser otherwise.
+**API.** Set `OPENAI_API_KEY` (optionally `OPENAI_BASE_URL`, for an `api.openai.com` host; Alcuin refuses an API run through any other base URL, such as a proxy), or `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT`, then run with `--engine api`. Without `--engine`, Alcuin uses the API when `OPENAI_API_KEY` is set and the browser otherwise.
 
 **Sessions.** `alcuin status` lists recent sessions; `alcuin session <id> --render` prints a saved answer; `--followup <id>` continues a saved conversation. An answer that may be cut short is saved as `partial`, and a foreground run then exits 1; `--browser-end-marker` makes that check exact ([Partial answers](docs/sessions.md#partial-answers)).
 
