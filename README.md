@@ -15,7 +15,7 @@
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
-Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [MCP setup](docs/mcp.md) · [Coding agents](docs/agents.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
+Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [CLI reference](docs/cli-reference.md) · [MCP setup](docs/mcp.md) · [MCP tool reference](docs/mcp-tools.md) · [Coding agents](docs/agents.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
 
 </div>
 
@@ -113,7 +113,7 @@ Then run consultations with `--engine browser`. Each new request opens a Tempora
 
 **Remote browser.** `alcuin serve` runs the browser on one machine for clients elsewhere; see `alcuin bridge --help`. It listens on 127.0.0.1 unless you pass `--host`. Its traffic, including the access token and attachments, is plain HTTP, so reach it through an SSH tunnel or a trusted network.
 
-Run `alcuin --help --verbose` for every option.
+Run `alcuin --help --verbose` for every option, or see the [CLI reference](docs/cli-reference.md).
 
 ## Settings and storage
 
