@@ -1022,3 +1022,72 @@ pub fn text_output(response: &Value) -> String {
     }
     parts.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GPT-6 Astra's standard rates per 1M tokens on https://platform.openai.com/docs/pricing,
+    /// read 15 November 2026: $10.00 input, $1.00 cached input, $12.50 for a 30-minute cache write
+    /// (the default retention) and $50.00 output.
+    #[test]
+    fn cached_and_written_input_tokens_take_their_published_rates() {
+        let pricing = model_settings("gpt-6-astra", &Value::Null).unwrap().pricing;
+        let cost = |details: Value| {
+            usage_summary(
+                &json!({"usage":{"input_tokens":1_000_000,"output_tokens":100_000,"input_tokens_details":details}}),
+                0,
+                pricing,
+            )["cost"]
+                .as_f64()
+        };
+        let close = |actual: Option<f64>, expected: f64| {
+            assert!(
+                actual.is_some_and(|actual| (actual - expected).abs() < 1e-9),
+                "{actual:?} != {expected}"
+            );
+        };
+        // 500,000 uncached at $10, 300,000 cached at $1, 200,000 written at $12.50, then output.
+        close(
+            cost(json!({"cached_tokens":300_000,"cache_write_tokens":200_000})),
+            5.0 + 0.3 + 2.5 + 5.0,
+        );
+        close(cost(json!({})), 10.0 + 5.0);
+        // A cache split larger than the input is inconsistent, so it is not priced, even when
+        // the counts would overflow.
+        assert_eq!(
+            cost(json!({"cached_tokens":900_000,"cache_write_tokens":200_000})),
+            None
+        );
+        assert_eq!(
+            usage_summary(
+                &json!({"usage":{"input_tokens":u64::MAX,"output_tokens":0,"input_tokens_details":{"cached_tokens":u64::MAX,"cache_write_tokens":1}}}),
+                0,
+                pricing,
+            )["cost"],
+            Value::Null
+        );
+        // Without usage, the estimated input is priced at the input rate.
+        close(
+            usage_summary(&json!({}), 1_000, pricing)["cost"].as_f64(),
+            0.01,
+        );
+        // A pricing override keeps the cache multiples: 500,000 uncached at $2, 300,000 cached at
+        // $0.20 and 200,000 written at $2.50 per 1M tokens, then 100,000 output at $8.
+        let overridden = model_settings(
+            "gpt-6-astra",
+            &json!({"modelOverrides":{"gpt-6-astra":{"pricing":{"inputPerToken":2e-6,"outputPerToken":8e-6}}}}),
+        )
+        .unwrap()
+        .pricing;
+        close(
+            usage_summary(
+                &json!({"usage":{"input_tokens":1_000_000,"output_tokens":100_000,"input_tokens_details":{"cached_tokens":300_000,"cache_write_tokens":200_000}}}),
+                0,
+                overridden,
+            )["cost"]
+                .as_f64(),
+            1.0 + 0.06 + 0.5 + 0.8,
+        );
+    }
+}
