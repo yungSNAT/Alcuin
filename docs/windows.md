@@ -32,7 +32,7 @@ alcuin bridge doctor | Select-String 'Config:'
 alcuin --engine browser --dry-run summary -p "Review the parser please" --file 'src/**/*.rs' '!src/**/*_test.rs'
 ```
 
-In `cmd.exe`, use double quotes. Single quotes are passed on as part of the pattern, which then matches nothing: Alcuin prints 'No files matched the provided --file patterns.' and exits 1. The same applies to `--agent "*"` in the README's skills command.
+In `cmd.exe`, use double quotes. Single quotes are passed on as part of the pattern, which then matches nothing: Alcuin prints 'No files matched the provided --file patterns.' and exits 1. The same applies to the quoted `*` in the README's skills command.
 
 ## Notifications
 

@@ -100,18 +100,19 @@ fn command_path(line: &str, name: &str) -> Option<String> {
         .map(str::trim_start)
         .unwrap_or(trimmed);
     let tokens: Vec<_> = trimmed.split_whitespace().collect();
-    if !(trimmed.starts_with(&format!("{name} "))
-        || trimmed.starts_with("oracle ")
-        || matches!(
-            tokens.first(),
-            Some(&"npx" | &"npm" | &"pnpm" | &"corepack")
-        ))
-    {
+    let runner = matches!(
+        tokens.first(),
+        Some(&"npx" | &"npm" | &"pnpm" | &"corepack")
+    );
+    if !(trimmed.starts_with(&format!("{name} ")) || trimmed.starts_with("oracle ") || runner) {
         return None;
     }
-    let index = tokens
-        .iter()
-        .position(|token| *token == name || matches!(*token, "oracle" | "@steipete/oracle"))?;
+    // Under a package runner the binary is the program it runs (`npx alcuin`, `pnpm exec
+    // alcuin`); in `npx skills add ... --skill alcuin` it is another tool's argument.
+    let index = tokens.iter().enumerate().position(|(at, token)| {
+        matches!(*token, "oracle" | "@steipete/oracle")
+            || *token == name && (!runner || at == 1 || tokens[at - 1] == "exec")
+    })?;
     let mut path = vec![name];
     for token in &tokens[index + 1..] {
         let bytes = token.as_bytes();
