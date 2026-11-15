@@ -41,6 +41,9 @@ main() {
 
 	tmp="$(mktemp -d)"
 	trap 'rm -rf "$tmp"' EXIT
+	# A signal exits through the EXIT trap, which cleans up and, between the renames below,
+	# puts the old binaries back.
+	trap 'exit 1' HUP INT TERM
 	curl -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "could not download $base/$name.tar.gz"
 	curl -fsSL "$base/$name.tar.gz.sha256" -o "$tmp/$name.tar.gz.sha256" || fail "could not download $base/$name.tar.gz.sha256"
 	expected="$(cut -d ' ' -f 1 "$tmp/$name.tar.gz.sha256")"
@@ -53,19 +56,12 @@ main() {
 	mkdir -p "$dir"
 	# Both binaries are copied beside their targets, and the old ones linked aside, before either
 	# is replaced, so a failed copy leaves the old pair in place. A rename then replaces each, even
-	# one that is running, such as an MCP client's alcuin-mcp; if the second fails, the first old
-	# one is put back.
+	# one that is running, such as an MCP client's alcuin-mcp; if the second fails, or a signal
+	# stops the script between them, the first old one is put back.
 	keep_old=
-	trap 'rm -rf "$tmp"; rm -f "$dir/.alcuin.new" "$dir/.alcuin-mcp.new"; [ -n "$keep_old" ] || rm -f "$dir/.alcuin.old" "$dir/.alcuin-mcp.old"' EXIT
-	for bin in alcuin alcuin-mcp; do
-		cp "$tmp/$name/$bin" "$dir/.$bin.new" || fail "could not write to $dir; nothing was installed."
-		chmod 755 "$dir/.$bin.new"
-		if [ -f "$dir/$bin" ]; then
-			ln -f "$dir/$bin" "$dir/.$bin.old" 2>/dev/null || cp -p "$dir/$bin" "$dir/.$bin.old" ||
-				fail "could not keep a copy of $dir/$bin; nothing was installed."
-		fi
-	done
-	if ! { mv -f "$dir/.alcuin.new" "$dir/alcuin" && mv -f "$dir/.alcuin-mcp.new" "$dir/alcuin-mcp"; }; then
+	renaming=
+	restore() {
+		renaming=
 		for bin in alcuin alcuin-mcp; do
 			if [ -f "$dir/.$bin.old" ]; then
 				# Still the old one when its own rename never ran.
@@ -78,8 +74,22 @@ main() {
 				rm -f "$dir/$bin"
 			fi
 		done
+	}
+	trap '[ -z "$renaming" ] || restore; rm -rf "$tmp"; rm -f "$dir/.alcuin.new" "$dir/.alcuin-mcp.new"; [ -n "$keep_old" ] || rm -f "$dir/.alcuin.old" "$dir/.alcuin-mcp.old"' EXIT
+	for bin in alcuin alcuin-mcp; do
+		cp "$tmp/$name/$bin" "$dir/.$bin.new" || fail "could not write to $dir; nothing was installed."
+		chmod 755 "$dir/.$bin.new"
+		if [ -f "$dir/$bin" ]; then
+			ln -f "$dir/$bin" "$dir/.$bin.old" 2>/dev/null || cp -p "$dir/$bin" "$dir/.$bin.old" ||
+				fail "could not keep a copy of $dir/$bin; nothing was installed."
+		fi
+	done
+	renaming=1
+	if ! { mv -f "$dir/.alcuin.new" "$dir/alcuin" && mv -f "$dir/.alcuin-mcp.new" "$dir/alcuin-mcp"; }; then
+		restore
 		fail "could not replace the binaries in $dir; the old ones were put back."
 	fi
+	renaming=
 	echo "Installed alcuin $installed and alcuin-mcp in $dir."
 	case ":$PATH:" in
 	*":$dir:"*) ;;
