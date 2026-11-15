@@ -5098,6 +5098,36 @@ async fn a_read_still_pending_at_the_observation_deadline_keeps_the_provider_fai
     );
     stop(f).await;
 }
+/// The fresh tab check after a pending read still enforces the run's authority: a session another
+/// process ended whilst the read was pending ends the observation with that failure, so it neither
+/// expires nor keeps the provider failure.
+#[tokio::test]
+async fn a_read_pending_at_the_deadline_still_ends_on_lost_authority() {
+    let f = fixture(Fault::ResponseLoadFailed, false).await;
+    let (store, id) = (f.store.clone(), f.id.clone());
+    super::read_recovery::TEST_DURING_OBSERVATION_READ.set(Some(Box::new(move || {
+        store
+            .update(&id, |_| Ok(Some(json!({"status":"cancelled"}))))
+            .unwrap();
+    })));
+    super::read_recovery::TEST_OBSERVATION_READ_DELAY
+        .set(limits().commit + Duration::from_millis(500));
+    let error = run(&f).await.unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<crate::browser_provider::Failure>()
+            .is_none()
+            && format!("{error:#}").contains(
+                "Original-target observation lost its request, dispatch or target authority"
+            ),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.store.require(&f.id).unwrap()["browser"]["runtime"]["providerReadRecovery"]["state"],
+        "observing"
+    );
+    stop(f).await;
+}
 #[tokio::test]
 async fn response_load_error_is_not_captured_and_retains_the_committed_target() {
     let f = fixture(Fault::ResponseLoadFailed, false).await;
