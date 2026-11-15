@@ -10,7 +10,7 @@ The skill tells an agent when to consult, how to preview and send, how to read a
 npx skills add yungSNAT/Alcuin --skill alcuin --global --agent "*" --yes
 ```
 
-It lands in `~/.agents/skills/alcuin`, linked into each agent's own skills folder. Without `--global` it goes into the current project's `.agents/skills/alcuin` instead, for the agents you name:
+It lands in `~/.agents/skills/alcuin`, linked into each agent's own skills folder. For one project only, drop the global option: the skill then goes into the current project's `.agents/skills/alcuin`, for the agents you name:
 
 ```sh
 npx skills add yungSNAT/Alcuin --skill alcuin --agent claude-code codex --yes
