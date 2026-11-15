@@ -10,6 +10,10 @@ thread_local! {
     /// Delays this thread's next observation read once, as a slow page would.
     pub(super) static TEST_OBSERVATION_READ_DELAY: std::cell::Cell<Duration> =
         const { std::cell::Cell::new(Duration::ZERO) };
+    /// Runs once as this thread's next observation read starts, as another process would act
+    /// whilst the read is pending.
+    pub(super) static TEST_DURING_OBSERVATION_READ: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 pub(super) struct Budget {
@@ -140,7 +144,16 @@ impl Budget {
                 bounded.commit = reading;
                 bounded.answer = reading;
                 #[cfg(test)]
-                tokio::time::sleep(TEST_OBSERVATION_READ_DELAY.take()).await;
+                {
+                    if let Some(hook) = TEST_DURING_OBSERVATION_READ.take() {
+                        hook();
+                    }
+                    // A zero delay adds no scheduling point that production reads lack.
+                    let delay = TEST_OBSERVATION_READ_DELAY.take();
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
                 let result = read(bounded).await;
                 context.require(cancel)?;
                 result
