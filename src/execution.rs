@@ -4,9 +4,7 @@ use crate::{
     policy::{self, ThinkingTime},
     process::{Liveness, ProcessIdentity},
     prompts::{self, PromptFile},
-    providers::{
-        self, ApiTransport, HttpProvider, ResponseObserver, ResponseProvider, Route, Secret,
-    },
+    providers::{self, HttpProvider, ResponseObserver, ResponseProvider, Route, Secret},
     sessions::{self, SessionStore, merge_object, timestamp},
     storage::{DirectoryLock, atomic_json, private_dir},
 };
@@ -929,11 +927,7 @@ fn prepare_with_base(
             .is_none_or(|a| a.len() <= 1),
         "Rust multi-model dispatch is gated until fan-out and partial-result parity is qualified."
     );
-    // Alcuin API runs always use Pro reasoning, which the Chat Completions adapter refuses.
-    anyhow::ensure!(
-        route.transport == ApiTransport::Responses,
-        "--reasoning-mode requires the OpenAI or Azure OpenAI Responses API; OpenRouter and custom --base-url routes use the Chat Completions adapter."
-    );
+    providers::require_responses(&route)?;
     let length = crate::policy::trim(request.options["prompt"].as_str().unwrap_or(""))
         .encode_utf16()
         .count() as i64;

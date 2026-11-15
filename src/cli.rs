@@ -1635,13 +1635,14 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
     }
     if let Some(mode) = preview {
         if request.engine == "api" {
-            providers::resolve_route(
+            let (route, _) = providers::resolve_route(
                 request.options["model"]
                     .as_str()
                     .context("Missing preview model")?,
                 &request.options,
                 &env,
             )?;
+            providers::require_responses(&route)?;
             api_preview(&request)?;
         } else {
             let mut prompt = crate::browser_prompt::BrowserPrompt::assemble(
