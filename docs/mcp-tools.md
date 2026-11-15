@@ -20,7 +20,7 @@ Runs an Alcuin session through the API or ChatGPT in the browser. Only `prompt` 
 | `dryRun` | boolean | Preview the run without creating a session or opening the browser |
 | `search` | boolean | API only: turn the provider's search tool on or off |
 | `maxOutput` | integer | API only: the most output tokens, reasoning included, the run may produce |
-| `maxCost` | number | API only: refuse the run before sending if it could cost more than this many US dollars, as `--max-cost` does; a lower `maxCost` in the user's config still applies |
+| `maxCost` | number | API only: refuse the run before sending if its estimated worst-case cost is more than this many US dollars, as `--max-cost` does; a lower `maxCost` in the user's config still applies |
 | `browserThinkingTime` | string | `pro` (the default) or `extra-high` ([Browser runs](browser.md#model-and-thinking-level)) |
 | `browserModelStrategy` | `select`, `current` or `ignore` | As `--browser-model-strategy` |
 | `browserModelLabel` | string | A ChatGPT model label to select instead of the one `model` maps to |

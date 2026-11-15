@@ -76,7 +76,7 @@ A bare argument is the prompt, as `-p` gives it.
 | `--azure-endpoint <url>` | Azure OpenAI endpoint |
 | `--azure-deployment <name>` | Azure OpenAI deployment name |
 | `--azure-api-version <version>` | Azure OpenAI API version |
-| `--max-cost <dollars>` | Refuse an API run that could cost more than this many US dollars ([Configuration](configuration.md#a-spend-cap)); shown by `--help --verbose` |
+| `--max-cost <dollars>` | Refuse an API run whose estimated worst-case cost is more than this many US dollars ([Configuration](configuration.md#a-spend-cap)); shown by `--help --verbose` |
 
 ## Browser
 

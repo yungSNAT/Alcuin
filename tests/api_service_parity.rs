@@ -632,11 +632,11 @@ fn a_spend_cap_admits_only_a_run_whose_worst_case_cost_it_can_bound() {
     admitted.unwrap();
     assert_eq!(sessions, 1);
     for (input, config, refusal) in [
-        // 100,000 output tokens could cost $5.
+        // 100,000 output tokens alone are $5 at worst.
         (
             json!({"maxOutput":100_000}),
             json!({}),
-            "could cost up to $5.0",
+            "estimated worst-case cost is $5.0",
         ),
         // The config's cap holds even when the run asks for a higher one.
         (
@@ -702,7 +702,10 @@ fn the_cli_refuses_a_capped_run_it_cannot_bound_before_creating_a_session() {
         .unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("could cost up to $1.0"), "{stderr}");
+    assert!(
+        stderr.contains("estimated worst-case cost is $1.0"),
+        "{stderr}"
+    );
     assert!(stderr.contains("over --max-cost $0.5"), "{stderr}");
     let sessions = SessionStore::new(home.path()).list(true).unwrap();
     assert!(sessions.is_empty(), "{sessions:?}");

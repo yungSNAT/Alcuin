@@ -174,7 +174,7 @@ fn spend_cap(input: &Value, config: &Value) -> Result<Option<f64>> {
     }
     Ok(cap)
 }
-/// Refuses an API run that could cost more than `cap` dollars: its input at the cache-write rate,
+/// Refuses an API run whose estimated worst-case cost is over `cap` dollars: its input at the cache-write rate,
 /// the highest input is billed at, plus `--max-output` (which includes reasoning) at the output
 /// rate. A follow-up or web search adds charges this cannot count, so it is refused instead.
 /// shortcut: the input is Alcuin's own token estimate of the request, not the provider's count.
@@ -197,7 +197,7 @@ fn admit_spend(options: &Value, input: usize, pricing: Option<(f64, f64)>, cap: 
         input as f64 * input_rate * providers::CACHE_WRITE_RATE + output as f64 * output_rate;
     ensure!(
         worst <= cap,
-        "This run could cost up to ${worst:.4}, over --max-cost ${cap}. Lower --max-output or attach less."
+        "This run's estimated worst-case cost is ${worst:.4}, over --max-cost ${cap}. Lower --max-output or attach less."
     );
     Ok(())
 }

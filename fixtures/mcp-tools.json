@@ -143,7 +143,7 @@
             "minimum": 1
           },
           "maxCost": {
-            "description": "API-only: refuse the run before sending if it could cost more than this many US dollars. Needs maxOutput and search false. A lower maxCost in the user's config still applies.",
+            "description": "API-only: refuse the run before sending if its estimated worst-case cost is more than this many US dollars. Needs maxOutput and search false. A lower maxCost in the user's config still applies.",
             "type": "number",
             "exclusiveMinimum": 0
           },
