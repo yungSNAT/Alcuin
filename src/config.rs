@@ -194,6 +194,187 @@ pub struct LoadedConfig {
     pub paths: Vec<PathBuf>,
     pub warnings: Vec<String>,
 }
+/// The account running Alcuin. Another account can write a shared ancestor of the working
+/// directory, such as /tmp or a drive root, so project files come only from what this account owns.
+struct Account {
+    /// The account's own home, which a changed HOME or USERPROFILE does not move.
+    home: Option<PathBuf>,
+    /// The process token's TOKEN_USER, in a buffer aligned for it.
+    #[cfg(windows)]
+    user: Option<Vec<u64>>,
+}
+impl Account {
+    #[cfg(unix)]
+    fn current() -> Self {
+        use std::os::unix::ffi::OsStrExt;
+        let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+        // SAFETY: an all-zero passwd is a valid out-parameter for getpwuid_r.
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found = std::ptr::null_mut();
+        // SAFETY: entry, buffer and found outlive the call; pw_dir points into buffer, which
+        // outlives the copy taken here.
+        let home = unsafe {
+            (libc::getpwuid_r(
+                libc::geteuid(),
+                &mut entry,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut found,
+            ) == 0
+                && !found.is_null()
+                && !entry.pw_dir.is_null())
+            .then(|| {
+                PathBuf::from(std::ffi::OsStr::from_bytes(
+                    std::ffi::CStr::from_ptr(entry.pw_dir).to_bytes(),
+                ))
+            })
+        };
+        Self { home }
+    }
+    #[cfg(windows)]
+    fn current() -> Self {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            Security::{GetTokenInformation, TOKEN_QUERY, TokenUser},
+            System::Threading::{GetCurrentProcess, OpenProcessToken},
+            UI::Shell::GetUserProfileDirectoryW,
+        };
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: the pseudo-handle needs no closing; token is a valid out-pointer.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return Self {
+                home: None,
+                user: None,
+            };
+        }
+        let mut user = vec![0u64; 64];
+        let mut size = 0u32;
+        // SAFETY: the buffer holds the 512 bytes passed, enough for TOKEN_USER and any SID.
+        let user = (unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                user.as_mut_ptr().cast(),
+                (user.len() * 8) as u32,
+                &mut size,
+            )
+        } != 0)
+            .then_some(user);
+        let mut home = vec![0u16; 1024];
+        let mut length = home.len() as u32;
+        // SAFETY: length gives the buffer's capacity in UTF-16 units; on success it holds the
+        // count written, including the terminating zero.
+        let home = (unsafe { GetUserProfileDirectoryW(token, home.as_mut_ptr(), &mut length) }
+            != 0)
+            .then(|| {
+                let end = home
+                    .iter()
+                    .position(|unit| *unit == 0)
+                    .unwrap_or(home.len());
+                PathBuf::from(std::ffi::OsString::from_wide(&home[..end]))
+            });
+        // SAFETY: token came from OpenProcessToken above and is closed once.
+        unsafe { CloseHandle(token) };
+        Self { home, user }
+    }
+    #[cfg(unix)]
+    fn owns(&self, file: &fs::File) -> bool {
+        file.metadata().is_ok_and(|metadata| Self::owned(&metadata))
+    }
+    #[cfg(unix)]
+    fn owned(metadata: &fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid has no preconditions.
+        metadata.uid() == unsafe { libc::geteuid() }
+    }
+    /// Owned by this account's user, or by the Administrators group when this process is an
+    /// elevated administrator, whose new files Windows gives that group (as Git for Windows treats
+    /// them).
+    #[cfg(windows)]
+    fn owns(&self, file: &fs::File) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::{
+            Foundation::{ERROR_SUCCESS, LocalFree},
+            Security::{
+                Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+                CheckTokenMembership, EqualSid, IsWellKnownSid, OWNER_SECURITY_INFORMATION,
+                TOKEN_USER, WinBuiltinAdministratorsSid,
+            },
+        };
+        let Some(user) = &self.user else {
+            return false;
+        };
+        let (mut owner, mut descriptor) = (std::ptr::null_mut(), std::ptr::null_mut());
+        // SAFETY: the handle is open for the call and the out-pointers are valid locals.
+        if unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        } != ERROR_SUCCESS
+        {
+            return false;
+        }
+        let mut member = 0;
+        // SAFETY: user holds the TOKEN_USER that GetTokenInformation wrote; owner points into
+        // descriptor, which is freed once, after its last use. A volume without security, such
+        // as FAT, reports no owner, which counts as not owned.
+        unsafe {
+            let sid = (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid;
+            let owned = !owner.is_null()
+                && (EqualSid(owner, sid) != 0
+                    || (IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
+                        && CheckTokenMembership(std::ptr::null_mut(), owner, &mut member) != 0
+                        && member != 0));
+            LocalFree(descriptor);
+            owned
+        }
+    }
+    /// Read from the path, not an open handle: opening a directory needs leave to list it, which
+    /// its owner may have withdrawn.
+    #[cfg(unix)]
+    fn owns_directory(&self, directory: &Path) -> bool {
+        fs::metadata(directory).is_ok_and(|metadata| Self::owned(&metadata))
+    }
+    #[cfg(windows)]
+    fn owns_directory(&self, directory: &Path) -> bool {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, READ_CONTROL};
+        fs::OpenOptions::new()
+            .access_mode(READ_CONTROL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(directory)
+            .is_ok_and(|directory| self.owns(&directory))
+    }
+    /// Each directory's project file, nearest first: from the working directory up to, but not
+    /// including, the user's home or the first directory this account does not own. A home is
+    /// matched by name and by where it resolves, so a link to it stops the walk too.
+    fn project_candidates(&self, cwd: &Path, user_home: Option<&Path>) -> Vec<PathBuf> {
+        let homes: Vec<_> = [user_home, self.home.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let resolved: Vec<_> = homes
+            .iter()
+            .filter_map(|home| fs::canonicalize(home).ok())
+            .collect();
+        cwd.ancestors()
+            .take_while(|directory| {
+                !homes.contains(directory)
+                    && fs::canonicalize(directory).map_or(true, |real| !resolved.contains(&real))
+                    && self.owns_directory(directory)
+            })
+            .map(|directory| directory.join(".oracle/config.json"))
+            .collect()
+    }
+}
 pub fn load(
     home: &Path,
     cwd: &Path,
@@ -202,17 +383,14 @@ pub fn load(
 ) -> LoadedConfig {
     let user = home.join("config.json");
     let mut paths = vec![(user.clone(), false)];
-    if include_project {
-        let mut projects = vec![];
-        for directory in cwd.ancestors() {
-            if Some(directory) == user_home {
-                break;
-            }
-            let path = directory.join(".oracle/config.json");
-            if path != user {
-                projects.push((path, true));
-            }
-        }
+    let account = include_project.then(Account::current);
+    if let Some(account) = &account {
+        let mut projects: Vec<_> = account
+            .project_candidates(cwd, user_home)
+            .into_iter()
+            .filter(|path| *path != user)
+            .map(|path| (path, true))
+            .collect();
         projects.reverse();
         paths.extend(projects);
     }
@@ -237,7 +415,26 @@ pub fn load(
                 }
             }
         }
-        match fs::read_to_string(&path) {
+        // A project file is read through the handle whose owner was checked, so it cannot be
+        // swapped for another account's file between the check and the read.
+        let read = if project {
+            match fs::File::open(&path) {
+                Ok(file) if !account.as_ref().is_some_and(|account| account.owns(&file)) => {
+                    result.warnings.push(format!(
+                        "Failed to read {}: owned by another account",
+                        path.display()
+                    ));
+                    continue;
+                }
+                opened => opened.and_then(|mut file| {
+                    let mut raw = String::new();
+                    std::io::Read::read_to_string(&mut file, &mut raw).map(|_| raw)
+                }),
+            }
+        } else {
+            fs::read_to_string(&path)
+        };
+        match read {
             Ok(raw) => match json5::from_str::<Value>(&raw) {
                 Ok(value) => {
                     if value.is_object() {
@@ -342,5 +539,68 @@ pub fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
             }
             Err(error) => return Err(error.into()),
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn the_account_owns_what_it_creates_and_not_system_files() {
+        let account = Account::current();
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("PUBLIC.json");
+        fs::write(&file, "{}").unwrap();
+        assert!(account.owns(&fs::File::open(&file).unwrap()));
+        assert!(account.owns_directory(root.path()));
+        #[cfg(unix)]
+        let (system_file, system_directory) = (PathBuf::from("/etc/passwd"), PathBuf::from("/"));
+        #[cfg(windows)]
+        let (system_file, system_directory) = {
+            let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+            (system.join("kernel32.dll"), system)
+        };
+        #[cfg(unix)]
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // Root owns the system files too.
+        }
+        assert!(!account.owns(&fs::File::open(&system_file).unwrap()));
+        assert!(!account.owns_directory(&system_directory));
+    }
+    #[test]
+    fn the_walk_stops_before_the_accounts_own_home() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let cwd = home.join("project");
+        fs::create_dir_all(&cwd).unwrap();
+        let mut account = Account::current();
+        account.home = Some(home);
+        assert_eq!(
+            account.project_candidates(&cwd, None),
+            [cwd.join(".oracle/config.json")]
+        );
+        assert!(account.project_candidates(&cwd, Some(&cwd)).is_empty());
+    }
+    /// A working directory reached through a link to the home stops there too.
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_stops_at_the_home_under_another_name() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        fs::create_dir_all(home.join("project")).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        let cwd = alias.join("project");
+        let mut account = Account::current();
+        account.home = Some(home.clone());
+        assert_eq!(
+            account.project_candidates(&cwd, None),
+            [cwd.join(".oracle/config.json")]
+        );
+        account.home = None;
+        assert_eq!(
+            account.project_candidates(&cwd, Some(&home)),
+            [cwd.join(".oracle/config.json")]
+        );
     }
 }
