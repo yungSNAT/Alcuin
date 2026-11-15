@@ -58,6 +58,7 @@ const SAVED_OPTIONS: &[&str] = &[
     "writeArtifacts",
     "followupSessionId",
     "followupModel",
+    "maxCost",
 ];
 
 fn saved_request(

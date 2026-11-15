@@ -398,7 +398,7 @@ pub fn model_settings(model: &str, options: &Value) -> Result<ModelSettings> {
 /// November 2026). Requests set no cache retention, so writes take the default 30-minute rate. For
 /// GPT-6 Astra these give the $1.00 and $12.50 per 1M tokens its pricing page lists.
 const CACHED_INPUT_RATE: f64 = 0.1;
-const CACHE_WRITE_RATE: f64 = 1.25;
+pub(crate) const CACHE_WRITE_RATE: f64 = 1.25;
 pub fn usage_summary(response: &Value, estimated_input: u64, pricing: Option<(f64, f64)>) -> Value {
     let input = response["usage"]["input_tokens"]
         .as_u64()

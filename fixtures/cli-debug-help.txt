@@ -3,6 +3,7 @@ Advanced Options
   --search <on|off>      Enable or disable the server-side search tool (default on).
   --max-input <tokens>   Override the input token budget.
   --max-output <tokens>  Override the max output tokens (model default otherwise).
+  --max-cost <dollars>   Refuse an API run whose estimated worst-case cost is more (needs --max-output and --search off).
 
 Browser Options
   --chatgpt-url <url>                          Override the ChatGPT web URL (workspace/folder targets).
