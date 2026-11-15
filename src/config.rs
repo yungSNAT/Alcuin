@@ -569,4 +569,26 @@ mod tests {
         );
         assert!(account.project_candidates(&cwd, Some(&cwd)).is_empty());
     }
+    /// A working directory reached through a link to the home stops there too.
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_stops_at_the_home_under_another_name() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        fs::create_dir_all(home.join("project")).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        let cwd = alias.join("project");
+        let mut account = Account::current();
+        account.home = Some(home.clone());
+        assert_eq!(
+            account.project_candidates(&cwd, None),
+            [cwd.join(".oracle/config.json")]
+        );
+        account.home = None;
+        assert_eq!(
+            account.project_candidates(&cwd, Some(&home)),
+            [cwd.join(".oracle/config.json")]
+        );
+    }
 }

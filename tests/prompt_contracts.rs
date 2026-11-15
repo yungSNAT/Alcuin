@@ -249,6 +249,12 @@ fn project_config_comes_only_from_directories_and_files_this_account_owns() {
     fs::write(&config, "{browser:{timeoutMs:20}}").unwrap();
     let loaded = config::load(&home, &project.join("inner"), None, true);
     assert!(loaded.paths.contains(&config), "{:?}", loaded.paths);
+    // A directory this account owns but may not list is still its own.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o311)).unwrap();
+    let loaded = config::load(&home, &project.join("inner"), None, true);
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(loaded.paths.contains(&config), "{:?}", loaded.paths);
     // Inside a directory another account owns, nothing above it is read.
     symlink("/", project.join("shared")).unwrap();
     let loaded = config::load(&home, &project.join("shared"), None, true);
