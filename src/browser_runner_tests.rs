@@ -5098,18 +5098,27 @@ async fn a_read_still_pending_at_the_observation_deadline_keeps_the_provider_fai
     );
     stop(f).await;
 }
-/// The fresh tab check after a pending read still enforces the run's authority: a session another
-/// process ended whilst the read was pending ends the observation with that failure, so it neither
-/// expires nor keeps the provider failure.
+/// A read still pending at the deadline proves nothing about the tab, so the tab is checked again
+/// before the observation expires: Temporary Chat lost whilst the read was pending ends the
+/// observation with that failure, so it neither expires nor keeps the provider failure.
 #[tokio::test]
-async fn a_read_pending_at_the_deadline_still_ends_on_lost_authority() {
-    let f = fixture(Fault::ResponseLoadFailed, false).await;
-    let (store, id) = (f.store.clone(), f.id.clone());
-    super::read_recovery::TEST_DURING_OBSERVATION_READ.set(Some(Box::new(move || {
-        store
-            .update(&id, |_| Ok(Some(json!({"status":"cancelled"}))))
-            .unwrap();
-    })));
+async fn a_read_pending_at_the_deadline_still_ends_on_lost_privacy() {
+    // The fixture leaves Temporary Chat once the stored observation has version 1. The stored
+    // version is hidden for the tab check before the read and restored whilst the read is pending.
+    let f = fixture(Fault::ProviderRecoveryPrivacy, false).await;
+    let version = |version: u8| {
+        let (store, id) = (f.store.clone(), f.id.clone());
+        move || {
+            store
+                .update(&id, |_| {
+                    Ok(Some(json!({"browser":{"runtime":{
+                        "providerReadRecovery":{"version":version}}}})))
+                })
+                .unwrap();
+        }
+    };
+    super::read_recovery::TEST_BEFORE_OBSERVATION_READ.set(Some(Box::new(version(0))));
+    super::read_recovery::TEST_DURING_OBSERVATION_READ.set(Some(Box::new(version(1))));
     super::read_recovery::TEST_OBSERVATION_READ_DELAY
         .set(limits().commit + Duration::from_millis(500));
     let error = run(&f).await.unwrap_err();
@@ -5117,9 +5126,7 @@ async fn a_read_pending_at_the_deadline_still_ends_on_lost_authority() {
         error
             .downcast_ref::<crate::browser_provider::Failure>()
             .is_none()
-            && format!("{error:#}").contains(
-                "Original-target observation lost its request, dispatch or target authority"
-            ),
+            && format!("{error:#}").contains("PUBLIC fake privacy reason"),
         "{error:#}"
     );
     assert_eq!(
