@@ -5060,12 +5060,11 @@ async fn a_tab_check_that_fails_within_its_command_budget_ends_the_run() {
             }))
             .unwrap();
     })));
+    let started = std::time::Instant::now();
     let error = run(&f).await.unwrap_err();
+    // The check waited out its own budget, not what was left of the observation.
+    assert!(started.elapsed() >= limits().command, "{error:#}");
     holder.recv().unwrap().join().unwrap();
-    assert!(
-        format!("{error:#}").contains("Timed out waiting for Alcuin directory lock"),
-        "{error:#}"
-    );
     assert!(
         error
             .downcast_ref::<crate::browser_provider::Failure>()
@@ -6032,7 +6031,7 @@ async fn sequential_browser_refuses_unknown_or_ordinary_chat_without_another_gua
     };
     for fault in [Fault::SequentialPrivacyUnknown, Fault::SequentialPrivacyOff] {
         let f = fixture(fault, false).await;
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         let error = run_within(&f, &limits).await.unwrap_err();
         let elapsed = started.elapsed();
         // The refusal names the predicate's reason, and for unknown that it waited.
@@ -9494,7 +9493,7 @@ async fn cancelled_send_settles_then_closes_its_own_tab_and_frees_the_slot_witho
         ),
     ] {
         let f = fixture(fault, false).await;
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         assert!(run(&f).await.is_err(), "{fault:?}");
         let meta = f.store.require(&f.id).unwrap();
         assert_eq!(meta["status"], "cancelled", "{fault:?}");
