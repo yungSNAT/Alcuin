@@ -1744,7 +1744,8 @@ pub(crate) async fn launch_detached_owned(
     executable: &Path,
     env: &Environment,
 ) -> Result<ProcessIdentity> {
-    launch_detached_with_bootstrap(store, id, executable, env, None).await
+    let trace = crate::perf::detached_value(env.get("ORACLE_PERF_TRACE").map(String::as_str), id);
+    launch_detached_with_bootstrap(store, id, executable, env, None, trace).await
 }
 pub(crate) async fn launch_detached_with_bootstrap(
     store: &SessionStore,
@@ -1752,6 +1753,7 @@ pub(crate) async fn launch_detached_with_bootstrap(
     executable: &Path,
     env: &Environment,
     bootstrap: Option<&crate::browser_auth::CookieBootstrap>,
+    trace: Option<String>,
 ) -> Result<ProcessIdentity> {
     use tokio::io::AsyncWriteExt;
     sessions::assert_id(id)?;
@@ -1796,10 +1798,9 @@ pub(crate) async fn launch_detached_with_bootstrap(
     command
         .env("ORACLE_HOME_DIR", store.home())
         .env("ORACLE_DETACHED_START_GATE", "1");
-    // Reference buildDetachedPerfTraceEnv: the worker writes its own trace beside the caller's.
-    if let Some(trace) =
-        crate::perf::detached_value(env.get("ORACLE_PERF_TRACE").map(String::as_str), id)
-    {
+    // The caller derives the worker's trace (reference buildDetachedPerfTraceEnv), as only the
+    // CLI may take it from the process-wide trace.
+    if let Some(trace) = trace {
         command.env("ORACLE_PERF_TRACE", trace);
     }
     let mut child = tokio::process::Command::from(command).spawn()?;

@@ -441,6 +441,10 @@ pub(crate) async fn run(
             &std::env::current_exe()?,
             environment,
             request.cookie_bootstrap.as_ref(),
+            crate::perf::detached_value(
+                environment.get("ORACLE_PERF_TRACE").map(String::as_str),
+                id,
+            ),
         )
         .await
         {
