@@ -1318,6 +1318,15 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
             input[target] = json!(n);
         }
     }
+    if let Some(value) = text(&matches, "max-cost") {
+        let dollars = value
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|dollars| dollars.is_finite() && *dollars > 0.0)
+            .context("max-cost must be a positive number of dollars")?;
+        input["maxCost"] = json!(dollars);
+    }
     if let Some(value) = text(&matches, "http-timeout") {
         input["httpTimeoutMs"] = json!(duration_option(value, "HTTP timeout")?);
     }
@@ -2032,6 +2041,7 @@ const ROOT_RUN_FLAGS: &[&str] = &[
     "search",
     "max-input",
     "max-output",
+    "max-cost",
     "max-file-size-bytes",
     "base-url",
     "provider",

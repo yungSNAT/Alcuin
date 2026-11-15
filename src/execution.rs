@@ -158,6 +158,49 @@ pub fn resolve_mcp(
 ) -> Result<ResolvedRequest> {
     resolve_origin(input, config, env, cwd, true)
 }
+/// The lower of the run's `maxCost` and the config's, so a caller can tighten the user's cap but
+/// not lift it.
+fn spend_cap(input: &Value, config: &Value) -> Result<Option<f64>> {
+    let mut cap: Option<f64> = None;
+    for value in [&input["maxCost"], &config["maxCost"]] {
+        if value.is_null() {
+            continue;
+        }
+        let dollars = value
+            .as_f64()
+            .filter(|dollars| dollars.is_finite() && *dollars > 0.0)
+            .context("maxCost must be a positive number of dollars")?;
+        cap = Some(cap.map_or(dollars, |cap| cap.min(dollars)));
+    }
+    Ok(cap)
+}
+/// Refuses an API run that could cost more than `cap` dollars: its input at the cache-write rate,
+/// the highest input is billed at, plus `--max-output` (which includes reasoning) at the output
+/// rate. A follow-up or web search adds charges this cannot count, so it is refused instead.
+/// shortcut: the input is Alcuin's own token estimate of the request, not the provider's count.
+fn admit_spend(options: &Value, input: usize, pricing: Option<(f64, f64)>, cap: f64) -> Result<()> {
+    ensure!(
+        options.get("previousResponseId").is_none(),
+        "--max-cost cannot bound a follow-up, as the earlier conversation is billed again without being counted. Run it without --max-cost."
+    );
+    ensure!(
+        options["search"] == false,
+        "--max-cost cannot bound web search charges. Add --search off."
+    );
+    let output = options["maxOutput"]
+        .as_u64()
+        .context("--max-cost needs --max-output <tokens> to bound the answer and its reasoning.")?;
+    let (input_rate, output_rate) = pricing.context(
+        "--max-cost needs this model's pricing, and its pricing override has no pricing.",
+    )?;
+    let worst =
+        input as f64 * input_rate * providers::CACHE_WRITE_RATE + output as f64 * output_rate;
+    ensure!(
+        worst <= cap,
+        "This run could cost up to ${worst:.4}, over --max-cost ${cap}. Lower --max-output or attach less."
+    );
+    Ok(())
+}
 /// Over the input budget, as the reference PromptValidationError; the CLI adds the file report.
 #[derive(Debug)]
 pub struct InputTooLarge(pub String);
@@ -405,6 +448,9 @@ fn resolve_origin(
         if let Some(value) = input.get(key) {
             options[key] = value.clone();
         }
+    }
+    if let Some(cap) = spend_cap(input, config)? {
+        options["maxCost"] = json!(cap);
     }
     if options.get("baseUrl").is_none()
         && let Some(value) = config.get("apiBaseUrl")
@@ -919,6 +965,9 @@ fn prepare_with_base(
             crate::cli::grouped(budget)
         ))
         .into());
+    }
+    if let Some(cap) = request.options["maxCost"].as_f64() {
+        admit_spend(&request.options, estimate, settings.pricing, cap)?;
     }
     private_dir(store.home())?;
     let admission = DirectoryLock::acquire(

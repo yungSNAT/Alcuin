@@ -156,6 +156,9 @@
     "flags": "--max-output <tokens>"
   },
   {
+    "flags": "--max-cost <dollars>"
+  },
+  {
     "flags": "--base-url <url>"
   },
   {

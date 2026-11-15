@@ -137,6 +137,16 @@
             "description": "API-only: enable/disable the provider search tool (browser engine ignores this).",
             "type": "boolean"
           },
+          "maxOutput": {
+            "description": "API-only: the most output tokens, reasoning included, the run may produce.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxCost": {
+            "description": "API-only: refuse the run before sending if it could cost more than this many US dollars. Needs maxOutput and search false. A lower maxCost in the user's config still applies.",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
           "slug": {
             "description": "Optional human-friendly session id (used later with `alcuin session <id>`).",
             "type": "string"
