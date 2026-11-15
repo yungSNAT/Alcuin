@@ -176,6 +176,8 @@ fn guides_name_only_real_commands_and_flags() {
         "configuration",
         "browser",
         "files",
+        "remote",
+        "exit-codes",
     ]
     .iter()
     .map(|guide| format!("docs/{guide}.md"))

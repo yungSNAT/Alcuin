@@ -20,7 +20,7 @@ A flag always wins. For the engine, the file size limit and notifications, an en
 | Desktop notification | `--notify`, `--no-notify` | `ORACLE_NOTIFY` | `notify.enabled` |
 | Notification sound | `--notify-sound`, `--no-notify-sound` | `ORACLE_NOTIFY_SOUND` | `notify.sound` |
 
-These take the config file before the environment: `browser.maxConcurrentTabs` before `ORACLE_BROWSER_MAX_CONCURRENT_TABS`, `browser.manualLoginProfileDir` before `ORACLE_BROWSER_PROFILE_DIR`, and `browser.remoteHost` and `browser.remoteToken` before `ORACLE_REMOTE_HOST` and `ORACLE_REMOTE_TOKEN`.
+These take the config file before the environment: `browser.maxConcurrentTabs` before `ORACLE_BROWSER_MAX_CONCURRENT_TABS`, `browser.manualLoginProfileDir` before `ORACLE_BROWSER_PROFILE_DIR`, and `browser.remoteHost` and `browser.remoteToken` before `ORACLE_REMOTE_HOST` and `ORACLE_REMOTE_TOKEN` ([A browser on another machine](remote.md)).
 
 With no engine set anywhere, Alcuin uses the API when `OPENAI_API_KEY` or `OPENROUTER_API_KEY` is set and the browser otherwise.
 
