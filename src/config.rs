@@ -321,13 +321,15 @@ impl Account {
         }
         let mut member = 0;
         // SAFETY: user holds the TOKEN_USER that GetTokenInformation wrote; owner points into
-        // descriptor, which is freed once, after its last use.
+        // descriptor, which is freed once, after its last use. A volume without security, such
+        // as FAT, reports no owner, which counts as not owned.
         unsafe {
             let sid = (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid;
-            let owned = EqualSid(owner, sid) != 0
-                || (IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
-                    && CheckTokenMembership(std::ptr::null_mut(), owner, &mut member) != 0
-                    && member != 0);
+            let owned = !owner.is_null()
+                && (EqualSid(owner, sid) != 0
+                    || (IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
+                        && CheckTokenMembership(std::ptr::null_mut(), owner, &mut member) != 0
+                        && member != 0));
             LocalFree(descriptor);
             owned
         }
