@@ -2,6 +2,16 @@
 use super::*;
 use anyhow::Context as _;
 
+#[cfg(test)]
+thread_local! {
+    /// Runs once before this thread's next observation read, as another process would act then.
+    pub(super) static TEST_BEFORE_OBSERVATION_READ: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+    /// Delays this thread's next observation read once, as a slow page would.
+    pub(super) static TEST_OBSERVATION_READ_DELAY: std::cell::Cell<Duration> =
+        const { std::cell::Cell::new(Duration::ZERO) };
+}
+
 pub(super) struct Budget {
     enabled: bool,
     deadline: Option<Instant>,
@@ -111,10 +121,15 @@ impl Budget {
                 context.record("expired", cancel)?;
                 return Err(original.context("Bounded original-target observation expired"));
             }
+            #[cfg(test)]
+            if let Some(hook) = TEST_BEFORE_OBSERVATION_READ.take() {
+                hook();
+            }
+            // The tab check has the command budget, not what is left of this one: a check the
+            // deadline cut short would prove nothing, and one that fails within its own budget
+            // is a real failure.
+            context.require_browser(limits.command, cancel).await?;
             let result = tokio::time::timeout_at(deadline, async {
-                context
-                    .require_browser(limits.command.min(remaining), cancel)
-                    .await?;
                 let mut bounded = self.limits(limits);
                 let reading = deadline
                     .saturating_duration_since(Instant::now())
@@ -124,6 +139,8 @@ impl Budget {
                 }
                 bounded.commit = reading;
                 bounded.answer = reading;
+                #[cfg(test)]
+                tokio::time::sleep(TEST_OBSERVATION_READ_DELAY.take()).await;
                 let result = read(bounded).await;
                 context.require(cancel)?;
                 result
@@ -154,9 +171,13 @@ impl Budget {
                 // Privacy, source, ownership, storage and transport failures must not retain a
                 // provider-eligible error in their source chain.
                 Ok(Err(error)) => return Err(error),
-                Err(_) => bail!(
-                    "Original-target observation did not settle before its deadline; recovery retained"
-                ),
+                // A read still pending at the deadline, such as a slow page call, proves no fault:
+                // the tab is checked again before the observation expires.
+                Err(_) => {
+                    context.require_browser(limits.command, cancel).await?;
+                    context.record("expired", cancel)?;
+                    return Err(original.context("Bounded original-target observation expired"));
+                }
             }
         }
     }

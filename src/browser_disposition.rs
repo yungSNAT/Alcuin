@@ -1774,7 +1774,8 @@ mod tests {
     async fn a_decision_reached_as_the_budget_ends_is_published_despite_the_stall() {
         for (budget, absence, decision) in [
             (Duration::from_secs(2), "confirmed-absent", "retired"),
-            (Duration::from_millis(500), "unknown", "retained"),
+            // Not shorter: the checks before the operation must fit (see the next test).
+            (Duration::from_secs(5), "unknown", "retained"),
         ] {
             let home = tempfile::tempdir().unwrap();
             let (journal, creator, commit) = native(home.path());
@@ -1807,7 +1808,10 @@ mod tests {
         let (journal, creator, commit) = native(home.path());
         journal.commit(&creator, &commit).unwrap();
         journal.finalise(&commit).unwrap();
-        let budget = Duration::from_millis(500);
+        // The lock, read and identity checks before the operation must finish inside the budget,
+        // and on a loaded runner they outlasted 500 ms. retire_finalised's own 5 s budget fails
+        // here only when it would fail in use.
+        let budget = Duration::from_secs(5);
         let lock = journal
             .file(&creator["allocationId"])
             .unwrap()

@@ -5010,6 +5010,94 @@ async fn a_retry_recorded_before_the_click_is_never_spent_twice() {
     assert_eq!(f.sends.load(Ordering::SeqCst), 1);
     stop(f).await;
 }
+/// A tab check still waiting when the observation ends, here on a held lease lock (a flush stalled
+/// on a loaded runner does the same), finishes within the command budget, so the observation
+/// expires with its provider failure rather than the check's deadline error.
+#[tokio::test]
+async fn a_tab_check_cut_short_by_the_observation_deadline_keeps_the_provider_failure() {
+    let f = fixture(Fault::ResponseLoadFailed, false).await;
+    let lock = f.profile.path().join("oracle-tab-leases.lock");
+    let (sender, holder) = std::sync::mpsc::channel();
+    super::read_recovery::TEST_BEFORE_OBSERVATION_READ.set(Some(Box::new(move || {
+        let held = DirectoryLock::acquire(&lock, Duration::from_secs(5)).unwrap();
+        // Past the whole observation, which is the fixture's commit budget.
+        sender
+            .send(std::thread::spawn(move || {
+                std::thread::sleep(limits().commit + Duration::from_millis(500));
+                drop(held);
+            }))
+            .unwrap();
+    })));
+    let error = run(&f).await.unwrap_err();
+    holder.recv().unwrap().join().unwrap();
+    assert!(
+        matches!(
+            error.downcast_ref::<crate::browser_provider::Failure>(),
+            Some(crate::browser_provider::Failure::ResponseLoadFailed)
+        ),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.store.require(&f.id).unwrap()["browser"]["runtime"]["providerReadRecovery"]["state"],
+        "expired"
+    );
+    stop(f).await;
+}
+/// A tab check that fails within its own command budget is a real failure: it ends the run, and
+/// the observation neither expires nor keeps the provider failure.
+#[tokio::test]
+async fn a_tab_check_that_fails_within_its_command_budget_ends_the_run() {
+    let f = fixture(Fault::ResponseLoadFailed, false).await;
+    let lock = f.profile.path().join("oracle-tab-leases.lock");
+    let (sender, holder) = std::sync::mpsc::channel();
+    super::read_recovery::TEST_BEFORE_OBSERVATION_READ.set(Some(Box::new(move || {
+        let held = DirectoryLock::acquire(&lock, Duration::from_secs(5)).unwrap();
+        // Past the check's command budget, which starts within the observation.
+        sender
+            .send(std::thread::spawn(move || {
+                std::thread::sleep(limits().command + limits().commit + Duration::from_secs(1));
+                drop(held);
+            }))
+            .unwrap();
+    })));
+    let started = std::time::Instant::now();
+    let error = run(&f).await.unwrap_err();
+    // The check waited out its own budget, not what was left of the observation.
+    assert!(started.elapsed() >= limits().command, "{error:#}");
+    holder.recv().unwrap().join().unwrap();
+    assert!(
+        error
+            .downcast_ref::<crate::browser_provider::Failure>()
+            .is_none(),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.store.require(&f.id).unwrap()["browser"]["runtime"]["providerReadRecovery"]["state"],
+        "observing"
+    );
+    stop(f).await;
+}
+/// A page read still pending when the observation ends is not a fault: once the tab checks out,
+/// the observation expires with its provider failure.
+#[tokio::test]
+async fn a_read_still_pending_at_the_observation_deadline_keeps_the_provider_failure() {
+    let f = fixture(Fault::ResponseLoadFailed, false).await;
+    super::read_recovery::TEST_OBSERVATION_READ_DELAY
+        .set(limits().commit + Duration::from_millis(500));
+    let error = run(&f).await.unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref::<crate::browser_provider::Failure>(),
+            Some(crate::browser_provider::Failure::ResponseLoadFailed)
+        ),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.store.require(&f.id).unwrap()["browser"]["runtime"]["providerReadRecovery"]["state"],
+        "expired"
+    );
+    stop(f).await;
+}
 #[tokio::test]
 async fn response_load_error_is_not_captured_and_retains_the_committed_target() {
     let f = fixture(Fault::ResponseLoadFailed, false).await;
@@ -5943,7 +6031,7 @@ async fn sequential_browser_refuses_unknown_or_ordinary_chat_without_another_gua
     };
     for fault in [Fault::SequentialPrivacyUnknown, Fault::SequentialPrivacyOff] {
         let f = fixture(fault, false).await;
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         let error = run_within(&f, &limits).await.unwrap_err();
         let elapsed = started.elapsed();
         // The refusal names the predicate's reason, and for unknown that it waited.
@@ -9405,7 +9493,7 @@ async fn cancelled_send_settles_then_closes_its_own_tab_and_frees_the_slot_witho
         ),
     ] {
         let f = fixture(fault, false).await;
-        let started = Instant::now();
+        let started = std::time::Instant::now();
         assert!(run(&f).await.is_err(), "{fault:?}");
         let meta = f.store.require(&f.id).unwrap();
         assert_eq!(meta["status"], "cancelled", "{fault:?}");
