@@ -264,10 +264,11 @@ fn guides_name_only_real_commands_and_flags() {
 fn help_flags(help: &str) -> Vec<String> {
     let mut flags = vec![];
     for line in help.lines() {
-        let line = line.trim_start();
-        if !line.starts_with('-') {
+        // Option lines are indented 2 spaces; wrapped descriptions further, and may start with
+        // an option they mention.
+        let Some(line) = line.strip_prefix("  ").filter(|line| line.starts_with('-')) else {
             continue;
-        }
+        };
         let names = line.split("  ").next().unwrap_or("");
         for word in names.split([' ', ',']) {
             let flag = word.split(['<', '[', '=']).next().unwrap_or("");
