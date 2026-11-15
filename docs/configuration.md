@@ -7,7 +7,7 @@ Every setting can be passed as a flag. To keep one for every run, put it in a co
 Alcuin reads 2 kinds of config file, both [JSON5](https://json5.org/) (comments and trailing commas are allowed):
 
 - **User config:** `~/.oracle/config.json`, or `config.json` in `ORACLE_HOME_DIR` when that is set.
-- **Project config:** `.oracle/config.json` in the current directory and in each parent directory up to, but not including, your home directory.
+- **Project config:** `.oracle/config.json` in the current directory and in each parent directory up to, but not including, your home directory or the first directory your account does not own. Your home is both the one `HOME` (`USERPROFILE` on Windows) names and your account's own, so pointing `HOME` elsewhere does not turn your real `~/.oracle/config.json` into a project file. A project file your account does not own is refused, as another account may have put it in a shared folder such as `/tmp` or a drive root. On Windows, a file or folder owned by the Administrators group counts as yours only when Alcuin runs elevated, as Git for Windows treats it.
 
 A project file overrides the user file, and a nearer project file overrides a farther one. Objects such as `browser` merge key by key, so a project file that sets only `browser.thinkingTime` keeps the rest of your `browser` settings.
 
@@ -99,7 +99,7 @@ Keys such as `browser.chromePath`, `apiBaseUrl` and `azure` are read from the us
 
 ## When a file cannot be used
 
-A file that is not valid JSON5, cannot be read or is not an object is skipped. The CLI prints the reason on stderr and carries on with the other files:
+A file that is not valid JSON5, cannot be read, is not an object or, for a project file, is owned by another account is skipped. The CLI prints the reason on stderr and carries on with the other files:
 
 ```text
 Failed to read /home/you/project/.oracle/config.json: invalid JSON5 configuration
