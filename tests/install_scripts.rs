@@ -262,36 +262,42 @@ fn a_failed_update_leaves_the_old_pair_in_place() {
     }
 }
 
+/// Opens `path` for reading without delete sharing, as a scanner might, so it cannot be renamed.
+#[cfg(windows)]
+fn hold_unshared(path: &Path) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1) // FILE_SHARE_READ
+        .open(path)
+        .unwrap()
+}
+
 /// An update whose second binary cannot be moved aside, after the first was replaced, puts the
 /// first old one back and leaves no staging or aside copies.
 #[cfg(windows)]
 #[test]
 fn a_failed_update_puts_the_old_binary_back() {
-    use std::os::windows::fs::OpenOptionsExt;
     let root = tempfile::tempdir().unwrap();
     let url = serve(root.path().to_owned());
     release(root.path(), false);
     let dir = root.path().join("bin");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("alcuin.exe"), "PUBLIC old").unwrap();
-    // A folder with a file open and unshared cannot be renamed.
-    let held = dir.join("alcuin-mcp.exe");
-    fs::create_dir(&held).unwrap();
-    let lock = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .share_mode(0)
-        .open(held.join("held"))
-        .unwrap();
+    for bin in ["alcuin.exe", "alcuin-mcp.exe"] {
+        fs::write(dir.join(bin), "PUBLIC old").unwrap();
+    }
+    // A file another program holds open without delete sharing cannot be renamed.
+    let lock = hold_unshared(&dir.join("alcuin-mcp.exe"));
     let output = install(&format!("{url}/release"), &dir, root.path());
     drop(lock);
     assert!(!output.status.success(), "{}", text(&output.stdout));
-    assert!(
-        fs::read(dir.join("alcuin.exe")).unwrap() == b"PUBLIC old",
-        "{}",
-        text(&output.stderr)
-    );
+    for bin in ["alcuin.exe", "alcuin-mcp.exe"] {
+        assert!(
+            fs::read(dir.join(bin)).unwrap() == b"PUBLIC old",
+            "{bin}: {}",
+            text(&output.stderr)
+        );
+    }
     let left: Vec<_> = fs::read_dir(&dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -357,25 +363,18 @@ fn an_interrupted_update_puts_the_old_binary_back() {
 #[cfg(windows)]
 #[test]
 fn an_old_binary_that_cannot_be_put_back_loses_nothing() {
-    use std::os::windows::fs::OpenOptionsExt;
     let root = tempfile::tempdir().unwrap();
     let url = serve(root.path().to_owned());
     release(root.path(), false);
     let dir = root.path().join("bin");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("alcuin.exe"), "PUBLIC old").unwrap();
+    for bin in ["alcuin.exe", "alcuin-mcp.exe"] {
+        fs::write(dir.join(bin), "PUBLIC old").unwrap();
+    }
     // As in the test above, alcuin-mcp.exe cannot be moved aside, so the update fails after
     // replacing alcuin.exe. Copies left by earlier installs slow the step between the two, so
-    // the watcher below opens the old alcuin.exe, without delete sharing, before it is put back.
-    let held = dir.join("alcuin-mcp.exe");
-    fs::create_dir(&held).unwrap();
-    let lock = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .share_mode(0)
-        .open(held.join("held"))
-        .unwrap();
+    // the watcher below holds the old alcuin.exe before it is put back.
+    let lock = hold_unshared(&dir.join("alcuin-mcp.exe"));
     for n in 0..300 {
         fs::write(dir.join(format!("alcuin-mcp.exe.{n}.old")), "").unwrap();
     }
@@ -387,13 +386,7 @@ fn an_old_binary_that_cannot_be_put_back_loses_nothing() {
             for entry in fs::read_dir(&watched).unwrap().flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with("alcuin.exe.") && name.ends_with(".old") {
-                    let Ok(file) = fs::OpenOptions::new()
-                        .read(true)
-                        .share_mode(1) // FILE_SHARE_READ: no delete, so no rename
-                        .open(entry.path())
-                    else {
-                        continue;
-                    };
+                    let file = hold_unshared(&entry.path());
                     released.recv().unwrap();
                     drop(file);
                     return Some(name);
@@ -416,6 +409,7 @@ fn an_old_binary_that_cannot_be_put_back_loses_nothing() {
         "{said}"
     );
     assert_eq!(fs::read(dir.join(&old)).unwrap(), b"PUBLIC old");
+    assert_eq!(fs::read(dir.join("alcuin-mcp.exe")).unwrap(), b"PUBLIC old");
     assert!(said.contains(&old), "{said}");
 }
 
