@@ -338,7 +338,10 @@ fn cli_reference_covers_every_command_and_option_its_help_shows() {
 #[test]
 fn mcp_tool_reference_covers_every_tool_input_and_output() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let reference = fs::read_to_string(root.join("docs/mcp-tools.md")).unwrap();
+    // A Windows checkout may have CRLF line ends; the sections are found by their headings.
+    let reference = fs::read_to_string(root.join("docs/mcp-tools.md"))
+        .unwrap()
+        .replace("\r\n", "\n");
     // The fixture is what the server's tools/list returns.
     let tools: Value =
         serde_json::from_str(&fs::read_to_string(root.join("fixtures/mcp-tools.json")).unwrap())
