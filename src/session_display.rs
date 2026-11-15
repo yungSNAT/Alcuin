@@ -80,9 +80,12 @@ pub(crate) fn session_cost(meta: &Value) -> Option<f64> {
     }
     priced_cost(meta).filter(|cost| *cost > 0.0)
 }
-/// Reference estimateUsdCost from the bundled pricing and the saved token usage.
+/// Reference estimateUsdCost from the bundled pricing and the saved token usage, for a session
+/// stored without a cost. A stored null is Alcuin's record that it priced nothing on purpose.
 pub(crate) fn priced_cost(meta: &Value) -> Option<f64> {
-    let usage = meta["usage"].as_object()?;
+    let usage = meta["usage"]
+        .as_object()
+        .filter(|usage| !usage.contains_key("cost"))?;
     // Only GPT-6 Astra pricing is bundled; the reference table also priced retired models.
     if meta["model"] != policy::DEFAULT_API_MODEL {
         return None;
