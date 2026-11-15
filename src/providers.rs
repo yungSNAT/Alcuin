@@ -1071,18 +1071,30 @@ mod tests {
         );
         close(cost(json!({})), 10.0 + 5.0);
         // A cache split larger than the input is inconsistent, so it is not priced, even when
-        // the counts would overflow.
+        // the counts would overflow. The stored null says so, so no reader estimates a cost.
+        let unpriced =
+            |response: Value, pricing| usage_summary(&response, 0, pricing).get("cost").cloned();
         assert_eq!(
-            cost(json!({"cached_tokens":900_000,"cache_write_tokens":200_000})),
-            None
+            unpriced(
+                json!({"usage":{"input_tokens":1_000_000,"output_tokens":0,"input_tokens_details":{"cached_tokens":900_000,"cache_write_tokens":200_000}}}),
+                pricing
+            ),
+            Some(Value::Null)
         );
         assert_eq!(
-            usage_summary(
-                &json!({"usage":{"input_tokens":u64::MAX,"output_tokens":0,"input_tokens_details":{"cached_tokens":u64::MAX,"cache_write_tokens":1}}}),
-                0,
-                pricing,
-            )["cost"],
-            Value::Null
+            unpriced(
+                json!({"usage":{"input_tokens":u64::MAX,"output_tokens":0,"input_tokens_details":{"cached_tokens":u64::MAX,"cache_write_tokens":1}}}),
+                pricing
+            ),
+            Some(Value::Null)
+        );
+        // A `pricing: null` override prices nothing either.
+        assert_eq!(
+            unpriced(
+                json!({"usage":{"input_tokens":1_000,"output_tokens":0}}),
+                None
+            ),
+            Some(Value::Null)
         );
         // Without usage, the estimated input is priced at the input rate.
         close(

@@ -302,6 +302,10 @@ mod tests {
             message(&priced, ""),
             "PUBLIC-id \u{b7} $0.0200 \u{b7} 0 chars"
         );
+        // A null cost is one Alcuin left unpriced on purpose, so no amount is estimated for it.
+        let unpriced = json!({"id":"PUBLIC-id","mode":"api","model":"gpt-6-astra","usage":{"inputTokens":1000,"outputTokens":200,"cost":null}});
+        assert_eq!(message(&unpriced, ""), "PUBLIC-id \u{b7} 0 chars");
+        assert_eq!(crate::session_display::session_cost(&unpriced), None);
         let tie = json!({"id":"PUBLIC-id","mode":"api","usage":{"cost":0.125}});
         assert_eq!(message(&tie, ""), "PUBLIC-id \u{b7} $0.1300 \u{b7} 0 chars");
         let browser = json!({"id":"PUBLIC-id","mode":"browser","usage":{"cost":1.0}});
