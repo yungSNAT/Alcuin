@@ -41,3 +41,5 @@ A finished run shows a Windows toast through Windows PowerShell 5.1, silent unle
 ## WSL
 
 Alcuin does not launch a browser from inside WSL: a browser run there stops with 'Launching Chrome under WSL: this build does not support it. Run Alcuin on the Windows host instead.' Run `alcuin.exe` on Windows instead. To use the Windows browser from Linux, including WSL, run `alcuin serve` on Windows and connect to it ([A browser on another machine](remote.md)).
+
+<sub>Checked with the v0.1.0 Windows binary in a scratch profile on 15 November 2026: `bridge doctor` without a browser it knows and with `CHROME_PATH` set to Brave, `ORACLE_HOME_DIR`, and the pattern quoting in PowerShell 7 and `cmd.exe`. The toast and the WSL refusal were read from the source and its tests, not run.</sub>

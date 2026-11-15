@@ -54,3 +54,5 @@ To make the rules part of a project, add a few lines to its `AGENTS.md` or `CLAU
 ## Exit codes
 
 An agent can tell the outcome from the exit code: 0 for success, 1 for an error, a refusal, a duplicate run or a `partial` answer, 2 when `ground` cannot check a session and 130 after Ctrl-C ([Exit codes and errors](exit-codes.md)).
+
+<sub>Checked on 15 November 2026 with a build of `main` on Linux: both `npx skills add` commands in a scratch home, the preview and `status`. Reading and grounding a real session need a signed-in ChatGPT account and were not run.</sub>

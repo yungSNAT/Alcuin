@@ -26,3 +26,5 @@ The environment variables take `1`, `true`, `yes` or `on`, and `0`, `false`, `no
 ```
 
 A run decides when it starts, and a detached run keeps that decision. `alcuin restart` uses the settings saved with the session it repeats.
+
+<sub>Checked against the source and its unit tests on 15 November 2026, and the config line by loading it with a build of `main`. Showing a notification needs a finished run, which was not made.</sub>

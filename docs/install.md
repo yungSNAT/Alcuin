@@ -88,3 +88,5 @@ Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\Alcuin"
 ```
 
 This leaves `~/.oracle` (`%USERPROFILE%\.oracle` on Windows), which holds your saved sessions, settings and Alcuin's browser profile with its ChatGPT sign-in, or the folder `ORACLE_HOME_DIR` names. Delete it too only if you no longer want those sessions.
+
+<sub>Checked on 15 November 2026: both blocks downloaded v0.1.0, passed the checksum and attestation checks and printed `0.1.0`, the Linux one on glibc 2.44 and the Windows one in PowerShell 7 with `%LOCALAPPDATA%` pointed at a scratch folder; the `PATH` lines, the version check against the release tag and both removals were run there too.</sub>

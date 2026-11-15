@@ -43,3 +43,5 @@ A finished run shows a desktop notification through `notify-send`, unless you ar
 ## Where Alcuin keeps its files
 
 Sessions, settings and the browser profile live in `~/.oracle`; set `ORACLE_HOME_DIR` to move them.
+
+<sub>Checked with a build of `main` on Linux (glibc 2.44, Chromium) on 15 November 2026: `bridge doctor` with and without `CHROME_PATH`, and the headless preview. The discovery order, the notification and the WSL refusal were read from the source and its tests.</sub>
