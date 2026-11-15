@@ -192,7 +192,10 @@ fn guides_name_only_real_commands_and_flags() {
         .map(|name| format!("docs/{name}"))
         .collect();
     paths.sort();
-    assert!(paths.contains(&"docs/quickstart.md".to_owned()), "{paths:?}");
+    assert!(
+        paths.contains(&"docs/quickstart.md".to_owned()),
+        "{paths:?}"
+    );
     // Flags, against the captured definitions the help renders from.
     let result = docs_check::check(root, &paths).unwrap();
     assert!(
