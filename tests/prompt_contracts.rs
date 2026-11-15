@@ -229,6 +229,51 @@ fn project_config_cannot_redirect_credentials_routes_or_native_capture() {
             .is_string()
     );
 }
+/// Another account can write a shared ancestor such as /tmp, so the walk stops at the first
+/// directory this account does not own, and a file another account owns is refused.
+#[cfg(unix)]
+#[test]
+fn project_config_comes_only_from_directories_and_files_this_account_owns() {
+    use std::os::unix::fs::{MetadataExt, symlink};
+    let root = tempfile::tempdir().unwrap();
+    let foreign = std::path::Path::new("/etc/passwd");
+    if fs::metadata(foreign).unwrap().uid() == fs::metadata(root.path()).unwrap().uid() {
+        return; // Running as root: every candidate is this account's.
+    }
+    let home = root.path().join("home");
+    let project = root.path().join("project");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(project.join(".oracle")).unwrap();
+    fs::create_dir_all(project.join("inner")).unwrap();
+    let config = project.join(".oracle/config.json");
+    fs::write(&config, "{browser:{timeoutMs:20}}").unwrap();
+    let loaded = config::load(&home, &project.join("inner"), None, true);
+    assert!(loaded.paths.contains(&config), "{:?}", loaded.paths);
+    // A directory this account owns but may not list is still its own.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o311)).unwrap();
+    let loaded = config::load(&home, &project.join("inner"), None, true);
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(loaded.paths.contains(&config), "{:?}", loaded.paths);
+    // Inside a directory another account owns, nothing above it is read.
+    symlink("/", project.join("shared")).unwrap();
+    let loaded = config::load(&home, &project.join("shared"), None, true);
+    assert!(!loaded.paths.contains(&config), "{:?}", loaded.paths);
+    // A file another account owns is refused before it is parsed.
+    let planted = root.path().join("planted");
+    fs::create_dir_all(planted.join(".oracle")).unwrap();
+    symlink(foreign, planted.join(".oracle/config.json")).unwrap();
+    let loaded = config::load(&home, &planted, None, true);
+    let path = planted.join(".oracle/config.json");
+    assert!(!loaded.paths.contains(&path));
+    assert_eq!(
+        loaded.warnings,
+        [format!(
+            "Failed to read {}: owned by another account",
+            path.display()
+        )]
+    );
+}
 #[test]
 fn json5_config_merges_outer_projects_before_inner_projects() {
     let root = tempfile::tempdir().unwrap();

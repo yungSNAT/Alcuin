@@ -2744,21 +2744,20 @@ mod tests {
             requests.clone(),
         ));
         if case == Failed::CrowdedStore {
-            // Unrelated sessions large enough that parsing them all on each controller
-            // check outlasts the per-target budget (as 4,096 live sessions did).
-            let filler = (0..10_000)
-                .map(|index| json!({"PUBLIC":index}))
-                .collect::<Vec<_>>();
+            // Unrelated sessions the controller checks must not read whole: reading all 4,096
+            // sessions of a live store on each check outlasted the per-target budget. The test
+            // counts those reads rather than timing them, so machine load cannot fail it.
             for index in 0..200 {
                 let id = format!("public-unrelated-{index}");
                 let directory = store.root().join(&id);
                 std::fs::create_dir_all(&directory).unwrap();
                 atomic_json(
                     &directory.join("meta.json"),
-                    &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier","filler":filler}),
+                    &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
                 )
                 .unwrap();
             }
+            crate::sessions::READ_SESSIONS.take();
         }
         if case == Failed::CurrentController {
             // The failing worker's own cleanup, scoped to its consultation.
@@ -2774,6 +2773,13 @@ mod tests {
             .unwrap();
         } else {
             reconcile(&store, &cdp, &endpoint).await.unwrap();
+        }
+        if case == Failed::CrowdedStore {
+            let read = crate::sessions::READ_SESSIONS.take();
+            assert!(
+                !read.iter().any(|id| id.starts_with("public-unrelated-")),
+                "{read:?}"
+            );
         }
         let record = journal.read(&creator["allocationId"]).unwrap();
         let session = store.stored_for_update(&child).unwrap();

@@ -5098,6 +5098,44 @@ async fn a_read_still_pending_at_the_observation_deadline_keeps_the_provider_fai
     );
     stop(f).await;
 }
+/// A read still pending at the deadline proves nothing about the tab, so the tab is checked again
+/// before the observation expires: Temporary Chat lost whilst the read was pending ends the
+/// observation with that failure, so it neither expires nor keeps the provider failure.
+#[tokio::test]
+async fn a_read_pending_at_the_deadline_still_ends_on_lost_privacy() {
+    // The fixture leaves Temporary Chat once the stored observation has version 1. The stored
+    // version is hidden for the tab check before the read and restored whilst the read is pending.
+    let f = fixture(Fault::ProviderRecoveryPrivacy, false).await;
+    let version = |version: u8| {
+        let (store, id) = (f.store.clone(), f.id.clone());
+        move || {
+            store
+                .update(&id, |current| {
+                    let mut browser = current["browser"].clone();
+                    browser["runtime"]["providerReadRecovery"]["version"] = json!(version);
+                    Ok(Some(json!({ "browser": browser })))
+                })
+                .unwrap();
+        }
+    };
+    super::read_recovery::TEST_BEFORE_OBSERVATION_READ.set(Some(Box::new(version(0))));
+    super::read_recovery::TEST_DURING_OBSERVATION_READ.set(Some(Box::new(version(1))));
+    super::read_recovery::TEST_OBSERVATION_READ_DELAY
+        .set(limits().commit + Duration::from_millis(500));
+    let error = run(&f).await.unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<crate::browser_provider::Failure>()
+            .is_none()
+            && format!("{error:#}").contains("PUBLIC fake privacy reason"),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.store.require(&f.id).unwrap()["browser"]["runtime"]["providerReadRecovery"]["state"],
+        "observing"
+    );
+    stop(f).await;
+}
 #[tokio::test]
 async fn response_load_error_is_not_captured_and_retains_the_committed_target() {
     let f = fixture(Fault::ResponseLoadFailed, false).await;
