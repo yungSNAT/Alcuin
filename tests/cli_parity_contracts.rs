@@ -574,10 +574,11 @@ fn doctor_requires_providers_and_prints_reference_readiness() {
         .args(["doctor", "--providers", "--models", "gpt-6-astra, Latest"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    // The run refuses a Chat Completions gateway, so the doctor reports it not ready.
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "Provider readiness\n\ngpt-6-astra: ok\n  provider: OpenAI-compatible\n  base: public-gateway.invalid/v1/...\n  key: OPENAI_API_KEY=sk-P****1234\n\n"
+        "Provider readiness\n\ngpt-6-astra: not ready\n  provider: OpenAI-compatible\n  base: public-gateway.invalid/v1/...\n  key: OPENAI_API_KEY=sk-P****1234\n  error: --reasoning-mode requires the OpenAI or Azure OpenAI Responses API; OpenRouter and custom --base-url routes use the Chat Completions adapter.\n\n"
     );
     let output = cli(
         &home,
