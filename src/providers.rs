@@ -413,7 +413,10 @@ pub fn usage_summary(response: &Value, estimated_input: u64, pricing: Option<(f6
     let cached = details["cached_tokens"].as_u64().unwrap_or(0);
     let written = details["cache_write_tokens"].as_u64().unwrap_or(0);
     // Input tokens are uncached, cached or written, each at its own rate; reasoning is already in
-    // output. A cache split larger than the input is inconsistent, so it gets no cost.
+    // output. A cache split larger than the input is inconsistent, so it gets no cost. An unpriced
+    // run stores a null cost, so readers do not estimate one; only a session stored without the
+    // key, as Oracle writes an unpriced one, is priced from the bundled table.
+    usage["cost"] = Value::Null;
     if let Some((input_rate, output_rate)) = pricing
         && let Some(uncached) = cached
             .checked_add(written)
