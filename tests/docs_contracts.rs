@@ -259,3 +259,108 @@ fn guides_name_only_real_commands_and_flags() {
     }
     assert!(unknown.is_empty(), "{unknown:#?}");
 }
+/// Long options on the option lines of `--help` output, which wraps descriptions onto their
+/// own lines.
+fn help_flags(help: &str) -> Vec<String> {
+    let mut flags = vec![];
+    for line in help.lines() {
+        let line = line.trim_start();
+        if !line.starts_with('-') {
+            continue;
+        }
+        let names = line.split("  ").next().unwrap_or("");
+        for word in names.split([' ', ',']) {
+            let flag = word.split(['<', '[', '=']).next().unwrap_or("");
+            if flag.starts_with("--") && flag.len() > 2 {
+                flags.push(flag.to_owned());
+            }
+        }
+    }
+    flags
+}
+#[test]
+fn cli_reference_covers_every_command_and_option_its_help_shows() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let reference = fs::read_to_string(root.join("docs/cli-reference.md")).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let help = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_alcuin"))
+            .env_clear()
+            .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("ORACLE_HOME_DIR", home.path())
+            .args(args)
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let mut paths = vec![vec![]];
+    let commands: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("src/cli_commands.json")).unwrap())
+            .unwrap();
+    let name = |spec: &Value| {
+        spec["command"]
+            .as_str()
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    for spec in commands.as_array().unwrap() {
+        paths.push(vec![name(spec)]);
+        for child in spec["children"].as_array().unwrap() {
+            paths.push(vec![name(spec), name(child)]);
+        }
+    }
+    let mut missing = vec![];
+    for path in &paths {
+        if !path.is_empty() && !reference.contains(&format!("alcuin {}", path.join(" "))) {
+            missing.push(format!("command alcuin {}", path.join(" ")));
+        }
+        let args: Vec<&str> = path.iter().map(String::as_str).collect();
+        let flags = help_flags(&help(&args));
+        assert!(!flags.is_empty(), "{path:?}");
+        for flag in flags {
+            if !reference.contains(&format!("`{flag}`"))
+                && !reference.contains(&format!("`{flag} "))
+            {
+                missing.push(format!("{} {flag}", path.join(" ")));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{missing:#?}");
+}
+#[test]
+fn mcp_tool_reference_covers_every_tool_input_and_output() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let reference = fs::read_to_string(root.join("docs/mcp-tools.md")).unwrap();
+    // The fixture is what the server's tools/list returns.
+    let tools: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("fixtures/mcp-tools.json")).unwrap())
+            .unwrap();
+    let mut missing = vec![];
+    for tool in tools["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        // Each tool's own section, from its heading to the next.
+        let Some((_, section)) = reference.split_once(&format!("\n## {name}\n")) else {
+            missing.push(format!("tool {name}"));
+            continue;
+        };
+        let section = section.split("\n## ").next().unwrap();
+        for schema in ["inputSchema", "outputSchema"] {
+            let Some(fields) = tool[schema]["properties"].as_object() else {
+                continue;
+            };
+            for field in fields.keys() {
+                if !section.contains(&format!("`{field}`")) {
+                    missing.push(format!("{name} {schema} {field}"));
+                }
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{missing:#?}");
+}
