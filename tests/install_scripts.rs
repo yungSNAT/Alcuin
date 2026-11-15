@@ -117,8 +117,13 @@ fn release(root: &Path, bad: bool) -> PathBuf {
     release
 }
 
-/// Runs the README's one-liner with the download folder pointed at `url`.
+/// Runs the README's one-liner with the download folder pointed at `url`, leaving the Windows
+/// user Path alone.
 fn install(url: &str, dir: &Path, home: &Path) -> Output {
+    install_with_path(url, dir, home, false)
+}
+
+fn install_with_path(url: &str, dir: &Path, home: &Path, modify_path: bool) -> Output {
     let mut command = if cfg!(windows) {
         let mut command = Command::new("powershell");
         command.args([
@@ -127,7 +132,9 @@ fn install(url: &str, dir: &Path, home: &Path) -> Output {
             "-Command",
             &format!("irm {url}/install.ps1 | iex"),
         ]);
-        command.env("ALCUIN_NO_MODIFY_PATH", "1");
+        if !modify_path {
+            command.env("ALCUIN_NO_MODIFY_PATH", "1");
+        }
         command
     } else {
         let mut command = Command::new("sh");
@@ -189,4 +196,95 @@ fn the_installer_checks_the_archive_then_installs_both_binaries() {
         text(&output.stderr)
     );
     assert!(!refused.exists());
+}
+
+#[cfg(windows)]
+const ENVIRONMENT: &str = r"HKCU\Environment";
+
+#[cfg(windows)]
+fn reg(args: &[&str]) -> Output {
+    Command::new("reg").args(args).output().unwrap()
+}
+
+/// The user Path's registry type and value as stored, without expanding its entries.
+#[cfg(windows)]
+fn user_path() -> Option<(String, String)> {
+    let output = reg(&["query", ENVIRONMENT, "/v", "Path"]);
+    let listing = text(&output.stdout);
+    let line = listing
+        .lines()
+        .find(|line| line.trim_start().starts_with("Path "))?;
+    let (_, typed) = line.split_once("    REG_")?;
+    let (kind, value) = typed.split_once("    ").unwrap_or((typed, ""));
+    Some((format!("REG_{}", kind.trim()), value.to_owned()))
+}
+
+/// The default Windows install adds its folder to the user Path once and keeps the entries already
+/// there as stored. It changes this account's user Path, so it runs only on a GitHub runner, and
+/// puts the old value back.
+#[cfg(windows)]
+#[test]
+fn the_windows_installer_adds_its_folder_to_the_user_path_as_stored() {
+    if std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    struct Restore(Option<(String, String)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some((kind, value)) => reg(&[
+                    "add",
+                    ENVIRONMENT,
+                    "/v",
+                    "Path",
+                    "/t",
+                    kind,
+                    "/d",
+                    value,
+                    "/f",
+                ]),
+                None => reg(&["delete", ENVIRONMENT, "/v", "Path", "/f"]),
+            };
+        }
+    }
+    let original = user_path();
+    let _restore = Restore(original.clone());
+    let kept = r"%USERPROFILE%\alcuin-path-test";
+    let seeded = match &original {
+        Some((_, value)) if !value.is_empty() => format!("{value};{kept}"),
+        _ => kept.to_owned(),
+    };
+    let output = reg(&[
+        "add",
+        ENVIRONMENT,
+        "/v",
+        "Path",
+        "/t",
+        "REG_EXPAND_SZ",
+        "/d",
+        &seeded,
+        "/f",
+    ]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    // Twice: the second run finds the folder on the Path and adds nothing.
+    for _ in 0..2 {
+        let output = install_with_path(&format!("{url}/release"), &dir, root.path(), true);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+    }
+    let (kind, value) = user_path().unwrap();
+    let entries: Vec<_> = value.split(';').collect();
+    assert_eq!(kind, "REG_EXPAND_SZ", "{value}");
+    assert!(entries.contains(&kept), "{value}");
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| Path::new(entry) == dir)
+            .count(),
+        1,
+        "{value}"
+    );
 }
