@@ -280,10 +280,13 @@ impl Account {
     }
     #[cfg(unix)]
     fn owns(&self, file: &fs::File) -> bool {
+        file.metadata().is_ok_and(|metadata| Self::owned(&metadata))
+    }
+    #[cfg(unix)]
+    fn owned(metadata: &fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt;
         // SAFETY: geteuid has no preconditions.
-        file.metadata()
-            .is_ok_and(|metadata| metadata.uid() == unsafe { libc::geteuid() })
+        metadata.uid() == unsafe { libc::geteuid() }
     }
     /// Owned by this account's user, or by the Administrators group when this process is an
     /// elevated administrator, whose new files Windows gives that group (as Git for Windows treats
@@ -334,29 +337,38 @@ impl Account {
             owned
         }
     }
+    /// Read from the path, not an open handle: opening a directory needs leave to list it, which
+    /// its owner may have withdrawn.
+    #[cfg(unix)]
     fn owns_directory(&self, directory: &Path) -> bool {
-        #[cfg(unix)]
-        let opened = fs::File::open(directory);
-        #[cfg(windows)]
-        let opened = {
-            use std::os::windows::fs::OpenOptionsExt;
-            use windows_sys::Win32::Storage::FileSystem::{
-                FILE_FLAG_BACKUP_SEMANTICS, READ_CONTROL,
-            };
-            fs::OpenOptions::new()
-                .access_mode(READ_CONTROL)
-                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-                .open(directory)
-        };
-        opened.is_ok_and(|directory| self.owns(&directory))
+        fs::metadata(directory).is_ok_and(|metadata| Self::owned(&metadata))
+    }
+    #[cfg(windows)]
+    fn owns_directory(&self, directory: &Path) -> bool {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, READ_CONTROL};
+        fs::OpenOptions::new()
+            .access_mode(READ_CONTROL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(directory)
+            .is_ok_and(|directory| self.owns(&directory))
     }
     /// Each directory's project file, nearest first: from the working directory up to, but not
-    /// including, the user's home or the first directory this account does not own.
+    /// including, the user's home or the first directory this account does not own. A home is
+    /// matched by name and by where it resolves, so a link to it stops the walk too.
     fn project_candidates(&self, cwd: &Path, user_home: Option<&Path>) -> Vec<PathBuf> {
+        let homes: Vec<_> = [user_home, self.home.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let resolved: Vec<_> = homes
+            .iter()
+            .filter_map(|home| fs::canonicalize(home).ok())
+            .collect();
         cwd.ancestors()
             .take_while(|directory| {
-                Some(*directory) != user_home
-                    && Some(*directory) != self.home.as_deref()
+                !homes.contains(directory)
+                    && fs::canonicalize(directory).map_or(true, |real| !resolved.contains(&real))
                     && self.owns_directory(directory)
             })
             .map(|directory| directory.join(".oracle/config.json"))
@@ -371,8 +383,8 @@ pub fn load(
 ) -> LoadedConfig {
     let user = home.join("config.json");
     let mut paths = vec![(user.clone(), false)];
-    let account = Account::current();
-    if include_project {
+    let account = include_project.then(Account::current);
+    if let Some(account) = &account {
         let mut projects: Vec<_> = account
             .project_candidates(cwd, user_home)
             .into_iter()
@@ -407,7 +419,7 @@ pub fn load(
         // swapped for another account's file between the check and the read.
         let read = if project {
             match fs::File::open(&path) {
-                Ok(file) if !account.owns(&file) => {
+                Ok(file) if !account.as_ref().is_some_and(|account| account.owns(&file)) => {
                     result.warnings.push(format!(
                         "Failed to read {}: owned by another account",
                         path.display()
