@@ -474,6 +474,49 @@ fn route_and_preflight_print_reference_plans_and_exit_on_readiness() {
 }
 
 #[test]
+fn route_dry_run_and_doctor_refuse_a_base_url_the_run_refuses() {
+    let refusal = "--reasoning-mode requires the OpenAI or Azure OpenAI Responses API; OpenRouter and custom --base-url routes use the Chat Completions adapter.";
+    let home = tempfile::tempdir().unwrap();
+    let run = |base: &str, args: &[&str]| {
+        command(home.path())
+            .env("OPENAI_API_KEY", "sk-PUBLIC-synthetic-1234")
+            .env("OPENAI_BASE_URL", base)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let gateway = "https://gateway.invalid/v1";
+    for args in [
+        &["-p", "PUBLIC route", "--route"][..],
+        &["-p", "PUBLIC route", "--preflight"],
+        &["doctor", "--providers"],
+    ] {
+        let output = run(gateway, args);
+        assert_eq!(output.status.code(), Some(1), "{args:?} {}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("  error: {refusal}\n")),
+            "{args:?} {}",
+            stdout(&output)
+        );
+    }
+    let output = run(
+        gateway,
+        &["-p", "PUBLIC dry run", "--engine", "api", "--dry-run", "summary"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert_eq!(stderr(&output), format!("✖ {refusal}\n"));
+    // An api.openai.com base is the one the run accepts, so the same checks pass.
+    for args in [
+        &["-p", "PUBLIC route", "--route"][..],
+        &["-p", "PUBLIC dry run", "--engine", "api", "--dry-run", "summary"],
+    ] {
+        let output = run("https://api.openai.com/v1", args);
+        assert_eq!(output.status.code(), Some(0), "{args:?} {}", stderr(&output));
+    }
+    assert!(!home.path().join("sessions").exists());
+}
+
+#[test]
 fn doctor_requires_providers_and_prints_reference_readiness() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
