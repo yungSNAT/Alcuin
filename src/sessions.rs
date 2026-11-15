@@ -340,6 +340,8 @@ impl SessionStore {
         }
     }
     fn read_raw(&self, id: &str, summary: bool) -> Result<Option<Value>> {
+        #[cfg(test)]
+        READ_SESSIONS.with_borrow_mut(|read| read.push(id.to_owned()));
         let dir = self.directory(id)?;
         for filename in ["meta.json", "session.json"] {
             let Some(mut value) = read_optional_json(&dir.join(filename)).ok().flatten() else {
@@ -1076,6 +1078,9 @@ thread_local! {
     /// Runs once on this thread between a target scan and its index recheck.
     static AFTER_TARGET_SCAN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    /// The sessions this thread has read whole, so a test can check what a scan reads.
+    pub(crate) static READ_SESSIONS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 /// A target the index can name as one path component; others fall back to a full read.
 fn indexable(target: &str) -> bool {
