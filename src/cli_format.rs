@@ -668,9 +668,15 @@ pub(crate) fn route_plan(
                 } else {
                     crate::providers::route_target(&route.base_url)
                 };
+                // The run's own refusals, in the order it meets them.
                 let error = secret
                     .is_none()
-                    .then(|| format!("Missing {}.", route.key_source));
+                    .then(|| format!("Missing {}.", route.key_source))
+                    .or_else(|| {
+                        crate::providers::require_responses(&route)
+                            .err()
+                            .map(|error| error.to_string())
+                    });
                 (
                     azure,
                     route.provider_label,

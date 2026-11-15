@@ -364,6 +364,14 @@ impl AlcuinMcp {
         input["waitPreference"] = json!(input["waitForCompletion"] != false);
         let request = execution::resolve_mcp(&input, &config, &self.env, &self.cwd)?;
         if input["dryRun"] == true {
+            if request.engine == "api" {
+                let (route, _) = providers::resolve_route(
+                    request.options["model"].as_str().context("Missing model")?,
+                    &request.options,
+                    &self.env,
+                )?;
+                providers::require_responses(&route)?;
+            }
             let resolved = execution::dry_run_resolved(&request);
             let mut lines = dry_run_summary(&request)?;
             lines.extend(execution::dry_run_lines(&resolved));
