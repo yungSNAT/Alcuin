@@ -336,6 +336,8 @@ pub fn model_settings(model: &str, options: &Value) -> Result<ModelSettings> {
         api_model: model.into(),
         reasoning_effort: Some("xhigh".into()),
         input_limit: 272000,
+        // GPT-6 Astra's standard input and output rates per 1M tokens on
+        // https://platform.openai.com/docs/pricing, read 15 November 2026.
         pricing: Some((10.0 / 1_000_000.0, 50.0 / 1_000_000.0)),
     };
     if model == "gpt-6-astra"
@@ -391,6 +393,12 @@ pub fn model_settings(model: &str, options: &Value) -> Result<ModelSettings> {
     }
     Ok(settings)
 }
+/// Cached input and cache writes as multiples of the input rate, for GPT-5.6 and later models other
+/// than GPT-6.1 Sol and Terra (https://platform.openai.com/docs/guides/prompt-caching, read 15
+/// November 2026). Requests set no cache retention, so writes take the default 30-minute rate. For
+/// GPT-6 Astra these give the $1.00 and $12.50 per 1M tokens its pricing page lists.
+const CACHED_INPUT_RATE: f64 = 0.1;
+const CACHE_WRITE_RATE: f64 = 1.25;
 pub fn usage_summary(response: &Value, estimated_input: u64, pricing: Option<(f64, f64)>) -> Value {
     let input = response["usage"]["input_tokens"]
         .as_u64()
@@ -401,10 +409,19 @@ pub fn usage_summary(response: &Value, estimated_input: u64, pricing: Option<(f6
         .or(response["usage"]["output_tokens_details"]["reasoning_tokens"].as_u64())
         .unwrap_or(0);
     let mut usage = json!({"inputTokens":input,"outputTokens":output,"reasoningTokens":reasoning,"totalTokens":response["usage"]["total_tokens"].as_u64().unwrap_or(input.saturating_add(output))});
-    if let Some((input_rate, output_rate)) = pricing {
-        // Same source calculation as tokentally: reasoning is already in output.
-        // These rates are reference configuration, not a claim about current billing.
-        usage["cost"] = json!(input as f64 * input_rate + output as f64 * output_rate);
+    let details = &response["usage"]["input_tokens_details"];
+    let cached = details["cached_tokens"].as_u64().unwrap_or(0);
+    let written = details["cache_write_tokens"].as_u64().unwrap_or(0);
+    // Input tokens are uncached, cached or written, each at its own rate; reasoning is already in
+    // output. A cache split larger than the input is inconsistent, so it gets no cost.
+    if let Some((input_rate, output_rate)) = pricing
+        && let Some(uncached) = cached
+            .checked_add(written)
+            .and_then(|used| input.checked_sub(used))
+    {
+        let input_cost =
+            uncached as f64 + cached as f64 * CACHED_INPUT_RATE + written as f64 * CACHE_WRITE_RATE;
+        usage["cost"] = json!(input_cost * input_rate + output as f64 * output_rate);
     }
     usage
 }
@@ -1021,4 +1038,73 @@ pub fn text_output(response: &Value) -> String {
         }
     }
     parts.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GPT-6 Astra's standard rates per 1M tokens on https://platform.openai.com/docs/pricing,
+    /// read 15 November 2026: $10.00 input, $1.00 cached input, $12.50 for a 30-minute cache write
+    /// (the default retention) and $50.00 output.
+    #[test]
+    fn cached_and_written_input_tokens_take_their_published_rates() {
+        let pricing = model_settings("gpt-6-astra", &Value::Null).unwrap().pricing;
+        let cost = |details: Value| {
+            usage_summary(
+                &json!({"usage":{"input_tokens":1_000_000,"output_tokens":100_000,"input_tokens_details":details}}),
+                0,
+                pricing,
+            )["cost"]
+                .as_f64()
+        };
+        let close = |actual: Option<f64>, expected: f64| {
+            assert!(
+                actual.is_some_and(|actual| (actual - expected).abs() < 1e-9),
+                "{actual:?} != {expected}"
+            );
+        };
+        // 500,000 uncached at $10, 300,000 cached at $1, 200,000 written at $12.50, then output.
+        close(
+            cost(json!({"cached_tokens":300_000,"cache_write_tokens":200_000})),
+            5.0 + 0.3 + 2.5 + 5.0,
+        );
+        close(cost(json!({})), 10.0 + 5.0);
+        // A cache split larger than the input is inconsistent, so it is not priced, even when
+        // the counts would overflow.
+        assert_eq!(
+            cost(json!({"cached_tokens":900_000,"cache_write_tokens":200_000})),
+            None
+        );
+        assert_eq!(
+            usage_summary(
+                &json!({"usage":{"input_tokens":u64::MAX,"output_tokens":0,"input_tokens_details":{"cached_tokens":u64::MAX,"cache_write_tokens":1}}}),
+                0,
+                pricing,
+            )["cost"],
+            Value::Null
+        );
+        // Without usage, the estimated input is priced at the input rate.
+        close(
+            usage_summary(&json!({}), 1_000, pricing)["cost"].as_f64(),
+            0.01,
+        );
+        // A pricing override keeps the cache multiples: 500,000 uncached at $2, 300,000 cached at
+        // $0.20 and 200,000 written at $2.50 per 1M tokens, then 100,000 output at $8.
+        let overridden = model_settings(
+            "gpt-6-astra",
+            &json!({"modelOverrides":{"gpt-6-astra":{"pricing":{"inputPerToken":2e-6,"outputPerToken":8e-6}}}}),
+        )
+        .unwrap()
+        .pricing;
+        close(
+            usage_summary(
+                &json!({"usage":{"input_tokens":1_000_000,"output_tokens":100_000,"input_tokens_details":{"cached_tokens":300_000,"cache_write_tokens":200_000}}}),
+                0,
+                overridden,
+            )["cost"]
+                .as_f64(),
+            1.0 + 0.06 + 0.5 + 0.8,
+        );
+    }
 }
