@@ -141,7 +141,7 @@ fn references(markdown: &str, name: &str) -> Vec<Reference> {
         let trimmed = line.trim().trim_start_matches(['$', '>']).trim_start();
         if matches!(
             trimmed.split_whitespace().next(),
-            Some("corepack" | "pnpm" | "npm" | "cargo")
+            Some("corepack" | "pnpm" | "npm" | "npx" | "cargo" | "gh")
         ) && command.is_none()
         {
             continue;

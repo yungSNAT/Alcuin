@@ -34,7 +34,7 @@ Each new request opens a Temporary Chat. ChatGPT offers neither Deep Research no
 
 Several text files are bundled into one upload by default. Each file must be under the size limit, 1 MB unless you set `--max-file-size-bytes`, `ORACLE_MAX_FILE_SIZE_BYTES` or `maxFileSizeBytes` ([Configuration](configuration.md)). A file that looks like it holds a credential is refused unless you name it with `--allow-secret-file <path>`.
 
-Preview what a run would send, with each file's size and token count, before sending it:
+Preview what a run would send, with each file's size, before sending it:
 
 ```sh
 alcuin --engine browser --dry-run summary --files-report -p "Review the tree" --file "src/**/*.rs"

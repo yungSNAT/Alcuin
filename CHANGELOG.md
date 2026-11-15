@@ -19,6 +19,7 @@
 - MCP `consult` and `project_sources`, and `alcuin project-sources`, now refuse to run when a `config.json` (the user's or a project's `.oracle/config.json`) cannot be read or parsed, naming the file. The warning reached only the server's stderr, which an MCP client does not show, and the run went ahead without that file's settings: with `OPENAI_API_KEY` set, a browser engine set only in a broken config became a paid API run.
 - An MCP `consult` that waits for its answer takes its perf trace only from the server's `ORACLE_PERF_TRACE`. It used the process-wide trace first, so after one traced consult every later one in the same server named its file after both session IDs (`trace.<first>.<later>.json`). A detached MCP `consult` (`waitForCompletion: false`) now does the same; its worker's trace still carried both IDs.
 - The MCP server has a `ground` tool, 'Check an Alcuin answer's evidence', so an MCP client can check a saved answer's citations and quotes as `alcuin ground` does. It returns the `--json` report with `sessionId` and `flagged`, sees the sessions `sessions` and `wait` see, and reads a session's files as they are now only inside the server's working directory unless `ORACLE_MCP_ALLOW_EXTERNAL_INPUT=1` is set.
+- `alcuin docs check` no longer reads the options on an `npx` or `gh` command line, such as `npx skills add` or `gh attestation verify`, as Alcuin's own; such a line was reported as drift. A line that runs Oracle through `npx` is still checked.
 
 ## 0.1.0 (2026-11-12)
 

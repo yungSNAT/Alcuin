@@ -15,7 +15,7 @@
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
-Guides: [Quickstart](docs/quickstart.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [MCP setup](docs/mcp.md) · [Troubleshooting](docs/troubleshooting.md)
+Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [MCP setup](docs/mcp.md) · [Coding agents](docs/agents.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
 
 </div>
 
