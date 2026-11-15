@@ -83,6 +83,8 @@ alcuin --engine api --max-cost 1 --max-output 30000 --search off -p "Review this
 
 Here 30,000 output tokens alone could cost $1.50, so the run is refused, exit code 1, with 'This run could cost up to $1.5…, over --max-cost $1. Lower --max-output or attach less.'
 
+The input count is Alcuin's own estimate (the o200k_base tokenizer plus a 200-token allowance), and the rates are GPT-6 Astra's standard OpenAI prices that Alcuin bundles ($10 input and $50 output per 1M tokens, read 15 November 2026). The provider's own count can differ, and an Azure deployment is priced at the same rates, so leave headroom, or lower the cap if your Azure rates are higher.
+
 When both are set, the lower cap applies, so a run or an MCP client can tighten the cap in your config but not lift it. A project file cannot set it. Browser runs are not affected.
 
 ## What a project file may set
