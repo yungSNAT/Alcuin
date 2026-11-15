@@ -56,7 +56,7 @@ alcuin --dry-run json -p "Review main.rs please" --file src/main.rs
 | `heartbeatSeconds` | Seconds between progress updates; 0 turns them off (default 30) | `--heartbeat` |
 | `background` | Responses API background mode for API runs | `--background`, `--no-background` |
 | `maxCost` | Refuse an API run whose estimated worst-case cost is more than this many US dollars ([A spend cap](#a-spend-cap)) | `--max-cost` |
-| `apiBaseUrl` | OpenAI-compatible base URL for API runs | `--base-url` |
+| `apiBaseUrl` | OpenAI API base URL for API runs, on `api.openai.com` or a subdomain of it; other URLs are refused | `--base-url` |
 | `azure` | `endpoint`, `deployment` and `apiVersion` for Azure OpenAI | `--azure-endpoint`, `--azure-deployment`, `--azure-api-version` |
 | `notify` | `enabled` and `sound`, both `true` or `false` | `--notify`, `--notify-sound` |
 | `browser.thinkingTime` | `pro` (default) or `extra-high` | `--browser-thinking-time` |
@@ -130,6 +130,6 @@ Alcuin keeps Oracle's names, so existing setups carry over.
 | `ORACLE_NOTIFY`, `ORACLE_NOTIFY_SOUND` | `1`, `true`, `yes` or `on` to turn on; `0`, `false`, `no` or `off` to turn off |
 | `ORACLE_DISABLE_NOTIFICATIONS` | `1` turns notifications off |
 | `CHROME_PATH` | Chrome or Chromium executable to use |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | OpenAI API key and base URL |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | OpenAI API key and base URL (an `api.openai.com` host) |
 | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` | Azure OpenAI |
 | `ORACLE_REMOTE_HOST`, `ORACLE_REMOTE_TOKEN` | A remote `alcuin serve` and its access token |
