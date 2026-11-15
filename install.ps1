@@ -57,16 +57,27 @@
             Remove-Item "$target.old" -Force -ErrorAction SilentlyContinue
         }
         "Installed alcuin $installed and alcuin-mcp in $dir."
-        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-        $entries = @($userPath -split ';' | Where-Object { $_ })
-        if ($entries -notcontains $dir) {
-            if ($env:ALCUIN_NO_MODIFY_PATH -eq '1') {
-                "Add $dir to your Path to run alcuin from any terminal."
-            } else {
-                [Environment]::SetEnvironmentVariable('Path', (($entries + $dir) -join ';'), 'User')
-                $env:Path = "$dir;$env:Path"
-                "Added $dir to your user Path; open a new terminal to use it elsewhere."
+        # The registry value as stored: GetEnvironmentVariable would expand entries such as
+        # %USERPROFILE%\bin, and SetEnvironmentVariable would save them expanded.
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+        try {
+            $userPath = $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+            $entries = @($userPath -split ';' | Where-Object { $_ })
+            if ($entries -notcontains $dir) {
+                if ($env:ALCUIN_NO_MODIFY_PATH -eq '1') {
+                    "Add $dir to your Path to run alcuin from any terminal."
+                } else {
+                    $key.SetValue('Path', (($entries + $dir) -join ';'), 'ExpandString')
+                    # Setting and clearing a variable this way tells open programs, such as
+                    # Explorer, that the environment changed, so new terminals see the Path.
+                    [Environment]::SetEnvironmentVariable('ALCUIN_INSTALL_NOTIFY', '1', 'User')
+                    [Environment]::SetEnvironmentVariable('ALCUIN_INSTALL_NOTIFY', $null, 'User')
+                    $env:Path = "$dir;$env:Path"
+                    "Added $dir to your user Path; open a new terminal to use it elsewhere."
+                }
             }
+        } finally {
+            $key.Close()
         }
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
