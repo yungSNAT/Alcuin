@@ -51,17 +51,35 @@ main() {
 		fail "the downloaded alcuin does not run here; it needs glibc 2.39 or later (ldd --version shows yours). Nothing was installed."
 
 	mkdir -p "$dir"
-	# Both binaries are copied beside their targets first, so a failed copy leaves the old pair in
-	# place, and only then renamed over them: a rename within one folder does not fail for want of
-	# space, and it replaces a binary that is running, such as an MCP client's alcuin-mcp.
-	trap 'rm -rf "$tmp"; rm -f "$dir/.alcuin.new" "$dir/.alcuin-mcp.new"' EXIT
+	# Both binaries are copied beside their targets, and the old ones linked aside, before either
+	# is replaced, so a failed copy leaves the old pair in place. A rename then replaces each, even
+	# one that is running, such as an MCP client's alcuin-mcp; if the second fails, the first old
+	# one is put back.
+	keep_old=
+	trap 'rm -rf "$tmp"; rm -f "$dir/.alcuin.new" "$dir/.alcuin-mcp.new"; [ -n "$keep_old" ] || rm -f "$dir/.alcuin.old" "$dir/.alcuin-mcp.old"' EXIT
 	for bin in alcuin alcuin-mcp; do
 		cp "$tmp/$name/$bin" "$dir/.$bin.new" || fail "could not write to $dir; nothing was installed."
 		chmod 755 "$dir/.$bin.new"
+		if [ -f "$dir/$bin" ]; then
+			ln -f "$dir/$bin" "$dir/.$bin.old" 2>/dev/null || cp -p "$dir/$bin" "$dir/.$bin.old" ||
+				fail "could not keep a copy of $dir/$bin; nothing was installed."
+		fi
 	done
-	for bin in alcuin alcuin-mcp; do
-		mv -f "$dir/.$bin.new" "$dir/$bin"
-	done
+	if ! { mv -f "$dir/.alcuin.new" "$dir/alcuin" && mv -f "$dir/.alcuin-mcp.new" "$dir/alcuin-mcp"; }; then
+		for bin in alcuin alcuin-mcp; do
+			if [ -f "$dir/.$bin.old" ]; then
+				# Still the old one when its own rename never ran.
+				cmp -s "$dir/.$bin.old" "$dir/$bin" && continue
+				if ! mv -f "$dir/.$bin.old" "$dir/$bin"; then
+					keep_old=1
+					echo "alcuin install: the old $bin is in $dir/.$bin.old." >&2
+				fi
+			elif [ -f "$dir/$bin" ] && cmp -s "$dir/$bin" "$tmp/$name/$bin"; then
+				rm -f "$dir/$bin"
+			fi
+		done
+		fail "could not replace the binaries in $dir; the old ones were put back."
+	fi
 	echo "Installed alcuin $installed and alcuin-mcp in $dir."
 	case ":$PATH:" in
 	*":$dir:"*) ;;

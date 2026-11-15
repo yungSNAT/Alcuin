@@ -61,25 +61,33 @@
                 # A running binary, such as an MCP client's alcuin-mcp.exe, can be renamed but not
                 # overwritten, so the old one is moved aside first, under a name no earlier
                 # install can still hold.
-                $old = $null
-                if (Test-Path $target) {
-                    $old = "$target.$([Guid]::NewGuid().ToString('N')).old"
+                $old = if (Test-Path $target) { "$target.$([Guid]::NewGuid().ToString('N')).old" }
+                # Recorded first, so a failure from here on is undone.
+                $replaced += , @($target, $old)
+                if ($old) {
                     Move-Item $target $old
                 }
-                $replaced += , @($target, $old)
                 Move-Item "$target.new" $target
             }
         } catch {
-            # Put back what was replaced, last first, so the old pair stays whole.
+            $failure = $_
+            # Put back what was replaced, last first, so the old pair stays whole. Each is tried
+            # even if another fails, and a binary is only ever overwritten by its old one, never
+            # removed first.
             [array]::Reverse($replaced)
             foreach ($pair in $replaced) {
                 $target, $old = $pair
-                Remove-Item $target -Force -ErrorAction SilentlyContinue
-                if ($old) {
-                    Move-Item $old $target -Force
+                try {
+                    if (-not $old) {
+                        Remove-Item $target -Force -ErrorAction SilentlyContinue
+                    } elseif (Test-Path $old) {
+                        Move-Item $old $target -Force
+                    }
+                } catch {
+                    Write-Warning "alcuin install: the old $(Split-Path $target -Leaf) is in $old."
                 }
             }
-            throw
+            throw $failure
         } finally {
             foreach ($bin in $bins) {
                 Remove-Item (Join-Path $dir "$bin.new") -Force -ErrorAction SilentlyContinue
