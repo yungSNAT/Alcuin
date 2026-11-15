@@ -49,7 +49,7 @@ jobs:
           if [ -n "$base" ] && files=$(git diff --no-renames --name-only "$base" HEAD) && [ -n "$files" ]; then
             docs=true
             while IFS= read -r file; do
-              [[ $file == .github/workflows/ci.yml || $file == docs/* || $file == .github/assets/* || ($file != */* && $file == *.md) ]] || docs=false
+              [[ $file == docs/* || $file == .github/assets/* || ($file != */* && $file == *.md) ]] || docs=false
             done <<< "$files"
           fi
           echo "docs-only=$docs" >> "$GITHUB_OUTPUT"
