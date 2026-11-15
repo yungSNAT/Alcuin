@@ -240,13 +240,63 @@ fn a_failed_update_leaves_the_old_pair_in_place() {
     fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(!output.status.success(), "{}", text(&output.stdout));
     for bin in ["alcuin", "alcuin-mcp"] {
-        assert_eq!(
-            fs::read_to_string(dir.join(bin)).unwrap(),
-            "PUBLIC old",
-            "{bin}"
-        );
+        assert!(fs::read(dir.join(bin)).unwrap() == b"PUBLIC old", "{bin}");
     }
     assert!(!dir.join(".alcuin.new").exists());
+    // The second rename fails after the first binary was replaced: the old one is put back.
+    fs::remove_dir(&blocked).unwrap();
+    fs::remove_file(dir.join("alcuin-mcp")).unwrap();
+    let held = dir.join("alcuin-mcp");
+    fs::create_dir(&held).unwrap();
+    fs::set_permissions(&held, fs::Permissions::from_mode(0o555)).unwrap();
+    let output = install(&format!("{url}/release"), &dir, root.path());
+    fs::set_permissions(&held, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    assert!(
+        fs::read(dir.join("alcuin")).unwrap() == b"PUBLIC old",
+        "{}",
+        text(&output.stderr)
+    );
+    for leftover in [".alcuin.new", ".alcuin.old", ".alcuin-mcp.new"] {
+        assert!(!dir.join(leftover).exists(), "{leftover}");
+    }
+}
+
+/// An update whose second binary cannot be moved aside, after the first was replaced, puts the
+/// first old one back and leaves no staging or aside copies.
+#[cfg(windows)]
+#[test]
+fn a_failed_update_puts_the_old_binary_back() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("alcuin.exe"), "PUBLIC old").unwrap();
+    // A folder with a file open and unshared cannot be renamed.
+    let held = dir.join("alcuin-mcp.exe");
+    fs::create_dir(&held).unwrap();
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .share_mode(0)
+        .open(held.join("held"))
+        .unwrap();
+    let output = install(&format!("{url}/release"), &dir, root.path());
+    drop(lock);
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    assert!(
+        fs::read(dir.join("alcuin.exe")).unwrap() == b"PUBLIC old",
+        "{}",
+        text(&output.stderr)
+    );
+    let left: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left.len(), 2, "{left:?}");
 }
 
 #[cfg(windows)]
