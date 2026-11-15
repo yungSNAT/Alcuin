@@ -51,6 +51,23 @@ fn inherited_command_aliases_and_core_sections_keep_their_own_flag_scope() {
     assert!(docs_check::format_result(&result).contains("Docs/help drift:"));
 }
 #[test]
+fn other_tools_command_lines_keep_their_own_flags() {
+    let home = tempfile::tempdir().unwrap();
+    fs::write(
+        home.path().join("install.md"),
+        "npx skills add yungSNAT/Alcuin --skill alcuin --global --yes\n$ gh attestation verify a.zip --repo yungSNAT/Alcuin\nnpx @steipete/oracle status --json\n",
+    )
+    .unwrap();
+    let result = docs_check::check(home.path(), &["install.md".into()]).unwrap();
+    let issues: Vec<_> = result
+        .issues
+        .iter()
+        .map(|issue| (issue.flag.as_str(), issue.command.as_deref()))
+        .collect();
+    // Only the line that runs Oracle, under `npx`, is read for Alcuin's flags.
+    assert_eq!(issues, [("--json", Some("alcuin status"))]);
+}
+#[test]
 fn explicit_missing_paths_refuse_and_default_paths_do_not_visit_unrelated_documents() {
     let home = tempfile::tempdir().unwrap();
     assert!(docs_check::check(home.path(), &[]).is_err());
@@ -167,21 +184,15 @@ fn readme_documents_ground_within_its_declared_flags() {
 #[test]
 fn guides_name_only_real_commands_and_flags() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    // The MCP guide and the README also quote other tools' commands, such as `gh`, whose flags
-    // the check would read as Alcuin's.
-    let paths: Vec<String> = [
-        "quickstart",
-        "sessions",
-        "troubleshooting",
-        "configuration",
-        "browser",
-        "files",
-        "remote",
-        "exit-codes",
-    ]
-    .iter()
-    .map(|guide| format!("docs/{guide}.md"))
-    .collect();
+    // Every guide, so a new one is checked without being listed here.
+    let mut paths: Vec<String> = fs::read_dir(root.join("docs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".md"))
+        .map(|name| format!("docs/{name}"))
+        .collect();
+    paths.sort();
+    assert!(paths.contains(&"docs/quickstart.md".to_owned()), "{paths:?}");
     // Flags, against the captured definitions the help renders from.
     let result = docs_check::check(root, &paths).unwrap();
     assert!(
