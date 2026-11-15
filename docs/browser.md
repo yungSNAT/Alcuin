@@ -4,13 +4,13 @@
 
 ## Model and thinking level
 
-Every new request asks for Latest (GPT-6). `--model` takes `gpt-6-pro` (the browser default), `gpt-6` or `Latest`; any other model is refused before anything is sent.
+Every new request asks for Latest (GPT-6). `--model` takes `gpt-6-pro` (the browser default), `gpt-6`, `gpt-6-astra` or `Latest`; any other model, such as `gpt-5.6`, is refused before anything is sent.
 
 `--browser-thinking-time` takes `pro` (the default) or `extra-high`. Before it sends the prompt, Alcuin selects the model and thinking level in ChatGPT's picker and checks that both are shown as selected:
 
 - A Pro request falls back to Extra High only when ChatGPT shows that Pro is unavailable. A missing or ambiguous control stops the run instead.
 - An Extra High request never tries Pro.
-- Any other level, such as `heavy` or `light`, is refused before anything is sent.
+- Any other level, such as `heavy` or `light`, is refused before anything is sent. A `--dry-run` preview does not check the level.
 
 `--browser-model-strategy` sets how the picker is used: `select` (the default) chooses the requested model, `current` keeps the model already selected and `ignore` leaves the picker alone. The label ChatGPT shows does not prove which backend model answered.
 

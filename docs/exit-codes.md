@@ -5,9 +5,9 @@ Scripts and agents that run `alcuin` can tell the outcome from its exit code. Er
 | Code | Meaning |
 | --- | --- |
 | 0 | Success |
-| 1 | An error, including an unknown option or a value it does not accept, a refused request, a failed run, a run saved as `partial` and drift found by `docs check` |
+| 1 | An error, including an unknown option or a value it does not accept, a refused request, a run already going, a failed run, a run saved as `partial` and drift found by `docs check` |
 | 2 | `alcuin ground` could not check the session, for example because it does not exist |
-| 130 | You pressed Ctrl-C during a browser run |
+| 130 | You pressed Ctrl-C before an answer was saved |
 
 `alcuin ground` exits 1 when it flags a citation or quote, as well as on an error ([Check an answer's evidence](sessions.md#check-an-answers-evidence)).
 
@@ -19,7 +19,7 @@ An unknown option, or a value an option does not accept, prints the problem and 
 alcuin --engine bogus -p "Review main.rs please"
 ```
 
-A run with no prompt prints 'Prompt is required.' and the help.
+A run with no prompt prints 'Prompt is required.' on stdout and the help on stderr, and exits 1.
 
 ## Refused requests
 
@@ -32,7 +32,7 @@ Alcuin refuses some requests before anything is sent, and says why:
 
 ## A run already going
 
-If the same prompt is already running, a new run stops and says so, rather than sending it twice. Attach to the running session with `alcuin session <id>`, or pass `--force` to start another anyway.
+If the same prompt is already running, a new run prints a notice on stdout and exits 1, rather than sending it twice. Attach to the running session with `alcuin session <id>`, or pass `--force` to start another anyway.
 
 ## Ctrl-C
 
