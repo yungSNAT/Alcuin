@@ -559,10 +559,8 @@ mod tests {
         let home = root.path().join("home");
         let cwd = home.join("project");
         fs::create_dir_all(&cwd).unwrap();
-        let account = Account {
-            home: Some(home),
-            ..Account::current()
-        };
+        let mut account = Account::current();
+        account.home = Some(home);
         assert_eq!(
             account.project_candidates(&cwd, None),
             [cwd.join(".oracle/config.json")]
