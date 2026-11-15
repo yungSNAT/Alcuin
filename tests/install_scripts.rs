@@ -186,6 +186,24 @@ fn the_installer_checks_the_archive_then_installs_both_binaries() {
             .unwrap();
         assert_eq!(text(&output.stdout), format!("{version}\n"));
     }
+    // An MCP client's alcuin-mcp keeps running through 2 updates: the first moves it aside and
+    // the second must not trip over the copy the running process still holds.
+    let mut running = Command::new(dir.join(format!("alcuin-mcp{exe}")))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    for _ in 0..2 {
+        let output = install(&format!("{url}/release"), &dir, root.path());
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        assert!(
+            fs::read(dir.join(format!("alcuin-mcp{exe}"))).unwrap()
+                == fs::read(env!("CARGO_BIN_EXE_alcuin-mcp")).unwrap()
+        );
+    }
+    running.kill().unwrap();
+    running.wait().unwrap();
     // A wrong checksum installs nothing.
     let refused = root.path().join("refused");
     let output = install(&format!("{url}/bad"), &refused, root.path());
@@ -196,6 +214,39 @@ fn the_installer_checks_the_archive_then_installs_both_binaries() {
         text(&output.stderr)
     );
     assert!(!refused.exists());
+}
+
+/// An update that cannot write its second binary leaves the old pair as it was.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_update_leaves_the_old_pair_in_place() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    fs::create_dir_all(&dir).unwrap();
+    for bin in ["alcuin", "alcuin-mcp"] {
+        fs::write(dir.join(bin), "PUBLIC old").unwrap();
+    }
+    // The second binary's staging copy cannot be written.
+    let blocked = dir.join(".alcuin-mcp.new");
+    fs::create_dir(&blocked).unwrap();
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(blocked.join("probe"), "").is_ok() {
+        return; // Running as root: nothing can be blocked this way.
+    }
+    let output = install(&format!("{url}/release"), &dir, root.path());
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    for bin in ["alcuin", "alcuin-mcp"] {
+        assert_eq!(
+            fs::read_to_string(dir.join(bin)).unwrap(),
+            "PUBLIC old",
+            "{bin}"
+        );
+    }
+    assert!(!dir.join(".alcuin.new").exists());
 }
 
 #[cfg(windows)]
@@ -287,4 +338,46 @@ fn the_windows_installer_adds_its_folder_to_the_user_path_as_stored() {
         1,
         "{value}"
     );
+    // A Path the user keeps as REG_SZ stays REG_SZ, and the user's own variables are untouched.
+    let seeded = format!("{value};{kept}");
+    for args in [
+        [
+            "add",
+            ENVIRONMENT,
+            "/v",
+            "Path",
+            "/t",
+            "REG_SZ",
+            "/d",
+            seeded.as_str(),
+            "/f",
+        ],
+        [
+            "add",
+            ENVIRONMENT,
+            "/v",
+            "ALCUIN_INSTALL_NOTIFY",
+            "/t",
+            "REG_SZ",
+            "/d",
+            "PUBLIC",
+            "/f",
+        ],
+    ] {
+        let output = reg(&args);
+        assert!(output.status.success(), "{}", text(&output.stderr));
+    }
+    let other = root.path().join("other");
+    let output = install_with_path(&format!("{url}/release"), &other, root.path(), true);
+    let notify = reg(&["query", ENVIRONMENT, "/v", "ALCUIN_INSTALL_NOTIFY"]);
+    reg(&["delete", ENVIRONMENT, "/v", "ALCUIN_INSTALL_NOTIFY", "/f"]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert!(
+        text(&notify.stdout).contains("PUBLIC"),
+        "{}",
+        text(&notify.stdout)
+    );
+    let (kind, value) = user_path().unwrap();
+    assert_eq!(kind, "REG_SZ", "{value}");
+    assert_eq!(value, format!("{seeded};{}", other.display()));
 }
