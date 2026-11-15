@@ -597,3 +597,113 @@ fn duplicate_guard_admits_only_a_run_whose_worker_is_dead() {
         assert_eq!(stored(&store), before);
     }
 }
+
+/// Admits a capped run as `prepare` would and reports how many sessions it left behind.
+fn capped(input: Value, config: Value) -> (Result<Value>, usize) {
+    let home = tempfile::tempdir().unwrap();
+    let mut request =
+        json!({"prompt":PROMPT,"engine":"api","maxCost":1.0,"maxOutput":1_000,"search":false});
+    // A null removes the default.
+    for (key, value) in input.as_object().unwrap() {
+        if value.is_null() {
+            request.as_object_mut().unwrap().remove(key);
+        } else {
+            request[key] = value.clone();
+        }
+    }
+    let store = SessionStore::new(home.path());
+    let result = execution::resolve(&request, &config, &Environment::new(), home.path()).and_then(
+        |resolved| {
+            execution::prepare(
+                &store,
+                &resolved,
+                home.path(),
+                route(ApiTransport::Responses, "https://synthetic.example/v1"),
+            )
+        },
+    );
+    (result, store.list(true).unwrap().len())
+}
+
+#[test]
+fn a_spend_cap_admits_only_a_run_whose_worst_case_cost_it_can_bound() {
+    // 1,000 output tokens at $50 per 1M is $0.05, with a few dozen input tokens: under $1.
+    let (admitted, sessions) = capped(json!({}), json!({}));
+    admitted.unwrap();
+    assert_eq!(sessions, 1);
+    for (input, config, refusal) in [
+        // 100,000 output tokens could cost $5.
+        (
+            json!({"maxOutput":100_000}),
+            json!({}),
+            "could cost up to $5.0",
+        ),
+        // The config's cap holds even when the run asks for a higher one.
+        (
+            json!({"maxOutput":100_000,"maxCost":10.0}),
+            json!({"maxCost":1.0}),
+            "over --max-cost $1",
+        ),
+        (
+            json!({"maxCost":null,"maxOutput":100_000}),
+            json!({"maxCost":1.0}),
+            "over --max-cost $1",
+        ),
+        (json!({"maxOutput":null}), json!({}), "--max-output"),
+        (json!({"search":null}), json!({}), "--search off"),
+        (
+            json!({"previousResponseId":"resp_PUBLIC"}),
+            json!({}),
+            "follow-up",
+        ),
+        (
+            json!({}),
+            json!({"modelOverrides":{"gpt-6-astra":{"pricing":null}}}),
+            "no pricing",
+        ),
+        (
+            json!({"maxCost":0}),
+            json!({}),
+            "positive number of dollars",
+        ),
+        (
+            json!({}),
+            json!({"maxCost":"1"}),
+            "positive number of dollars",
+        ),
+    ] {
+        let (refused, sessions) = capped(input.clone(), config.clone());
+        let text = refused.unwrap_err().to_string();
+        assert!(text.contains(refusal), "{input} {config}: {text}");
+        assert_eq!(sessions, 0, "{input} {config}");
+    }
+    // Without a cap nothing changes: no output bound or search setting is needed.
+    let (uncapped, _) = capped(
+        json!({"maxCost":null,"maxOutput":null,"search":null}),
+        json!({}),
+    );
+    uncapped.unwrap();
+}
+
+#[test]
+fn the_cli_refuses_a_capped_run_it_cannot_bound_before_creating_a_session() {
+    let home = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
+        .env_clear()
+        .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("ORACLE_HOME_DIR", home.path())
+        .env("OPENAI_API_KEY", "PUBLIC-SYNTHETIC-KEY")
+        .current_dir(home.path())
+        .args(["--engine", "api", "--prompt", PROMPT, "--max-cost", "0.50"])
+        .args(["--search", "off", "--max-output", "20000"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("could cost up to $1.0"), "{stderr}");
+    assert!(stderr.contains("over --max-cost $0.5"), "{stderr}");
+    let sessions = SessionStore::new(home.path()).list(true).unwrap();
+    assert!(sessions.is_empty(), "{sessions:?}");
+}
