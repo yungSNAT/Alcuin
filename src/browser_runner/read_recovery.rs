@@ -2,6 +2,16 @@
 use super::*;
 use anyhow::Context as _;
 
+#[cfg(test)]
+thread_local! {
+    /// Runs once before this thread's next observation read, as another process would act then.
+    pub(super) static TEST_BEFORE_OBSERVATION_READ: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+    /// Delays this thread's next observation read once, as a slow page would.
+    pub(super) static TEST_OBSERVATION_READ_DELAY: std::cell::Cell<Duration> =
+        const { std::cell::Cell::new(Duration::ZERO) };
+}
+
 pub(super) struct Budget {
     enabled: bool,
     deadline: Option<Instant>,
@@ -111,6 +121,10 @@ impl Budget {
                 context.record("expired", cancel)?;
                 return Err(original.context("Bounded original-target observation expired"));
             }
+            #[cfg(test)]
+            if let Some(hook) = TEST_BEFORE_OBSERVATION_READ.take() {
+                hook();
+            }
             let result = tokio::time::timeout_at(deadline, async {
                 context
                     .require_browser(limits.command.min(remaining), cancel)
@@ -124,6 +138,8 @@ impl Budget {
                 }
                 bounded.commit = reading;
                 bounded.answer = reading;
+                #[cfg(test)]
+                tokio::time::sleep(TEST_OBSERVATION_READ_DELAY.take()).await;
                 let result = read(bounded).await;
                 context.require(cancel)?;
                 result
