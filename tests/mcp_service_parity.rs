@@ -190,6 +190,30 @@ async fn dry_runs_print_the_reference_summary_resolved_lines_and_guidance() {
 }
 
 #[tokio::test]
+async fn an_api_dry_run_refuses_a_base_url_the_run_refuses() {
+    let home = tempfile::tempdir().unwrap();
+    let server = server(
+        home.path(),
+        Environment::from([(
+            "OPENAI_BASE_URL".into(),
+            "https://gateway.invalid/v1".into(),
+        )]),
+    );
+    let error = call(
+        &server,
+        "consult",
+        json!({"prompt":PROMPT,"engine":"api","dryRun":true}),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        error,
+        "--reasoning-mode requires the OpenAI or Azure OpenAI Responses API; OpenRouter and custom --base-url routes use the Chat Completions adapter."
+    );
+}
+
+#[tokio::test]
 async fn a_config_file_that_fails_to_load_refuses_the_call() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("config.json");

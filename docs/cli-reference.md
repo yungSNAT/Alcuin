@@ -70,7 +70,7 @@ A bare argument is the prompt, as `-p` gives it.
 | --- | --- |
 | `--route` | Print the API provider route and exit |
 | `--preflight` | Check that the API provider is ready for the model and exit |
-| `--base-url <url>` | Another OpenAI API base URL on `api.openai.com` or a subdomain of it; an API run through any other URL, such as a proxy, is refused before it is sent |
+| `--base-url <url>` | Another OpenAI API base URL on `api.openai.com` or a subdomain of it; an API run through any other URL, such as a proxy, is refused before it is sent, and `--route`, `--preflight` and `--dry-run` refuse it too |
 | `--provider <provider>` | `auto` (the default), `openai` or `azure` |
 | `--no-azure` | Ignore Azure settings for this run, as `--provider openai` does |
 | `--azure-endpoint <url>` | Azure OpenAI endpoint |
