@@ -27,6 +27,15 @@ pub struct Route {
     pub azure_deployment_name: Option<String>,
     pub transport: ApiTransport,
 }
+/// Alcuin API runs always use Pro reasoning, which the Chat Completions adapter refuses, so a run,
+/// a dry run and a route plan all refuse a route through OpenRouter or a custom base URL.
+pub fn require_responses(route: &Route) -> Result<()> {
+    anyhow::ensure!(
+        route.transport == ApiTransport::Responses,
+        "--reasoning-mode requires the OpenAI or Azure OpenAI Responses API; OpenRouter and custom --base-url routes use the Chat Completions adapter."
+    );
+    Ok(())
+}
 #[derive(Clone)]
 pub struct Secret(String);
 impl Secret {
