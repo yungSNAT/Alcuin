@@ -125,10 +125,11 @@ impl Budget {
             if let Some(hook) = TEST_BEFORE_OBSERVATION_READ.take() {
                 hook();
             }
+            // The tab check has the command budget, not what is left of this one: a check the
+            // deadline cut short would prove nothing, and one that fails within its own budget
+            // is a real failure.
+            context.require_browser(limits.command, cancel).await?;
             let result = tokio::time::timeout_at(deadline, async {
-                context
-                    .require_browser(limits.command.min(remaining), cancel)
-                    .await?;
                 let mut bounded = self.limits(limits);
                 let reading = deadline
                     .saturating_duration_since(Instant::now())
@@ -170,9 +171,13 @@ impl Budget {
                 // Privacy, source, ownership, storage and transport failures must not retain a
                 // provider-eligible error in their source chain.
                 Ok(Err(error)) => return Err(error),
-                Err(_) => bail!(
-                    "Original-target observation did not settle before its deadline; recovery retained"
-                ),
+                // A read still pending at the deadline, such as a slow page call, proves no fault:
+                // the tab is checked again before the observation expires.
+                Err(_) => {
+                    context.require_browser(limits.command, cancel).await?;
+                    context.record("expired", cancel)?;
+                    return Err(original.context("Bounded original-target observation expired"));
+                }
             }
         }
     }
