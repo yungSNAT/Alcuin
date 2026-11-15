@@ -55,6 +55,7 @@ alcuin --dry-run json -p "Review main.rs please" --file src/main.rs
 | `filesReport` | Show token use per attached file | `--files-report` |
 | `heartbeatSeconds` | Seconds between progress updates; 0 turns them off (default 30) | `--heartbeat` |
 | `background` | Responses API background mode for API runs | `--background`, `--no-background` |
+| `maxCost` | Refuse an API run that could cost more than this many US dollars ([A spend cap](#a-spend-cap)) | `--max-cost` |
 | `apiBaseUrl` | OpenAI-compatible base URL for API runs | `--base-url` |
 | `azure` | `endpoint`, `deployment` and `apiVersion` for Azure OpenAI | `--azure-endpoint`, `--azure-deployment`, `--azure-api-version` |
 | `notify` | `enabled` and `sound`, both `true` or `false` | `--notify`, `--notify-sound` |
@@ -71,6 +72,18 @@ alcuin --dry-run json -p "Review main.rs please" --file src/main.rs
 | `browser.endMarker` | Ask for an end line and save an answer without it as `partial` | `--browser-end-marker` |
 
 [Browser runs](browser.md) explains the thinking-time, strategy and profile settings.
+
+## A spend cap
+
+`maxCost`, or `--max-cost <dollars>` for one run, refuses an API run before anything is sent when it could cost more than that many US dollars. Alcuin counts the most the run could cost: its input, by Alcuin's own token count, at the highest rate input is billed at (a cache write, 1.25 times the input rate), plus `--max-output` tokens, which include reasoning, at the output rate. So a capped run needs `--max-output` and `--search off`, as search adds charges Alcuin cannot count, and a follow-up is refused, as its earlier conversation is billed again without being counted:
+
+```sh
+alcuin --engine api --max-cost 1 --max-output 30000 --search off -p "Review this module" --file src/lib.rs
+```
+
+Here 30,000 output tokens alone could cost $1.50, so the run is refused, exit code 1, with 'This run could cost up to $1.5…, over --max-cost $1. Lower --max-output or attach less.'
+
+When both are set, the lower cap applies, so a run or an MCP client can tighten the cap in your config but not lift it. A project file cannot set it. Browser runs are not affected.
 
 ## What a project file may set
 
