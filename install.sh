@@ -51,10 +51,15 @@ main() {
 		fail "the downloaded alcuin does not run here; it needs glibc 2.39 or later (ldd --version shows yours). Nothing was installed."
 
 	mkdir -p "$dir"
-	# A rename replaces a binary that is running, such as an MCP client's alcuin-mcp; a copy would not.
+	# Both binaries are copied beside their targets first, so a failed copy leaves the old pair in
+	# place, and only then renamed over them: a rename within one folder does not fail for want of
+	# space, and it replaces a binary that is running, such as an MCP client's alcuin-mcp.
+	trap 'rm -rf "$tmp"; rm -f "$dir/.alcuin.new" "$dir/.alcuin-mcp.new"' EXIT
 	for bin in alcuin alcuin-mcp; do
-		cp "$tmp/$name/$bin" "$dir/.$bin.new"
+		cp "$tmp/$name/$bin" "$dir/.$bin.new" || fail "could not write to $dir; nothing was installed."
 		chmod 755 "$dir/.$bin.new"
+	done
+	for bin in alcuin alcuin-mcp; do
 		mv -f "$dir/.$bin.new" "$dir/$bin"
 	done
 	echo "Installed alcuin $installed and alcuin-mcp in $dir."

@@ -9,8 +9,6 @@
 & {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
-    # Windows PowerShell 5.1 may not offer TLS 1.2 by default, which GitHub requires.
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if (-not [Environment]::Is64BitOperatingSystem) {
         throw 'alcuin install: releases are built for 64-bit Windows only.'
     }
@@ -26,7 +24,11 @@
     $name = 'alcuin-x86_64-pc-windows-msvc'
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
     New-Item -ItemType Directory $tmp | Out-Null
+    $protocols = [Net.ServicePointManager]::SecurityProtocol
     try {
+        # Windows PowerShell 5.1 may not offer TLS 1.2 by default, which GitHub requires. The
+        # setting is the whole process's, so it is put back afterwards.
+        [Net.ServicePointManager]::SecurityProtocol = $protocols -bor [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest "$base/$name.zip" -OutFile "$tmp\$name.zip" -UseBasicParsing
         Invoke-WebRequest "$base/$name.zip.sha256" -OutFile "$tmp\$name.zip.sha256" -UseBasicParsing
         $expected = (Get-Content "$tmp\$name.zip.sha256" -Raw).Trim().Split(' ')[0]
@@ -44,17 +46,50 @@
             throw 'alcuin install: the downloaded alcuin.exe does not run here. Nothing was installed.'
         }
         New-Item -ItemType Directory -Force $dir | Out-Null
-        foreach ($bin in 'alcuin.exe', 'alcuin-mcp.exe') {
-            $target = Join-Path $dir $bin
-            # A running binary, such as an MCP client's alcuin-mcp.exe, can be renamed but not
-            # overwritten, so the old one is moved aside first.
-            if (Test-Path $target) {
-                Remove-Item "$target.old" -Force -ErrorAction SilentlyContinue
-                Move-Item $target "$target.old" -Force
+        $bins = 'alcuin.exe', 'alcuin-mcp.exe'
+        $replaced = @()
+        try {
+            # Both binaries are copied beside their targets first, so a failed copy leaves the
+            # old pair in place.
+            foreach ($bin in $bins) {
+                Copy-Item "$tmp\$name\$bin" (Join-Path $dir "$bin.new")
             }
-            Copy-Item "$tmp\$name\$bin" $target
-            # Gone unless it is still running; the next install removes it then.
-            Remove-Item "$target.old" -Force -ErrorAction SilentlyContinue
+            foreach ($bin in $bins) {
+                $target = Join-Path $dir $bin
+                # Left by an earlier install whilst it was running; removed once it is not.
+                Get-ChildItem $dir -Filter "$bin.*.old" | Remove-Item -Force -ErrorAction SilentlyContinue
+                # A running binary, such as an MCP client's alcuin-mcp.exe, can be renamed but not
+                # overwritten, so the old one is moved aside first, under a name no earlier
+                # install can still hold.
+                $old = $null
+                if (Test-Path $target) {
+                    $old = "$target.$([Guid]::NewGuid().ToString('N')).old"
+                    Move-Item $target $old
+                }
+                $replaced += , @($target, $old)
+                Move-Item "$target.new" $target
+            }
+        } catch {
+            # Put back what was replaced, last first, so the old pair stays whole.
+            [array]::Reverse($replaced)
+            foreach ($pair in $replaced) {
+                $target, $old = $pair
+                Remove-Item $target -Force -ErrorAction SilentlyContinue
+                if ($old) {
+                    Move-Item $old $target -Force
+                }
+            }
+            throw
+        } finally {
+            foreach ($bin in $bins) {
+                Remove-Item (Join-Path $dir "$bin.new") -Force -ErrorAction SilentlyContinue
+            }
+        }
+        foreach ($pair in $replaced) {
+            if ($pair[1]) {
+                # Gone unless it is still running; a later install removes it then.
+                Remove-Item $pair[1] -Force -ErrorAction SilentlyContinue
+            }
         }
         "Installed alcuin $installed and alcuin-mcp in $dir."
         # The registry value as stored: GetEnvironmentVariable would expand entries such as
@@ -67,11 +102,15 @@
                 if ($env:ALCUIN_NO_MODIFY_PATH -eq '1') {
                     "Add $dir to your Path to run alcuin from any terminal."
                 } else {
-                    $key.SetValue('Path', (($entries + $dir) -join ';'), 'ExpandString')
+                    # Kept as its own kind: REG_EXPAND_SZ, or REG_SZ if the user chose that.
+                    $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { 'ExpandString' }
+                    $key.SetValue('Path', (($entries + $dir) -join ';'), $kind)
                     # Setting and clearing a variable this way tells open programs, such as
-                    # Explorer, that the environment changed, so new terminals see the Path.
-                    [Environment]::SetEnvironmentVariable('ALCUIN_INSTALL_NOTIFY', '1', 'User')
-                    [Environment]::SetEnvironmentVariable('ALCUIN_INSTALL_NOTIFY', $null, 'User')
+                    # Explorer, that the environment changed, so new terminals see the Path. The
+                    # name is new each time, so no variable of the user's is touched.
+                    $notify = "ALCUIN_INSTALL_$([Guid]::NewGuid().ToString('N'))"
+                    [Environment]::SetEnvironmentVariable($notify, '1', 'User')
+                    [Environment]::SetEnvironmentVariable($notify, $null, 'User')
                     $env:Path = "$dir;$env:Path"
                     "Added $dir to your user Path; open a new terminal to use it elsewhere."
                 }
@@ -80,6 +119,7 @@
             $key.Close()
         }
     } finally {
+        [Net.ServicePointManager]::SecurityProtocol = $protocols
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
 }
