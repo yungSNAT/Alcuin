@@ -5110,9 +5110,10 @@ async fn a_read_pending_at_the_deadline_still_ends_on_lost_privacy() {
         let (store, id) = (f.store.clone(), f.id.clone());
         move || {
             store
-                .update(&id, |_| {
-                    Ok(Some(json!({"browser":{"runtime":{
-                        "providerReadRecovery":{"version":version}}}})))
+                .update(&id, |current| {
+                    let mut browser = current["browser"].clone();
+                    browser["runtime"]["providerReadRecovery"]["version"] = json!(version);
+                    Ok(Some(json!({ "browser": browser })))
                 })
                 .unwrap();
         }
