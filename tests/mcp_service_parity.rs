@@ -590,6 +590,10 @@ impl Child {
 
 /// Starts `alcuin-mcp` in `home` with an Azure API route to `endpoint`.
 fn mcp_child(home: &Path, endpoint: &str) -> Child {
+    mcp_child_with(home, endpoint, &[])
+}
+/// `mcp_child` with `extra` added to the server's environment.
+fn mcp_child_with(home: &Path, endpoint: &str, extra: &[(&str, &str)]) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_alcuin-mcp"));
     command
         .env_clear()
@@ -604,6 +608,7 @@ fn mcp_child(home: &Path, endpoint: &str) -> Child {
     for (key, value) in azure(endpoint) {
         command.env(key, value);
     }
+    command.envs(extra.iter().copied());
     let mut child = command
         .current_dir(home)
         .stdin(Stdio::piped())
@@ -664,6 +669,59 @@ fn stdio_serves_the_package_version_log_notifications_and_detached_hint() {
     drop(child.child.stdin.take());
     let _ = child.child.wait();
     std::thread::sleep(Duration::from_millis(200));
+}
+
+/// A detached consult's trace is the server's ORACLE_PERF_TRACE with its own session ID, even
+/// after an inline consult started the process-wide trace.
+#[test]
+fn a_detached_consult_after_a_traced_one_gets_its_own_trace() {
+    let home = tempfile::tempdir().unwrap();
+    let completed = json!({"id":"resp_PUBLIC","status":"completed","output_text":["PUBLIC answer"],"reasoning":{"mode":"pro"},"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}).to_string();
+    let (endpoint, _) = stub(vec![(200, completed.clone()), (200, completed)]);
+    let mut child = mcp_child_with(
+        home.path(),
+        &endpoint,
+        &[("ORACLE_PERF_TRACE", "PUBLIC-trace.json")],
+    );
+    child.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"PUBLIC","version":"0.0.0"}}}));
+    child.receive(1);
+    child.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let mut ids = vec![];
+    for (request, wait) in [(2, true), (3, false)] {
+        child.send(json!({"jsonrpc":"2.0","id":request,"method":"tools/call","params":{"name":"consult","arguments":{"prompt":format!("{PROMPT} {request}"),"engine":"api","waitForCompletion":wait}}}));
+        let reply = child.receive(request);
+        ids.push(
+            reply["result"]["structuredContent"]["sessionId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{reply}"))
+                .to_owned(),
+        );
+    }
+    child.send(json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wait","arguments":{"id":ids[1],"timeoutMs":60000}}}));
+    let _ = child.receive(4);
+    drop(child.child.stdin.take());
+    let _ = child.child.wait();
+    let traces = || {
+        let mut names = std::fs::read_dir(home.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("PUBLIC-trace."))
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    // The worker writes its trace as it exits, which can follow the session's completion.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while traces().len() < 2 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut expected = ids
+        .iter()
+        .map(|id| format!("PUBLIC-trace.{id}.json"))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(traces(), expected);
 }
 
 impl Child {
