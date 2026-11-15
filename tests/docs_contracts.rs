@@ -164,3 +164,82 @@ fn readme_documents_ground_within_its_declared_flags() {
         .collect();
     assert_eq!(flagged, ["--hours"]);
 }
+#[test]
+fn guides_name_only_real_commands_and_flags() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The MCP guide and the README also quote other tools' commands, such as `gh`, whose flags
+    // the check would read as Alcuin's.
+    let paths: Vec<String> = [
+        "quickstart",
+        "sessions",
+        "troubleshooting",
+        "configuration",
+        "browser",
+        "files",
+    ]
+    .iter()
+    .map(|guide| format!("docs/{guide}.md"))
+    .collect();
+    // Flags, against the captured definitions the help renders from.
+    let result = docs_check::check(root, &paths).unwrap();
+    assert!(
+        result.issues.is_empty(),
+        "{}",
+        docs_check::format_result(&result)
+    );
+    // Commands: `alcuin <command>`, and `<subcommand>` too for a command that has them.
+    let commands: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("src/cli_commands.json")).unwrap())
+            .unwrap();
+    let name = |spec: &Value| {
+        spec["command"]
+            .as_str()
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let known: std::collections::BTreeMap<String, Vec<String>> = commands
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|spec| {
+            (
+                name(spec),
+                spec["children"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(name)
+                    .collect(),
+            )
+        })
+        .collect();
+    let word = |word: &&str| {
+        word.starts_with(|c: char| c.is_ascii_lowercase())
+            && word.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+    };
+    let mut unknown = vec![];
+    for path in &paths {
+        for line in fs::read_to_string(root.join(path)).unwrap().lines() {
+            let Some(rest) = line.trim().strip_prefix("alcuin ") else {
+                continue;
+            };
+            let mut words = rest.split_whitespace().take_while(word);
+            let Some(command) = words.next() else {
+                continue;
+            };
+            let named = known.get(command).is_some_and(|children| {
+                children.is_empty()
+                    || words
+                        .next()
+                        .is_none_or(|child| children.iter().any(|c| c == child))
+            });
+            if !named {
+                unknown.push(format!("{path}: {line}"));
+            }
+        }
+    }
+    assert!(unknown.is_empty(), "{unknown:#?}");
+}
