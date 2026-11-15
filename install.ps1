@@ -30,11 +30,15 @@
         Invoke-WebRequest "$base/$name.zip" -OutFile "$tmp\$name.zip" -UseBasicParsing
         Invoke-WebRequest "$base/$name.zip.sha256" -OutFile "$tmp\$name.zip.sha256" -UseBasicParsing
         $expected = (Get-Content "$tmp\$name.zip.sha256" -Raw).Trim().Split(' ')[0]
-        $actual = (Get-FileHash "$tmp\$name.zip" -Algorithm SHA256).Hash
+        # .NET rather than Get-FileHash and Expand-Archive, which live in modules that a
+        # PowerShell started from another version's environment may fail to load.
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        $actual = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes("$tmp\$name.zip"))).Replace('-', '')
         if (-not $expected -or $expected -ne $actual) {
             throw "alcuin install: checksum mismatch for $name.zip; nothing was installed."
         }
-        Expand-Archive "$tmp\$name.zip" -DestinationPath $tmp
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory("$tmp\$name.zip", $tmp)
         $installed = & "$tmp\$name\alcuin.exe" --version
         if ($LASTEXITCODE -ne 0) {
             throw 'alcuin install: the downloaded alcuin.exe does not run here. Nothing was installed.'
@@ -49,6 +53,8 @@
                 Move-Item $target "$target.old" -Force
             }
             Copy-Item "$tmp\$name\$bin" $target
+            # Gone unless it is still running; the next install removes it then.
+            Remove-Item "$target.old" -Force -ErrorAction SilentlyContinue
         }
         "Installed alcuin $installed and alcuin-mcp in $dir."
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
