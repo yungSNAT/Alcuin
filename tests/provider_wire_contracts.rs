@@ -242,7 +242,11 @@ fn known_model_overrides_preserve_source_defaults_validation_and_usage_cost() {
             .get("effort")
             .is_none()
     );
-    assert!(usage_summary(&json!({}), 17, None).get("cost").is_none());
+    // An unpriced run stores a null cost, so no reader estimates one.
+    assert_eq!(
+        usage_summary(&json!({}), 17, None).get("cost"),
+        Some(&Value::Null)
+    );
     let unsupported = json!({"modelOverrides":{"gpt-6-astra":{"reasoning":{"effort":"none"}}}});
     assert!(build_request("gpt-6-astra", &unsupported, "PUBLIC", "PUBLIC").is_err());
     let explicit = json!({"reasoningEffort":"high","modelOverrides":unsupported["modelOverrides"]});
