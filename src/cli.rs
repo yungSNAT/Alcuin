@@ -1299,7 +1299,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         }
     }
     if let Some(search) = text(&matches, "search") {
-        input["search"] = json!(match search.trim().to_lowercase().as_str() {
+        input["search"] = json!(match crate::policy::trim(search).to_lowercase().as_str() {
             "on" | "true" | "1" | "yes" => true,
             "off" | "false" | "0" | "no" => false,
             _ => bail!("Search mode must be \"on\" or \"off\"."),
