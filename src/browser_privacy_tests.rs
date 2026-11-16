@@ -3508,6 +3508,8 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
     ]
     .into_iter()
     .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+    // Without HOME, Chrome's Fontconfig finds no writable cache and fills stderr with errors.
+    .chain([("HOME".to_owned(), temp.path().display().to_string())])
     .collect();
     let executable = crate::browser_detect::chrome(&environment)
         .context("Install Chrome to run native privacy fixtures")?;
