@@ -12,7 +12,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - packaging/mcpb/manifest.json
-      - packaging/smoke.sh
+      - packaging/smoke/**
       - server.json
   workflow_dispatch:
 
@@ -93,7 +93,7 @@ jobs:
             (cd dist && sha256sum -c "$name.tar.gz.sha256")
             tar -xzf "dist/$name.tar.gz" -C "$smoke"
           fi
-          bash packaging/smoke.sh "$smoke/$name" "$version"
+          cargo run --locked --quiet --manifest-path packaging/smoke/Cargo.toml -- "$smoke/$name" "$version"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: alcuin-${{ matrix.target }}
@@ -145,7 +145,7 @@ jobs:
           # The Windows command is ${__dirname}/<path>; drop that first segment.
           windows=$(jq -r .server.mcp_config.platform_overrides.win32.command "$smoke/manifest.json")
           windows=${windows#*/}
-          bash packaging/smoke.sh "$smoke/$(dirname "$linux")" "$version"
+          cargo run --locked --quiet --manifest-path packaging/smoke/Cargo.toml -- "$smoke/$(dirname "$linux")" "$version"
           for bin in alcuin.exe alcuin-mcp.exe; do
             unzip -p dist/alcuin-x86_64-pc-windows-msvc.zip "alcuin-x86_64-pc-windows-msvc/$bin" |
               cmp - "$smoke/$(dirname "$windows")/$bin"

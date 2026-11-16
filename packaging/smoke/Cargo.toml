@@ -1,0 +1,13 @@
+[package]
+name = "alcuin-smoke"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+description = "Runs a packaged alcuin and alcuin-mcp in a scratch home before a release uploads them"
+
+# Standard library only, so the release jobs build it in seconds.
+[dependencies]
+
+# Keep the smoke crate out of any parent workspace.
+[workspace]
