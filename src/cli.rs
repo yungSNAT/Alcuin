@@ -135,7 +135,8 @@ fn command(spec: &Value) -> Command {
                 .expect("reference command about")
                 .to_owned(),
         )
-        .disable_help_subcommand(true);
+        .disable_help_subcommand(true)
+        .hide(spec["hidden"] == true);
     if let Some(text) = spec["afterHelp"].as_str() {
         command = command.after_help(text.to_owned());
     }
@@ -3341,7 +3342,7 @@ mod heartbeat_option_tests {
                 .map(ToString::to_string)
                 .unwrap_or_default();
             assert!(!about.is_empty(), "{path} has no about");
-            if !path.contains(' ') {
+            if !path.contains(' ') && !command.is_hide_set() {
                 assert!(
                     root_help.contains(&about),
                     "{path} about differs from root help"

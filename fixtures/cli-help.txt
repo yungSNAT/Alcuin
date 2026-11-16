@@ -253,8 +253,6 @@ Commands:
                                         explicit shared project context.
   bridge                                Bridge a Windows-hosted ChatGPT session
                                         to Linux clients.
-  tui                                   Launch the interactive terminal UI for
-                                        humans (no automation).
   doctor [options]                      Diagnose Alcuin API provider readiness
                                         and routing.
   docs                                  Documentation maintenance utilities.
