@@ -1296,6 +1296,20 @@ mod upload_tests {
     }
 
     #[test]
+    fn the_send_installs_the_submission_witness_the_privacy_checks_run() {
+        // The native privacy checks drive submission-witness.js directly, so the send must
+        // install that file's collector and no copy of its own.
+        let witness = include_str!("../browser-scripts/submission-witness.js");
+        assert!(SEND_PREPARE.contains(witness));
+        assert_eq!(
+            SEND_PREPARE
+                .matches("window.__oracleSubmissionWitness = record;")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn streamed_upload_hashing_supports_empty_files_and_sizes_above_the_old_cap() {
         let root = tempfile::tempdir().unwrap();
         let empty = root.path().join("empty.txt");
