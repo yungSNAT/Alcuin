@@ -81,7 +81,8 @@
                         Remove-Item $target -Force -ErrorAction SilentlyContinue
                     } elseif (Test-Path $old) {
                         # Move-Item -Force deletes the target even when the move then fails, so
-                        # the new binary is moved aside instead, and back if the old one is held.
+                        # the new binary is moved aside instead, and back if the old one cannot be
+                        # moved or copied back.
                         $new = "$target.$([Guid]::NewGuid().ToString('N')).old"
                         if (Test-Path $target) {
                             Move-Item $target $new
@@ -89,10 +90,18 @@
                         try {
                             Move-Item $old $target
                         } catch {
-                            if (Test-Path $new) {
-                                Move-Item $new $target
+                            # Held open by another program, it can still be read: a copy goes
+                            # back through the staging name, and a later install removes the
+                            # held one.
+                            try {
+                                Copy-Item $old "$target.new"
+                                Move-Item "$target.new" $target
+                            } catch {
+                                if (Test-Path $new) {
+                                    Move-Item $new $target
+                                }
+                                throw
                             }
-                            throw
                         }
                         Remove-Item $new -Force -ErrorAction SilentlyContinue
                     }
