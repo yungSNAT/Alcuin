@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Retiring a finished browser tab and recovering a saved answer no longer read every saved session to find another controller of the tab: they read only the sessions that name it, through the index the cleanup checks already use. On a store of thousands of sessions each read parsed all of them, up to 3 times a completed run.
 
 - Linux on aarch64 (64-bit Arm): each release now carries `alcuin-aarch64-unknown-linux-gnu.tar.gz`, built and smoke-tested on an Arm runner, and `install.sh` installs it on a machine whose `uname -m` is `aarch64` or `arm64`. CI runs the test suite on Arm Linux too.
 - When a browser send stays uncertain because the submission witness captured nothing, the error now names the check that refused it: 'commitment is ambiguous (submission-witness-unavailable: unqualified-content)' when the message ChatGPT sent does not carry the prompt's exact text, `unqualified-identity` for its other fields, `expired` and so on. Before, every such refusal read the same.

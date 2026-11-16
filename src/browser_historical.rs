@@ -155,7 +155,7 @@ pub(crate) fn same_basis(current: &Value, saved: &Value) -> bool {
         && current["browser"].get("config") == saved["browser"].get("config")
 }
 fn foreign_controller(store: &SessionStore, id: &str, owned: &HistoricalTarget) -> Result<bool> {
-    for meta in store.list(true)? {
+    for meta in store.list_naming_target(&owned.target_id)? {
         if meta["id"] == id {
             continue;
         }
