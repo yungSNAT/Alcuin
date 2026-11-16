@@ -267,34 +267,84 @@ fn a_plain_http_download_installs_nothing() {
     assert!(!dir.exists());
 }
 
-/// The Windows script refuses a plain HTTP download folder on another machine before fetching
-/// anything; this machine's own, as the tests use, is allowed.
+/// Answers every request over HTTP with a redirect to the same path under `target`.
+#[cfg(windows)]
+fn redirect_to(target: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for socket in listener.incoming() {
+            let Ok(mut socket) = socket else { continue };
+            let mut request = vec![];
+            let mut buffer = [0; 4096];
+            while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                match socket.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => request.extend_from_slice(&buffer[..count]),
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            let path = request.split(' ').nth(1).unwrap_or("/");
+            let _ = socket.write_all(
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {target}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    address
+}
+
+/// The Windows script downloads over plain HTTP only from a folder on this machine that it is
+/// pointed at, as the tests are: not from another machine, not from a file path and not by a
+/// redirect.
 #[cfg(windows)]
 #[test]
 fn a_plain_http_download_installs_nothing() {
     let root = tempfile::tempdir().unwrap();
     let url = serve(root.path().to_owned());
     release(root.path(), false);
+    let redirector = redirect_to(url.clone());
     let dir = root.path().join("bin");
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &format!("irm {url}/release/install.ps1 | iex"),
-        ])
-        .env("ALCUIN_DOWNLOAD_URL", "http://mirror.example/alcuin")
-        .env("ALCUIN_INSTALL_DIR", &dir)
-        .env("ALCUIN_NO_MODIFY_PATH", "1")
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "{}", text(&output.stdout));
-    assert!(
-        text(&output.stderr).contains("http://mirror.example/alcuin is not an HTTPS address"),
-        "{}",
-        text(&output.stderr)
-    );
-    assert!(!dir.exists());
+    for (download, refusal) in [
+        (
+            "http://mirror.example/alcuin".to_owned(),
+            "http://mirror.example/alcuin is not an HTTPS address".to_owned(),
+        ),
+        (
+            "file:///C:/alcuin".to_owned(),
+            "file:///C:/alcuin is not an HTTPS address".to_owned(),
+        ),
+        (
+            format!("{redirector}/release"),
+            format!(
+                "was redirected to {url}/release/alcuin-x86_64-pc-windows-msvc.zip, which is not HTTPS"
+            ),
+        ),
+    ] {
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("irm {url}/release/install.ps1 | iex"),
+            ])
+            .env("ALCUIN_DOWNLOAD_URL", &download)
+            .env("ALCUIN_INSTALL_DIR", &dir)
+            .env("ALCUIN_NO_MODIFY_PATH", "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{}", text(&output.stdout));
+        // PowerShell wraps the error to its console width, so whitespace is ignored.
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        assert!(
+            squash(&text(&output.stderr)).contains(&squash(&refusal)),
+            "{download}: {}",
+            text(&output.stderr)
+        );
+        assert!(!dir.exists(), "{download}");
+    }
 }
 
 /// A restore that itself fails keeps the old binary under the name it gives.
