@@ -996,15 +996,18 @@ mod tests {
                 WebSocketStream::from_raw_socket(client, Role::Client, None).await,
                 Duration::from_secs(1),
             );
-            // Any owned child will do: retention only stops tracking it.
+            // Any owned child will do: retention only stops tracking it. It has exited before
+            // the case starts, so no case can leave a process behind.
             let child = owned.then(|| {
-                Command::new(std::env::current_exe().unwrap())
+                let mut child = Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", "PUBLIC-no-such-test"])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()
-                    .unwrap()
+                    .unwrap();
+                child.wait().unwrap();
+                child
             });
             let endpoint = AttachmentEndpoint {
                 host: "127.0.0.1".into(),
@@ -1014,6 +1017,7 @@ mod tests {
             let copy = copied.then(|| {
                 crate::browser_profile_copy::TemporaryProfile::create(home.path()).unwrap()
             });
+            let copy_path = copy.as_ref().map(|copy| copy.path().to_owned());
             let mut connection = ChromeConnection::fixture(endpoint, browser, child, copy);
             let lines = std::sync::Mutex::new(Vec::new());
             retain_owned(&mut connection, terminate, profile, &|line| {
@@ -1034,6 +1038,11 @@ mod tests {
                 expected,
                 "owned={owned} terminate={terminate}"
             );
+            // Dropping the connection disposes of a copied profile.
+            drop(connection);
+            if let Some(path) = copy_path {
+                assert!(!path.exists(), "{}", path.display());
+            }
         }
     }
     #[test]
