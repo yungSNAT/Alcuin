@@ -52,6 +52,7 @@ enum Fault {
     GeneratedThenUnloaded,
     ContentWithheld,
     RetryOffered,
+    StreamFailed,
     NavigationFailsOnce,
     NavigationFails,
     AnswerlessComplete,
@@ -1165,6 +1166,9 @@ impl Exchange {
                 }
                 Fault::RetryOffered if cfg["uiErrors"] == true => {
                     return json!({"uiError":"temporary_unavailable"});
+                }
+                Fault::StreamFailed if cfg["uiErrors"] == true => {
+                    return json!({"uiError":"temporary_unavailable","uiErrorText":"Error in message stream"});
                 }
                 Fault::GenerationFailedThenRetry
                 | Fault::GenerationFailedThenMarked
@@ -5237,6 +5241,40 @@ async fn a_failed_page_load_is_retried_once_before_anything_is_sent() {
         assert_eq!(loads, 2, "{fault:?}");
         stop(f).await;
     }
+}
+/// ChatGPT's failed reply ends the wait at once, says so and that nothing was captured, sends
+/// nothing again and frees the run's browser slot.
+#[tokio::test]
+async fn a_failed_reply_ends_the_wait_saying_nothing_was_captured() {
+    let f = fixture(Fault::StreamFailed, false).await;
+    let error = run(&f).await.unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref::<crate::browser_provider::Failure>(),
+            Some(crate::browser_provider::Failure::GenerationFailed)
+        ),
+        "{error:#}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "ChatGPT's reply failed ('Error in message stream'); nothing was captured."
+    );
+    assert_eq!(
+        f.store.require(&f.id).unwrap()["errorMessage"],
+        error.to_string()
+    );
+    assert!(captured(&f.store, &f.id).is_err());
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+    assert!(
+        f.profile.records().unwrap()["leases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|lease| lease["capacityReleased"] == true),
+        "{}",
+        f.profile.records().unwrap()
+    );
+    stop(f).await;
 }
 #[tokio::test]
 async fn answerless_turns_are_refused_with_the_reference_failures() {

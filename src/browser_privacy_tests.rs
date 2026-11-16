@@ -1919,6 +1919,100 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
     .await?;
     let generating = retry(&waiting).await?;
     anyhow::ensure!(generating["started"] == true, "Stop control: {generating}");
+    // ChatGPT's failed reply: its error line and a Retry, outside the assistant's turn, before any
+    // assistant message or beside a turn still marked as thinking. Answer text, an earlier turn's
+    // failure and the line without a Retry are not the submitted turn's failure.
+    let shimmer = "<span class='loading-shimmer'>PUBLIC</span>";
+    let banner = |line: &str| format!("<div role='alert'><div>{line}</div><button>Retry</button></div>");
+    let partial = assistant("PUBLIC partial", shimmer);
+    let earlier = "<article data-turn-key='PUBLIC-earlier-turn'><div data-message-author-role='user' data-message-id='PUBLIC-earlier'>PUBLIC earlier</div></article>";
+    for (case, turns, line, message, retried) in [
+        (
+            "no assistant message",
+            format!("{user}{}", banner("Error in message stream")),
+            Some("Error in message stream"),
+            Value::Null,
+            true,
+        ),
+        (
+            "beside a thinking turn",
+            format!("{user}{partial}{}", banner("Error in message stream")),
+            Some("Error in message stream"),
+            json!("PUBLIC-assistant"),
+            true,
+        ),
+        (
+            "delivery timeout",
+            format!(
+                "{user}{}",
+                banner("Message delivery timed out. Please try again.")
+            ),
+            Some("Message delivery timed out. Please try again."),
+            Value::Null,
+            true,
+        ),
+        (
+            "still generating",
+            format!(
+                "{user}{}<button data-testid='stop-button'>Stop</button>",
+                banner("Error in message stream")
+            ),
+            Some("Error in message stream"),
+            Value::Null,
+            false,
+        ),
+        (
+            "without Retry",
+            format!("{user}<div role='alert'>Error in message stream</div>"),
+            None,
+            Value::Null,
+            false,
+        ),
+        (
+            "earlier turn",
+            format!("{earlier}{}{user}", banner("Error in message stream")),
+            None,
+            Value::Null,
+            false,
+        ),
+        (
+            "quoted in the answer",
+            format!(
+                "{user}{}<div><button>Retry</button></div>",
+                assistant("<p>Error in message stream</p>", "")
+            ),
+            None,
+            Value::Null,
+            false,
+        ),
+    ] {
+        open(&turns).await?;
+        let reported = live(&reporting).await?;
+        match line {
+            Some(line) => anyhow::ensure!(
+                reported["uiError"] == "temporary_unavailable"
+                    && reported["uiErrorText"] == line
+                    && reported["lastAssistantMessageId"] == message,
+                "Stream failure, {case}: {reported}"
+            ),
+            None => anyhow::ensure!(
+                reported.get("uiError").is_none() && reported.get("uiErrorText").is_none(),
+                "Not a stream failure, {case}: {reported}"
+            ),
+        }
+        anyhow::ensure!(
+            live(&refusing).await.is_err() == line.is_some(),
+            "Stream failure without uiErrors, {case}"
+        );
+        if line.is_some() {
+            let found = retry(&reporting).await?;
+            anyhow::ensure!(
+                (found["ok"] == true && found["label"] == "Retry") == retried
+                    && found["failed"] == true,
+                "Stream failure Retry, {case}: {found}"
+            );
+        }
+    }
     page.evaluate_with_arguments(
         "()=>{sessionStorage.removeItem('oracle:target-claim');return true;}",
         &json!([]),
