@@ -983,10 +983,13 @@ mod tests {
         use std::process::{Command, Stdio};
         use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
         let profile = Path::new("PUBLIC-profile");
-        for (owned, terminate, logged) in [
-            (true, false, true),
-            (true, true, false),
-            (false, false, false),
+        let home = tempfile::tempdir().unwrap();
+        // A copied profile's Chrome is never kept: retention leaves it for disposal.
+        for (owned, copied, terminate, logged) in [
+            (true, false, false, true),
+            (true, false, true, false),
+            (false, false, false, false),
+            (true, true, false, false),
         ] {
             let (client, _peer) = tokio::io::duplex(64);
             let browser = crate::cdp::Cdp::from_socket(
@@ -1008,13 +1011,16 @@ mod tests {
                 port: 9333,
                 browser_ws_endpoint: "ws://127.0.0.1:9333/devtools/browser/PUBLIC".into(),
             };
-            let mut connection = ChromeConnection::fixture(endpoint, browser, child);
+            let copy = copied.then(|| {
+                crate::browser_profile_copy::TemporaryProfile::create(home.path()).unwrap()
+            });
+            let mut connection = ChromeConnection::fixture(endpoint, browser, child, copy);
             let lines = std::sync::Mutex::new(Vec::new());
             retain_owned(&mut connection, terminate, profile, &|line| {
                 lines.lock().unwrap().push(line.to_owned())
             })
             .unwrap();
-            assert!(!connection.owns_process());
+            assert_eq!(connection.owns_process(), copied);
             let expected = if logged {
                 vec![format!(
                     "Chrome left running on port 9333 with profile {}",

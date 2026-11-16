@@ -1289,12 +1289,13 @@ impl ChromeConnection {
     pub(crate) fn owns_process(&self) -> bool {
         self.child.is_some()
     }
-    /// A persistent-profile connection over `browser`, owning `child` when one is given.
+    /// A connection over `browser`, owning `child` when one is given, on `copied` when given.
     #[cfg(test)]
     pub(crate) fn fixture(
         endpoint: AttachmentEndpoint,
         browser: Cdp,
         child: Option<Child>,
+        copied: Option<TemporaryProfile>,
     ) -> Self {
         Self {
             endpoint,
@@ -1305,7 +1306,7 @@ impl ChromeConnection {
             keep_browser: false,
             bootstrap_lock: None,
             bootstrap_admission: None,
-            temporary_profile: None,
+            temporary_profile: copied,
             copied_group: None,
             #[cfg(windows)]
             copied_job: None,
