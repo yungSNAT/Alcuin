@@ -1,5 +1,6 @@
 #!/bin/sh
-# Installs the alcuin and alcuin-mcp release binaries on Linux (x86_64 or aarch64):
+# Installs the alcuin and alcuin-mcp release binaries on Linux (x86_64 or aarch64) or macOS
+# (Apple silicon):
 #   curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
 # It checks the archive's SHA-256 checksum and that the binary runs before it replaces anything.
 # ALCUIN_VERSION picks a release tag such as v0.1.0 (default: the latest release).
@@ -14,12 +15,19 @@ main() {
 		exit 1
 	}
 
-	[ "$(uname -s)" = Linux ] || fail "this script installs the Linux build; on Windows run install.ps1 (docs/install.md)."
+	case "$(uname -s)" in
+	Linux) system=unknown-linux-gnu ;;
+	Darwin) system=apple-darwin ;;
+	*) fail "this script installs the Linux and macOS builds; on Windows run install.ps1 (docs/install.md)." ;;
+	esac
 	case "$(uname -m)" in
 	x86_64 | amd64) arch=x86_64 ;;
 	aarch64 | arm64) arch=aarch64 ;;
 	*) fail "releases are built for x86_64 and aarch64 only; build from source instead (docs/install.md#from-source)." ;;
 	esac
+	if [ "$system" = apple-darwin ] && [ "$arch" = x86_64 ]; then
+		fail "macOS releases are built for Apple silicon only; build from source instead (docs/install.md#from-source)."
+	fi
 	command -v curl >/dev/null 2>&1 || fail "curl is required."
 	if command -v sha256sum >/dev/null 2>&1; then
 		sum() { sha256sum "$1"; }
@@ -38,7 +46,7 @@ main() {
 		base="https://github.com/yungSNAT/Alcuin/releases/download/$version"
 	fi
 	dir="${ALCUIN_INSTALL_DIR:-$HOME/.local/bin}"
-	name=alcuin-$arch-unknown-linux-gnu
+	name=alcuin-$arch-$system
 
 	tmp="$(mktemp -d)"
 	trap 'rm -rf "$tmp"' EXIT
@@ -51,8 +59,10 @@ main() {
 	actual="$(sum "$tmp/$name.tar.gz" | cut -d ' ' -f 1)"
 	[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for $name.tar.gz; nothing was installed."
 	tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
-	installed="$("$tmp/$name/alcuin" --version)" ||
+	if ! installed="$("$tmp/$name/alcuin" --version)"; then
+		[ "$system" = apple-darwin ] && fail "the downloaded alcuin does not run here. Nothing was installed."
 		fail "the downloaded alcuin does not run here; it needs glibc 2.39 or later (ldd --version shows yours). Nothing was installed."
+	fi
 
 	mkdir -p "$dir"
 	# Both binaries are copied beside their targets, and the old ones linked aside, before either
