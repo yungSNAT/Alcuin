@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An `alcuin serve` host no longer panics when a `--remote-host` run sends it files to upload. The host's request carries no display paths for its files, and the upload step read them as if it did, so it panicked at the first file; it now logs that file's staged path, as it does for any file without a display path.
 - Linux on aarch64 (64-bit Arm): each release now carries `alcuin-aarch64-unknown-linux-gnu.tar.gz`, built and smoke-tested on an Arm runner, and `install.sh` installs it on a machine whose `uname -m` is `aarch64` or `arm64`. CI runs the test suite on Arm Linux too.
 - When a browser send stays uncertain because the submission witness captured nothing, the error now names the check that refused it: 'commitment is ambiguous (submission-witness-unavailable: unqualified-content)' when the message ChatGPT sent does not carry the prompt's exact text, `unqualified-identity` for its other fields, `expired` and so on. Before, every such refusal read the same.
 - When Chrome fails to start, with 'Chrome startup deadline expired' or 'Native Chrome exited before its debugging endpoint was acknowledged', the error now ends with the last lines Chrome printed (`; Chrome stderr: ...`), which say why it never opened its debugging port. They come from `oracle-chrome-stderr.log` in the browser profile, which Alcuin already wrote but no message named.
