@@ -53,6 +53,7 @@ enum Fault {
     ContentWithheld,
     RetryOffered,
     StreamFailed,
+    StreamFailedThenRetry,
     NavigationFailsOnce,
     NavigationFails,
     AnswerlessComplete,
@@ -349,6 +350,7 @@ impl Exchange {
                 | Fault::GenerationFailedThenMarked
                 | Fault::GeneratedThenUnloaded
                 | Fault::RetryAuthorityLost
+                | Fault::StreamFailedThenRetry
         ) {
             return json!({"ok":true,"failed":true,"x":3,"y":3,"baseline":0});
         }
@@ -1168,6 +1170,9 @@ impl Exchange {
                     return json!({"uiError":"temporary_unavailable"});
                 }
                 Fault::StreamFailed if cfg["uiErrors"] == true => {
+                    return json!({"uiError":"temporary_unavailable","uiErrorText":"Error in message stream"});
+                }
+                Fault::StreamFailedThenRetry if cfg["uiErrors"] == true && !self.turn_retried() => {
                     return json!({"uiError":"temporary_unavailable","uiErrorText":"Error in message stream"});
                 }
                 Fault::GenerationFailedThenRetry
@@ -5273,6 +5278,25 @@ async fn a_failed_reply_ends_the_wait_saying_nothing_was_captured() {
     assert_eq!(
         f.profile.records().unwrap()["leases"][0]["targetDispositionPending"],
         true
+    );
+    stop(f).await;
+}
+/// The failed reply's own Retry is pressed once in its page, and the answer that follows completes
+/// the run without a second send.
+#[tokio::test]
+async fn a_failed_reply_is_retried_once_in_its_page_without_a_second_send() {
+    let f = fixture(Fault::StreamFailedThenRetry, false).await;
+    let meta = run(&f).await.unwrap();
+    assert_eq!(meta["status"], "completed");
+    assert_eq!(presses(&f), [json!(3)]);
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+    assert!(
+        f.store
+            .log(&f.id)
+            .unwrap()
+            .contains("Retrying the failed turn once in its page"),
+        "{}",
+        f.store.log(&f.id).unwrap()
     );
     stop(f).await;
 }
