@@ -1683,6 +1683,12 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
         ),
         ("Retry in the text", "Thinking failed<br>Retry", "", true),
         (
+            "connection failure with Retry",
+            "No response from ChatGPT. Check your connection.",
+            "<button>Retry</button>",
+            true,
+        ),
+        (
             "feedback chrome",
             "Thinking failed.<br>Is this conversation helpful so far?",
             "",
@@ -2021,6 +2027,32 @@ async fn ui_warning_code_case(page: &Cdp) -> Result<()> {
     anyhow::ensure!(
         raw[0]["text"] == "Usage limit reached.",
         "Limit wording was not collected: {raw}"
+    );
+    mount(
+        page,
+        &ACTIVE.replace(
+            "</main>",
+            "<aside role='alert'>No response from ChatGPT. Check your connection. <button>Retry</button></aside></main>",
+        ),
+        "/",
+        "",
+    )
+    .await?;
+    let raw = page
+        .evaluate_with_arguments(
+            include_str!("../browser-scripts/ui-warnings.js"),
+            &json!([{}]),
+            SHORT,
+            &CancellationToken::new(),
+        )
+        .await?;
+    anyhow::ensure!(
+        crate::browser_page::first_ui_warning(&raw)
+            == Some((
+                "temporary_unavailable",
+                "No response from ChatGPT. Check your connection. Retry".to_owned()
+            )),
+        "Connection warning was not collected: {raw}"
     );
     Ok(())
 }

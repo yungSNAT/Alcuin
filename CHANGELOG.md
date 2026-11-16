@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- When ChatGPT shows 'No response from ChatGPT. Check your connection.' before any answer appears, the run now fails at once with 'ChatGPT displayed a temporary-unavailable warning while waiting for the assistant: ...', rather than waiting out the answer timeout. Alcuin neither presses that notice's Retry nor sends the prompt again, and a later harvest no longer saves the notice as the answer when it fills the turn beside a Retry.
 - When a completed ChatGPT run's cleanup is retried after its tab was closed outside Alcuin, it now deletes the session's staged copies of the attached files and clears the session's `cleanupWarning`, as cleanup does when Alcuin closes the tab itself. It marked the cleanup done but kept the copies.
 - Linux on aarch64 (64-bit Arm): each release now carries `alcuin-aarch64-unknown-linux-gnu.tar.gz`, built and smoke-tested on an Arm runner, and `install.sh` installs it on a machine whose `uname -m` is `aarch64` or `arm64`. CI runs the test suite on Arm Linux too.
 - When a browser send stays uncertain because the submission witness captured nothing, the error now names the check that refused it: 'commitment is ambiguous (submission-witness-unavailable: unqualified-content)' when the message ChatGPT sent does not carry the prompt's exact text, `unqualified-identity` for its other fields, `expired` and so on. Before, every such refusal read the same.
