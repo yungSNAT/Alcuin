@@ -172,8 +172,9 @@ fn signed_in_comes_from_the_page_facts_the_inspection_returns() {
             json!({"loginButtonExists":true,"promptReady":true,"assistantCount":1}),
             false,
         ),
-        // A page value is never taken as the verdict.
+        // A page value is never taken as the verdict, either way.
         (json!({"authenticated":true}), false),
+        (json!({"authenticated":false,"promptReady":true}), true),
     ] {
         let mut raw = info();
         for key in [
