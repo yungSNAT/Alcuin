@@ -178,7 +178,7 @@ async fn compiled_browser_worker_acknowledges_start_in_isolated_home_then_refuse
     assert_eq!(metadata["lifecycle"]["engine"], "browser");
     assert_eq!(metadata["lifecycle"]["detached"], true);
     assert!(metadata.get("dispatch").is_none());
-    assert_eq!(metadata["recoveryRequired"], false);
+    assert_eq!(metadata["recoveryRequired"], false, "{metadata}");
     assert_eq!(metadata["models"][0]["status"], "error");
     assert!(metadata["models"][0]["completedAt"].is_string());
     assert_eq!(

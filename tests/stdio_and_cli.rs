@@ -710,7 +710,8 @@ async fn actual_stdio_discovery_sessions_wait_and_resources_match_reference_shap
         .await;
     assert_eq!(
         result["result"]["structuredContent"]["session"]["metadata"]["historicalExtension"]["retain"],
-        true
+        true,
+        "{result}"
     );
     assert!(
         result["result"]["structuredContent"]["session"]["log"]
