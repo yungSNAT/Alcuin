@@ -91,11 +91,11 @@ When both are set, the lower cap applies, so a run or an MCP client can tighten 
 
 A project file comes with the code you are reviewing, so Alcuin reads only these keys from it and ignores the rest:
 
-- `engine`, `model`, `search`, `maxFileSizeBytes`, `notify`, `heartbeatSeconds`, `filesReport`, `background` and `promptSuffix`;
+- `engine`, only as `browser`; and `model`, `search`, `maxFileSizeBytes`, `notify`, `heartbeatSeconds`, `filesReport` and `background`;
 - under `browser`: `attachRunning`, `timeoutMs`, `inputTimeoutMs`, `approvalWaitMs`, `attachmentTimeoutMs`, `profileLockTimeoutMs`, `maxConcurrentTabs`, `cookieSyncWaitMs`, `hideWindow`, `keepBrowser`, `modelStrategy`, `thinkingTime`, `researchMode`, `archiveConversations` and `manualLogin`;
 - `browser.chatgptUrl`, only when it is a ChatGPT address.
 
-Keys such as `browser.chromePath`, `apiBaseUrl` and `azure` are read from the user file only, so a cloned repository cannot point Alcuin at another program or endpoint.
+Keys such as `browser.chromePath`, `apiBaseUrl`, `azure` and `promptSuffix`, and `engine` set to `api`, are read from the user file only, so a cloned repository cannot point Alcuin at another program or endpoint, make a run a paid API run or add text to every prompt.
 
 ## When a file cannot be used
 

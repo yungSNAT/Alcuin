@@ -181,7 +181,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     /// A server that answers and exits, leaving a process that holds its stdout, still passes
-    /// at once, as the Bash version did with `timeout 60 alcuin-mcp > mcp.jsonl`.
+    /// at once, as the Bash version did with `timeout 60 alcuin-mcp > mcp.jsonl`. A handshake
+    /// that waited for the stdout to close would take the 3 s the leftover process sleeps.
     #[test]
     fn a_process_the_server_leaves_running_does_not_hold_the_handshake() {
         let home = scratch_home().unwrap();
@@ -191,7 +192,7 @@ mod tests {
             "#!/bin/sh
 cat > /dev/null
 echo PUBLIC-replies
-sleep 90 2> /dev/null &
+sleep 3 2> /dev/null &
 exit 0
 ",
         )
@@ -205,7 +206,7 @@ exit 0
 "
         );
         assert!(
-            started.elapsed() < Duration::from_secs(30),
+            started.elapsed() < Duration::from_millis(1_500),
             "{:?}",
             started.elapsed()
         );

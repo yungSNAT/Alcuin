@@ -1,7 +1,7 @@
 //! One retry of a failed turn through the page's own control. The user message stays the one
 //! already acknowledged, so this cannot become a second send. ChatGPT does generate the turn
-//! again, which is why the budget is one, recorded before the click, and a visible rate-limit or
-//! account warning holds it back.
+//! again, which is why the budget is one, recorded before the click, and a visible rate-limit,
+//! account or connection warning holds it back.
 //!
 //! Temporary Chat keeps no copy to reopen: reloading its tab or opening its URL elsewhere lands on
 //! an empty chat, so the failed page itself is the only place left to recover the turn.

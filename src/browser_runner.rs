@@ -4332,8 +4332,11 @@ async fn upload_inputs(
             !timeout.is_zero(),
             "Attachment upload budget expired before every file was ready; nothing was sent. Tune --browser-attachment-timeout."
         );
-        let display = request.extra["attachmentDisplayPaths"][index]
-            .as_str()
+        let display = request
+            .extra
+            .get("attachmentDisplayPaths")
+            .and_then(|paths| paths.get(index))
+            .and_then(Value::as_str)
             .map_or_else(|| path.display().to_string(), str::to_owned);
         automation_log(store, id, &format!("Uploading attachment: {display}"))?;
         let mut file = if let Some(staged) = &request.staged_uploads {
@@ -5129,6 +5132,23 @@ async fn wait_answer(
         if observed["uiError"] == "temporary_unavailable" {
             return Err(crate::browser_provider::Failure::GenerationFailed.into());
         }
+        // With no answer yet, ChatGPT's connection notice means none is coming.
+        if !deep
+            && observed["pending"] == true
+            && let Some(warning) = crate::browser_page::connection_warning(
+                reservation.page(),
+                "the assistant",
+                limits.command,
+                cancel,
+                &|line| page_log(store, id, line),
+            )
+            .await
+        {
+            return Err(
+                anyhow::Error::from(crate::browser_provider::Failure::GenerationFailed)
+                    .context(warning),
+            );
+        }
         if let Some(line) = monitor.line(started.elapsed().as_millis() as u64, &observed) {
             let log = store.require(&progress)?;
             store.append_log(&progress, log["model"].as_str(), &format!("{line}\n"))?;
@@ -5391,7 +5411,9 @@ fn require_retirement_authority(
             );
         }
     }
-    for other in store.list(true)? {
+    // An empty id is not indexable, so it falls back to every session.
+    let named = creator["target"]["targetId"].as_str().unwrap_or_default();
+    for other in store.list_naming_target(named)? {
         if other["id"] == id {
             continue;
         }
@@ -6528,7 +6550,8 @@ async fn recover_existing_inner(
             );
         }
         lease.confirm_target_absent(target_id)?;
-        let result=store.update(id,|meta|{anyhow::ensure!(meta==&saved_raw,"Recovery owner changed during absence inspection");Ok(Some(json!({"recoveryRequired":false,"browser":merge_object(&meta["browser"],&json!({"runtime":merge_object(&meta["browser"]["runtime"],&json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}))}))})))})?;
+        retire_inputs(store, id, &committed)?;
+        let result=store.update(id,|meta|{anyhow::ensure!(meta==&saved_raw,"Recovery owner changed during absence inspection");Ok(Some(json!({"recoveryRequired":false,"cleanupWarning":null,"browser":merge_object(&meta["browser"],&json!({"runtime":merge_object(&meta["browser"]["runtime"],&json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}))}))})))})?;
         recovery_lock.release()?;
         return Ok(result);
     }
