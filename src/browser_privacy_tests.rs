@@ -1375,10 +1375,8 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
             "Trigger beside a menu pill (Japanese: {japanese}): {chosen}"
         );
         reservation.release_clean(SHORT).await?;
-        let mut reservation = picker(
-            json!({"model":"Pro","level":4,"japanese":japanese,"decoy":"menu"}),
-        )
-        .await?;
+        let mut reservation =
+            picker(json!({"model":"Pro","level":4,"japanese":japanese,"decoy":"menu"})).await?;
         let observed = reservation
             .inspect_current_effort("pro", SHORT, &cancel)
             .await?;
