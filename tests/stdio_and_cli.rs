@@ -669,10 +669,17 @@ async fn oracle_mcp_alias_serves_mcp_and_creates_no_session() {
 async fn actual_stdio_discovery_sessions_wait_and_resources_match_reference_shapes() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path());
+    // The server compares the session's directory with its own, which macOS gives through the
+    // /private link.
+    let cwd = if cfg!(target_os = "macos") {
+        std::fs::canonicalize(home.path()).unwrap()
+    } else {
+        home.path().to_owned()
+    };
     let meta = store
         .create(
             json!({"prompt":"PUBLIC captured session","model":"gpt-5.1"}),
-            home.path(),
+            &cwd,
             None,
         )
         .unwrap();

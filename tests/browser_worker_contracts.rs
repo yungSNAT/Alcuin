@@ -143,7 +143,9 @@ async fn compiled_browser_worker_acknowledges_start_in_isolated_home_then_refuse
     );
     let request = execution::resolve(
         &json!({"engine":"browser","prompt":"PUBLIC synthetic browser worker without a provider"}),
-        &json!({}),
+        // Manual login with an uninitialised profile refuses before Chrome starts. Only Windows
+        // defaults to it: elsewhere a fresh profile opens chatgpt.com wherever Chrome can start.
+        &json!({"browser":{"manualLogin":true}}),
         &environment,
         home.path(),
     )
@@ -179,6 +181,13 @@ async fn compiled_browser_worker_acknowledges_start_in_isolated_home_then_refuse
     assert_eq!(metadata["lifecycle"]["detached"], true);
     assert!(metadata.get("dispatch").is_none());
     assert_eq!(metadata["recoveryRequired"], false, "{metadata}");
+    assert!(
+        metadata["errorMessage"]
+            .as_str()
+            .is_some_and(|message| message.contains("nothing was sent")
+                && message.contains("manual-login profile is not initialized")),
+        "{metadata}"
+    );
     assert_eq!(metadata["models"][0]["status"], "error");
     assert!(metadata["models"][0]["completedAt"].is_string());
     assert_eq!(
