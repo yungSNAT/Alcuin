@@ -6,7 +6,9 @@ const failed = observed.uiError === 'temporary_unavailable' || observed.unloaded
 // evidence, since a page that merely dropped its Retry can still show the old partial text.
 if (!failed) return { ok:false, failed:false, started:observed.pending === true || observed.stopExists === true ||
   observed.strongThinkingActive === true || (observed.lastAssistantMessageId ?? null) !== (cfg.before ?? null) };
-if (observed.stopExists !== false || observed.strongThinkingActive !== false) return { ok:false, failed:true };
+// ChatGPT's own error line says the reply has ended, though the turn can still look as if thinking.
+const stream = observed.uiErrorText ? readStreamFailure(readTurns()[observed.lastUserTurnIndex]) : null;
+if (observed.stopExists !== false || (!stream && observed.strongThinkingActive !== false)) return { ok:false, failed:true };
 const visible = node => {
   const rect = node.getBoundingClientRect(), style = window.getComputedStyle(node);
   return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
@@ -30,6 +32,7 @@ const assistant = turn && lastAssistant(turn);
 const controls = Array.from(assistant ? turn.querySelectorAll('button, [role="button"]') : [])
   .filter(node => (assistant.compareDocumentPosition(node) & 4) && visible(node));
 const fields = { baseline:observed.lastUserTurnIndex, messageId:observed.lastAssistantMessageId };
+if (stream) return point(stream.retry, { ...fields, label:label(stream.retry) });
 const retry = controls.find(node => label(node).toLowerCase() === 'retry');
 if (retry) return point(retry, { ...fields, label:label(retry) });
 const regenerate = controls.filter(node => node.getAttribute('aria-label') === 'Regenerate response' &&

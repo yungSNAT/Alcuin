@@ -66,6 +66,12 @@ for (let index = turns.length - 1; index >= 0; index--) {
   const node = lastAssistant(turns[index]);
   if (node) { assistant = node; assistantIndex = index; assistantTurn = turns[index]; break; }
 }
+const streamFailure = readStreamFailure(user.turn);
+if (streamFailure) {
+  if (cfg.uiErrors === true) return { ...source, uiError:'temporary_unavailable', uiErrorText:streamFailure.line,
+    lastAssistantMessageId:assistantIndex >= user.index && (user.user.compareDocumentPosition(assistant) & 4) ? assistant.getAttribute('data-message-id') : null };
+  throw Error('Assistant displays a generation failure; result refused');
+}
 if (!assistant || assistantIndex < user.index || !(user.user.compareDocumentPosition(assistant) & 4)) {
   // ChatGPT can announce a finished turn that holds only activity summaries and no answer unit.
   // Only an announcement the completion tracker saw arrive after this submission counts, and

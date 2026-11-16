@@ -5130,7 +5130,13 @@ async fn wait_answer(
         };
         stalls.since = None;
         if observed["uiError"] == "temporary_unavailable" {
-            return Err(crate::browser_provider::Failure::GenerationFailed.into());
+            let failed = anyhow::Error::from(crate::browser_provider::Failure::GenerationFailed);
+            return Err(match observed["uiErrorText"].as_str() {
+                Some(line) => failed.context(format!(
+                    "ChatGPT's reply failed ('{line}'); nothing was captured."
+                )),
+                None => failed,
+            });
         }
         // With no answer yet, ChatGPT's connection notice means none is coming.
         if !deep

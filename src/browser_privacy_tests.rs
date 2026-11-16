@@ -1923,7 +1923,8 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
     // assistant message or beside a turn still marked as thinking. Answer text, an earlier turn's
     // failure and the line without a Retry are not the submitted turn's failure.
     let shimmer = "<span class='loading-shimmer'>PUBLIC</span>";
-    let banner = |line: &str| format!("<div role='alert'><div>{line}</div><button>Retry</button></div>");
+    let banner =
+        |line: &str| format!("<div role='alert'><div>{line}</div><button>Retry</button></div>");
     let partial = assistant("PUBLIC partial", shimmer);
     let earlier = "<article data-turn-key='PUBLIC-earlier-turn'><div data-message-author-role='user' data-message-id='PUBLIC-earlier'>PUBLIC earlier</div></article>";
     for (case, turns, line, message, retried) in [

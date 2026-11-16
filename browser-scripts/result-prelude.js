@@ -258,3 +258,22 @@ const readThinkingActivity = () => {
     }
     return {active:false,strong:false};
   };
+// ChatGPT's failed reply: its error line and a Retry, from the submitted user turn on. The banner can
+// sit outside the assistant's turn or come before any assistant message, so the whole page after
+// the turn's start is read; the user's message and answer text never count.
+const readStreamFailure = turn => {
+  const user = ':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])';
+  const answer = '[data-markdown-text-style="assistant-message"], .markdown, [data-message-content], .prose, [class*="MarkdownRoot"]';
+  const shown = node => { const rect = node.getBoundingClientRect(), style = window.getComputedStyle(node); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'; };
+  const counts = node => (turn.compareDocumentPosition(node) & 4) && !node.closest(user) && shown(node);
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let line = null;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.data.replace(/\s+/g, ' ').trim();
+    if (/^(?:error in message stream|message delivery timed out\b.{0,80})$/i.test(text) &&
+        counts(node.parentElement) && !node.parentElement.closest(answer)) line = text;
+  }
+  const retry = line && Array.from(document.querySelectorAll('button, [role="button"]')).filter(node => counts(node) &&
+    (node.innerText || node.textContent || node.getAttribute('aria-label') || '').trim().toLowerCase() === 'retry').at(-1);
+  return retry ? { line, retry } : null;
+};
