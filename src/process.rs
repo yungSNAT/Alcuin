@@ -1,5 +1,5 @@
 //! Native process identity. Unknown evidence never authorises cleanup.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 use anyhow::bail;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
