@@ -418,13 +418,12 @@ fn a_failed_update_leaves_the_old_pair_in_place() {
 
 /// Opens `path` for reading without delete sharing, as a scanner might, so it cannot be renamed.
 #[cfg(windows)]
-fn hold_unshared(path: &Path) -> fs::File {
+fn hold_unshared(path: &Path) -> std::io::Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     fs::OpenOptions::new()
         .read(true)
         .share_mode(1) // FILE_SHARE_READ
         .open(path)
-        .unwrap()
 }
 
 /// An update whose second binary cannot be moved aside, after the first was replaced, puts the
@@ -441,7 +440,7 @@ fn a_failed_update_puts_the_old_binary_back() {
         fs::write(dir.join(bin), "PUBLIC old").unwrap();
     }
     // A file another program holds open without delete sharing cannot be renamed.
-    let lock = hold_unshared(&dir.join("alcuin-mcp.exe"));
+    let lock = hold_unshared(&dir.join("alcuin-mcp.exe")).unwrap();
     let output = install(&format!("{url}/release"), &dir, root.path());
     drop(lock);
     assert!(!output.status.success(), "{}", text(&output.stdout));
@@ -515,7 +514,7 @@ fn a_held_old_binary_is_copied_back() {
     // As in the test above, alcuin-mcp.exe cannot be moved aside, so the update fails after
     // replacing alcuin.exe. Copies left by earlier installs slow the step between the two, so
     // the watcher below holds the old alcuin.exe before it is put back.
-    let lock = hold_unshared(&dir.join("alcuin-mcp.exe"));
+    let lock = hold_unshared(&dir.join("alcuin-mcp.exe")).unwrap();
     for n in 0..300 {
         fs::write(dir.join(format!("alcuin-mcp.exe.{n}.old")), "").unwrap();
     }
@@ -527,7 +526,10 @@ fn a_held_old_binary_is_copied_back() {
             for entry in fs::read_dir(&watched).unwrap().flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with("alcuin.exe.") && name.ends_with(".old") {
-                    let file = hold_unshared(&entry.path());
+                    // The rename that made it may still hold it for a moment: try again.
+                    let Ok(file) = hold_unshared(&entry.path()) else {
+                        continue;
+                    };
                     released.recv().unwrap();
                     drop(file);
                     return Some(name);
