@@ -5242,12 +5242,16 @@ async fn a_failed_page_load_is_retried_once_before_anything_is_sent() {
         stop(f).await;
     }
 }
-/// ChatGPT's failed reply ends the wait at once, says so and that nothing was captured, sends
-/// nothing again and frees the run's browser slot.
+/// ChatGPT's failed reply ends the wait at once, says so and that nothing was captured, and sends
+/// nothing again. Like other post-send failures it keeps the tab for recovery, and its slot is freed
+/// once the worker exits (`post_send_terminal_error_returns_and_its_slot_is_reclaimed_after_worker_exit`).
 #[tokio::test]
 async fn a_failed_reply_ends_the_wait_saying_nothing_was_captured() {
     let f = fixture(Fault::StreamFailed, false).await;
-    let error = run(&f).await.unwrap_err();
+    let error = tokio::time::timeout(Duration::from_secs(10), run(&f))
+        .await
+        .expect("a failed reply must end the wait")
+        .unwrap_err();
     assert!(
         matches!(
             error.downcast_ref::<crate::browser_provider::Failure>(),
@@ -5265,14 +5269,10 @@ async fn a_failed_reply_ends_the_wait_saying_nothing_was_captured() {
     );
     assert!(captured(&f.store, &f.id).is_err());
     assert_eq!(f.sends.load(Ordering::SeqCst), 1);
-    assert!(
-        f.profile.records().unwrap()["leases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|lease| lease["capacityReleased"] == true),
-        "{}",
-        f.profile.records().unwrap()
+    assert_eq!(f.store.require(&f.id).unwrap()["recoveryRequired"], true);
+    assert_eq!(
+        f.profile.records().unwrap()["leases"][0]["targetDispositionPending"],
+        true
     );
     stop(f).await;
 }
