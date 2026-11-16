@@ -2,6 +2,33 @@
 
 Alcuin ships as 2 binaries, `alcuin` (the CLI) and `alcuin-mcp` (the MCP server), for Linux and Windows on x86_64. Keep them in the same folder: the MCP server starts the CLI beside it for detached runs. Every release also has `alcuin.mcpb`, an MCP bundle for Claude Desktop ([MCP setup](mcp.md#claude-desktop)).
 
+## One command
+
+The install scripts download the latest release, check its SHA-256 checksum, check that `alcuin` runs on your machine and only then put both binaries in place. Running one again updates Alcuin.
+
+Linux, into `~/.local/bin` (it says so if that folder is not on your `PATH`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
+```
+
+Windows, in PowerShell, into `%LOCALAPPDATA%\Programs\Alcuin`, which it adds to your user `Path`:
+
+```powershell
+irm https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.ps1 | iex
+```
+
+Both read these environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `ALCUIN_VERSION` | A release tag such as `v0.1.0`, in place of the latest release |
+| `ALCUIN_INSTALL_DIR` | The folder for both binaries |
+| `ALCUIN_DOWNLOAD_URL` | A folder holding the release archive and its `.sha256` file, such as a mirror; `install.sh` accepts only an HTTPS one |
+| `ALCUIN_NO_MODIFY_PATH` | `1` leaves your Windows user `Path` alone |
+
+The scripts check the checksum published beside the archive, which catches a damaged or swapped download but not a release replaced together with its checksum. The steps below also verify the build provenance attestation with the [GitHub CLI](https://cli.github.com/).
+
 ## Linux
 
 The release is built for glibc 2.39 or later, such as Ubuntu 24.04. To see your version:

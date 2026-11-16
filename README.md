@@ -25,7 +25,21 @@ It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Stein
 
 ## Install
 
-Download both binaries from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest), built for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64). Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs. Each block checks the archive's SHA-256 checksum, unpacks it and, with the [GitHub CLI](https://cli.github.com/), verifies its build provenance attestation.
+One command installs both binaries from the latest release, after checking the archive's SHA-256 checksum and that the binary runs on your machine.
+
+Linux, into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
+```
+
+Windows, in PowerShell, into `%LOCALAPPDATA%\Programs\Alcuin`, which it adds to your user `Path`:
+
+```powershell
+irm https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.ps1 | iex
+```
+
+[Install](docs/install.md) covers the scripts' options. To check each step yourself, and the build provenance too, download both binaries from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest), built for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64). Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs. Each block checks the archive's SHA-256 checksum, unpacks it and, with the [GitHub CLI](https://cli.github.com/), verifies its build provenance attestation.
 
 Linux (put `~/.local/bin` on your `PATH`):
 
