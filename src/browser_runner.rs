@@ -4332,8 +4332,11 @@ async fn upload_inputs(
             !timeout.is_zero(),
             "Attachment upload budget expired before every file was ready; nothing was sent. Tune --browser-attachment-timeout."
         );
-        let display = request.extra["attachmentDisplayPaths"][index]
-            .as_str()
+        let display = request
+            .extra
+            .get("attachmentDisplayPaths")
+            .and_then(|paths| paths.get(index))
+            .and_then(Value::as_str)
             .map_or_else(|| path.display().to_string(), str::to_owned);
         automation_log(store, id, &format!("Uploading attachment: {display}"))?;
         let mut file = if let Some(staged) = &request.staged_uploads {
@@ -5128,6 +5131,23 @@ async fn wait_answer(
         stalls.since = None;
         if observed["uiError"] == "temporary_unavailable" {
             return Err(crate::browser_provider::Failure::GenerationFailed.into());
+        }
+        // With no answer yet, ChatGPT's connection notice means none is coming.
+        if !deep
+            && observed["pending"] == true
+            && let Some(warning) = crate::browser_page::connection_warning(
+                reservation.page(),
+                "the assistant",
+                limits.command,
+                cancel,
+                &|line| page_log(store, id, line),
+            )
+            .await
+        {
+            return Err(
+                anyhow::Error::from(crate::browser_provider::Failure::GenerationFailed)
+                    .context(warning),
+            );
         }
         if let Some(line) = monitor.line(started.elapsed().as_millis() as u64, &observed) {
             let log = store.require(&progress)?;

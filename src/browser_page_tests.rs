@@ -47,6 +47,12 @@ fn ui_warning_text_classifies_and_sanitises_like_the_reference() {
             "Failed to generate a response",
             Some("temporary_unavailable"),
         ),
+        (
+            "No response from ChatGPT. Check your connection.",
+            Some("temporary_unavailable"),
+        ),
+        ("No response from ChatGPT.", Some("temporary_unavailable")),
+        ("Check your connection.", Some("temporary_unavailable")),
         ("Please verify you are human", Some("auth_or_challenge")),
         ("Sign in to continue", Some("auth_or_challenge")),
         ("Signing information", None),
@@ -87,6 +93,10 @@ fn any_limit_or_account_warning_holds_a_retry_back_but_a_temporary_notice_does_n
             true,
         ),
         (json!([{"text":"Verify you are human"}]), true),
+        (
+            json!([{"text":"No response from ChatGPT. Check your connection."}]),
+            true,
+        ),
         (json!([{"text":"Usage limit reached."}]), true),
         (
             json!([{"text":"Unusual activity has been detected from your device. Try again later."}]),
