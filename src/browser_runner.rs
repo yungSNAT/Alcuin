@@ -5129,6 +5129,23 @@ async fn wait_answer(
         if observed["uiError"] == "temporary_unavailable" {
             return Err(crate::browser_provider::Failure::GenerationFailed.into());
         }
+        // With no answer yet, ChatGPT's connection notice means none is coming.
+        if !deep
+            && observed["pending"] == true
+            && let Some(warning) = crate::browser_page::connection_warning(
+                reservation.page(),
+                "the assistant",
+                limits.command,
+                cancel,
+                &|line| page_log(store, id, line),
+            )
+            .await
+        {
+            return Err(
+                anyhow::Error::from(crate::browser_provider::Failure::GenerationFailed)
+                    .context(warning),
+            );
+        }
         if let Some(line) = monitor.line(started.elapsed().as_millis() as u64, &observed) {
             let log = store.require(&progress)?;
             store.append_log(&progress, log["model"].as_str(), &format!("{line}\n"))?;
