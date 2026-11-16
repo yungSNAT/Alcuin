@@ -8,8 +8,9 @@ use std::{
     process::{Command, Output},
 };
 
-/// Serves the files in `root` over HTTP, as the release download folder and the raw script do.
-fn serve(root: PathBuf) -> String {
+/// Answers each HTTP request on a new local port with the status, headers and body `answer`
+/// gives for its path (without the leading slash); returns the server's address.
+fn listen(answer: impl Fn(&str) -> (&'static str, String, Vec<u8>) + Send + 'static) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -29,13 +30,10 @@ fn serve(root: PathBuf) -> String {
                 .nth(1)
                 .unwrap_or("/")
                 .trim_start_matches('/');
-            let (status, body) = match fs::read(root.join(path)) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("404 Not Found", vec![]),
-            };
+            let (status, headers, body) = answer(path);
             let _ = socket.write_all(
                 format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 )
                 .as_bytes(),
@@ -44,6 +42,14 @@ fn serve(root: PathBuf) -> String {
         }
     });
     address
+}
+
+/// Serves the files in `root` over HTTP, as the release download folder and the raw script do.
+fn serve(root: PathBuf) -> String {
+    listen(move |path| match fs::read(root.join(path)) {
+        Ok(body) => ("200 OK", String::new(), body),
+        Err(_) => ("404 Not Found", String::new(), vec![]),
+    })
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -270,30 +276,13 @@ fn a_plain_http_download_installs_nothing() {
 /// Answers every request over HTTP with a redirect to the same path under `target`.
 #[cfg(windows)]
 fn redirect_to(target: String) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
-    std::thread::spawn(move || {
-        for socket in listener.incoming() {
-            let Ok(mut socket) = socket else { continue };
-            let mut request = vec![];
-            let mut buffer = [0; 4096];
-            while !request.windows(4).any(|end| end == b"\r\n\r\n") {
-                match socket.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(count) => request.extend_from_slice(&buffer[..count]),
-                }
-            }
-            let request = String::from_utf8_lossy(&request);
-            let path = request.split(' ').nth(1).unwrap_or("/");
-            let _ = socket.write_all(
-                format!(
-                    "HTTP/1.1 302 Found\r\nLocation: {target}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
-            );
-        }
-    });
-    address
+    listen(move |path| {
+        (
+            "302 Found",
+            format!("Location: {target}/{path}\r\n"),
+            vec![],
+        )
+    })
 }
 
 /// The Windows script downloads over plain HTTP only from a folder on this machine that it is
