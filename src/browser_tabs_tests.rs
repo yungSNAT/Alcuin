@@ -159,6 +159,41 @@ fn positive_completion_is_stable_and_bound_to_user_and_assistant_identity() {
     assert_eq!(tab["state"], "detached");
 }
 #[test]
+fn signed_in_comes_from_the_page_facts_the_inspection_returns() {
+    // A login control vetoes; otherwise any composer, send, stop control or answer shows the app.
+    for (facts, expected) in [
+        (json!({}), false),
+        (json!({"promptReady":true}), true),
+        (json!({"sendExists":true}), true),
+        (json!({"stopExists":true}), true),
+        (json!({"assistantCount":2}), true),
+        (json!({"assistantCount":0}), false),
+        (
+            json!({"loginButtonExists":true,"promptReady":true,"assistantCount":1}),
+            false,
+        ),
+        // A page value is never taken as the verdict.
+        (json!({"authenticated":true}), false),
+    ] {
+        let mut raw = info();
+        for key in [
+            "authenticated",
+            "assistantCount",
+            "stopExists",
+            "sendExists",
+            "promptReady",
+            "loginButtonExists",
+        ] {
+            raw.as_object_mut().unwrap().remove(key);
+        }
+        for (key, value) in facts.as_object().unwrap() {
+            raw[key] = value.clone();
+        }
+        let tab = summary(&endpoint(), &target(), &raw).unwrap();
+        assert_eq!(tab["authenticated"], expected, "{facts}");
+    }
+}
+#[test]
 fn exact_references_precede_titles_and_ambiguous_titles_refuse_selection() {
     let first = json!({"targetId":"PUBLIC-a","url":"https://chatgpt.com/c/public-a","conversationId":"public-a","title":"PUBLIC identical title"});
     let second = json!({"targetId":"PUBLIC-b","url":"https://chatgpt.com/c/public-b","conversationId":"public-b","title":"PUBLIC identical title"});
