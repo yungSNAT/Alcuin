@@ -15,7 +15,7 @@
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
-Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [CLI reference](docs/cli-reference.md) · [MCP setup](docs/mcp.md) · [MCP tool reference](docs/mcp-tools.md) · [Coding agents](docs/agents.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
+Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [CLI reference](docs/cli-reference.md) · [MCP setup](docs/mcp.md) · [MCP tool reference](docs/mcp-tools.md) · [Coding agents](docs/agents.md) · [Pull requests in GitHub Actions](docs/pull-requests.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
 
 </div>
 
@@ -75,6 +75,8 @@ For Claude Code, with both binaries on your `PATH`, install the plugin from this
 /plugin marketplace add yungSNAT/Alcuin
 /plugin install alcuin@alcuin
 ```
+
+In Codex, `codex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp` adds the same server.
 
 For Codex or Claude Code on the machine that runs the browser, `alcuin bridge codex-config --local-browser` and `alcuin bridge claude-config --local-browser` print a server entry that uses the browser profile you sign in to under [Use](#use). Without `--local-browser` they print entries for the remote browser bridge: the Codex entry points at an `alcuin serve` host, and the Claude Code entry uses a remote host only when your config or `ORACLE_REMOTE_HOST` names one, otherwise a separate `~/.oracle-local` home and browser profile.
 

@@ -32,3 +32,57 @@ jobs:
           tool: cargo-audit@0.22.2
           fallback: none
       - run: cargo audit --deny warnings
+
+  # vendor/hyper is a registry hyper with the files vendor/hyper/PATCH.json lists changed. The
+  # patch hides it from Dependabot and from cargo audit, which skips path dependencies, so this
+  # job checks it against the registry crate and audits that crate in its place.
+  vendored-hyper:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-audit@0.22.2
+          fallback: none
+      - name: Compare vendor/hyper with the registry crate
+        run: |
+          set -euo pipefail
+          patch=vendor/hyper/PATCH.json
+          version=$(jq -r .upstream "$patch" | sed -n 's/^hyper //p')
+          grep -qx "hyper = { version = \"$version\", .*" Cargo.toml ||
+            { echo "::error::Cargo.toml does not ask for hyper $version, the version vendor/hyper patches"; exit 1; }
+          crate="$RUNNER_TEMP/hyper.crate"
+          curl --proto '=https' -fsSL "https://static.crates.io/crates/hyper/hyper-$version.crate" -o "$crate"
+          echo "$(jq -r .registryPackageSha256 "$patch")  $crate" | sha256sum -c -
+          tar -xzf "$crate" -C "$RUNNER_TEMP"
+          upstream="$RUNNER_TEMP/hyper-$version"
+          # Every registry file but Cargo.lock is vendored, unchanged unless PATCH.json lists it,
+          # and vendor/hyper adds only PATCH.json.
+          changed=$(cd "$upstream" && find . -type f ! -path ./Cargo.lock | sort | while read -r f; do
+            cmp -s "$f" "$GITHUB_WORKSPACE/vendor/hyper/$f" || echo "${f#./}"
+          done)
+          added=$(cd vendor/hyper && find . -type f ! -path ./PATCH.json | sort | while read -r f; do
+            [ -e "$upstream/$f" ] || echo "${f#./}"
+          done)
+          listed=$(jq -r '.modifiedFiles[]' "$patch" | sort)
+          if [ "$changed" != "$listed" ] || [ -n "$added" ]; then
+            echo "::error::vendor/hyper differs from hyper $version beyond PATCH.json's modifiedFiles"
+            diff <(echo "$listed") <(echo "$changed") || true
+            echo "added: $added"
+            exit 1
+          fi
+          latest=$(curl --proto '=https' -fsSL -A "yungSNAT/Alcuin CI" https://crates.io/api/v1/crates/hyper | jq -r .crate.max_stable_version)
+          [ "$latest" = "$version" ] ||
+            echo "::warning::hyper $latest is out; vendor/hyper patches $version. Reapply PATCH.json to upgrade."
+      - name: Audit the registry hyper in place of the vendored copy
+        run: |
+          set -euo pipefail
+          version=$(jq -r .upstream vendor/hyper/PATCH.json | sed -n 's/^hyper //p')
+          sed -i '/^hyper = { path = "vendor\/hyper" }$/d' Cargo.toml
+          # Re-resolving hyper alone moves its lock entry to the registry crate at the same version.
+          cargo tree --quiet --invert "hyper@$version" --depth 0 > /dev/null
+          grep -A2 -x 'name = "hyper"' Cargo.lock | grep -qx 'source = "registry+https://github.com/rust-lang/crates.io-index"'
+          cargo audit --deny warnings

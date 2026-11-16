@@ -84,7 +84,11 @@ pub(crate) async fn require(
                 left,
                 cancel,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                let message = format!("{REFUSAL}: {error}");
+                error.context(message)
+            })?;
         let reason = crate::cdp::page_text(
             verdict["reason"]
                 .as_str()

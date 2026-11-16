@@ -17,6 +17,30 @@ const SHORT: Duration = Duration::from_secs(5);
 const UNKNOWN: Duration = Duration::from_millis(300);
 const ACTIVE: &str = "<main><header data-app-shell-titlebar='true'><button aria-label='Turn off temporary chat'>Temporary</button></header><form><textarea id='prompt-textarea' name='prompt-textarea'></textarea><input type='file' id='PUBLIC-file'><button data-testid='send-button' type='submit'>Send</button></form><div id='view'>PUBLIC view</div></main>";
 
+#[tokio::test]
+async fn a_failed_privacy_observation_keeps_its_refusal_and_original_transport_cause() {
+    use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+    let (client, _peer) = tokio::io::duplex(64);
+    let page = Cdp::from_socket(
+        WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+        SHORT,
+    );
+    page.disconnect_and_wait(SHORT).await.unwrap();
+    let cancel = CancellationToken::new();
+    let error = require(&page, SHORT, &cancel).await.unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains(REFUSAL), "{error:#}");
+    assert!(
+        message.contains("CDP connection is closed; command was not sent"),
+        "{error:#}"
+    );
+    assert!(
+        error.downcast_ref::<crate::cdp::NotSent>().is_some(),
+        "{error:#}"
+    );
+    assert!(!cancel.is_cancelled());
+}
+
 #[test]
 fn landing_url_requests_temporary_mode_without_claiming_it_is_verified() {
     assert_eq!(
@@ -1683,6 +1707,12 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
         ),
         ("Retry in the text", "Thinking failed<br>Retry", "", true),
         (
+            "connection failure with Retry",
+            "No response from ChatGPT. Check your connection.",
+            "<button>Retry</button>",
+            true,
+        ),
+        (
             "feedback chrome",
             "Thinking failed.<br>Is this conversation helpful so far?",
             "",
@@ -2021,6 +2051,32 @@ async fn ui_warning_code_case(page: &Cdp) -> Result<()> {
     anyhow::ensure!(
         raw[0]["text"] == "Usage limit reached.",
         "Limit wording was not collected: {raw}"
+    );
+    mount(
+        page,
+        &ACTIVE.replace(
+            "</main>",
+            "<aside role='alert'>No response from ChatGPT. Check your connection. <button>Retry</button></aside></main>",
+        ),
+        "/",
+        "",
+    )
+    .await?;
+    let raw = page
+        .evaluate_with_arguments(
+            include_str!("../browser-scripts/ui-warnings.js"),
+            &json!([{}]),
+            SHORT,
+            &CancellationToken::new(),
+        )
+        .await?;
+    anyhow::ensure!(
+        crate::browser_page::first_ui_warning(&raw)
+            == Some((
+                "temporary_unavailable",
+                "No response from ChatGPT. Check your connection. Retry".to_owned()
+            )),
+        "Connection warning was not collected: {raw}"
     );
     Ok(())
 }
@@ -3522,7 +3578,9 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
             cwd: temp.path().into(),
             environment,
             debug_port: None,
-            timeout: Duration::from_secs(15),
+            // CI runners have taken more than 15 s to start headless Chrome whilst it still
+            // logged progress, failing this test 4 times on 16 November 2026.
+            timeout: Duration::from_secs(60),
             keep_browser: false,
             headless: true,
             hide_window: true,
