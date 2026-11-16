@@ -235,6 +235,8 @@ fn project_config_cannot_redirect_credentials_routes_or_native_capture() {
         json!({"api":true}),
         json!("API"),
         json!(null),
+        json!(true),
+        json!(1),
     ] {
         let sanitised = config::sanitise_project(&json!({"engine":engine}));
         assert!(sanitised.get("engine").is_none(), "{engine}: {sanitised}");
