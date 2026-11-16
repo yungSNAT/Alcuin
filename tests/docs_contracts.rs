@@ -55,7 +55,7 @@ fn other_tools_command_lines_keep_their_own_flags() {
     let home = tempfile::tempdir().unwrap();
     fs::write(
         home.path().join("install.md"),
-        "npx skills add yungSNAT/Alcuin --skill alcuin --global --yes\n$ gh attestation verify a.zip --repo yungSNAT/Alcuin\nnpx @steipete/oracle status --json\n",
+        "npx skills add yungSNAT/Alcuin --skill alcuin --global --yes\n$ gh attestation verify a.zip --repo yungSNAT/Alcuin\ncodex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp\nnpx @steipete/oracle status --json\n",
     )
     .unwrap();
     let result = docs_check::check(home.path(), &["install.md".into()]).unwrap();

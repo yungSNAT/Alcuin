@@ -38,6 +38,7 @@
 - The MCP server has a `ground` tool, 'Check an Alcuin answer's evidence', so an MCP client can check a saved answer's citations and quotes as `alcuin ground` does. It returns the `--json` report with `sessionId` and `flagged`, sees the sessions `sessions` and `wait` see, and reads a session's files as they are now only inside the server's working directory unless `ORACLE_MCP_ALLOW_EXTERNAL_INPUT=1` is set.
 - A new guide, [Pull requests in GitHub Actions](docs/pull-requests.md), gives a workflow that reviews each pull request's changed files through the API and posts the answer as a comment, and the files guide shows how to attach the files a branch changed. `alcuin docs check` no longer reads `git`'s options, on a `git` line or inside `$(...)` or PowerShell's `(git ...)`, as Alcuin's.
 - `alcuin docs check` no longer reads the options on an `npx` or `gh` command line, such as `npx skills add` or `gh attestation verify`, as Alcuin's own; such a line was reported as drift. A line that runs Oracle through `npx` is still checked.
+- `alcuin docs check` no longer reads the options on a `codex` command line, such as `codex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp`, as Alcuin's own. The MCP guide now gives that command, which adds Alcuin's server to Codex in one step.
 
 ## 0.1.0 (2026-11-12)
 
