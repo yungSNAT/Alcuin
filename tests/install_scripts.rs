@@ -358,11 +358,11 @@ fn an_interrupted_update_puts_the_old_binary_back() {
     }
 }
 
-/// An old binary that cannot be moved back is kept, and the new one stays in place rather than
-/// being removed by the failed move.
+/// An old binary held open, so that it cannot be moved back, is copied back: the old pair is whole
+/// and the held copy is kept.
 #[cfg(windows)]
 #[test]
-fn an_old_binary_that_cannot_be_put_back_loses_nothing() {
+fn a_held_old_binary_is_copied_back() {
     let root = tempfile::tempdir().unwrap();
     let url = serve(root.path().to_owned());
     release(root.path(), false);
@@ -404,13 +404,14 @@ fn an_old_binary_that_cannot_be_put_back_loses_nothing() {
     drop(lock);
     let said = format!("{}{}", text(&output.stdout), text(&output.stderr));
     assert!(!output.status.success(), "{said}");
-    assert!(
-        fs::read(dir.join("alcuin.exe")).ok() == fs::read(env!("CARGO_BIN_EXE_alcuin")).ok(),
-        "{said}"
-    );
+    for bin in ["alcuin.exe", "alcuin-mcp.exe"] {
+        assert_eq!(
+            fs::read(dir.join(bin)).ok().as_deref(),
+            Some(&b"PUBLIC old"[..]),
+            "{bin}: {said}"
+        );
+    }
     assert_eq!(fs::read(dir.join(&old)).unwrap(), b"PUBLIC old");
-    assert_eq!(fs::read(dir.join("alcuin-mcp.exe")).unwrap(), b"PUBLIC old");
-    assert!(said.contains(&old), "{said}");
 }
 
 #[cfg(windows)]
