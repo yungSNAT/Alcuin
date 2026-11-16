@@ -3578,7 +3578,9 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
             cwd: temp.path().into(),
             environment,
             debug_port: None,
-            timeout: Duration::from_secs(15),
+            // CI runners have taken more than 15 s to start headless Chrome whilst it still
+            // logged progress, failing this test 4 times on 16 November 2026.
+            timeout: Duration::from_secs(60),
             keep_browser: false,
             headless: true,
             hide_window: true,
