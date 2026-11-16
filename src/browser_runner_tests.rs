@@ -38,6 +38,7 @@ enum Fault {
     UnloadedThenTryAgain,
     UnloadedAfterTryAgain,
     UnloadedRateLimited,
+    UnloadedConnectionLost,
     UnloadedRetrySpent,
     UnloadedBorrowed,
     UnloadedSequential,
@@ -312,7 +313,10 @@ impl Exchange {
                 ) {
                     json!([{"text":"  Too many requests.
  Contact PUBLIC@example.com  ","source":"selector","role":"alert","ariaLive":null,"selector":"[role=\"alert\"]"}])
-                } else if matches!(self.fault, Fault::ConnectionLost) {
+                } else if matches!(
+                    self.fault,
+                    Fault::ConnectionLost | Fault::UnloadedConnectionLost
+                ) {
                     json!([{"text":"No response from ChatGPT. Check your connection. Retry","source":"selector","role":"alert","ariaLive":null,"selector":"[role=\"alert\"]"}])
                 } else {
                     json!([])
@@ -353,6 +357,7 @@ impl Exchange {
             Fault::UnloadedThenTryAgain
                 | Fault::UnloadedAfterTryAgain
                 | Fault::UnloadedRateLimited
+                | Fault::UnloadedConnectionLost
                 | Fault::UnloadedRetrySpent
                 | Fault::UnloadedBorrowed
                 | Fault::UnloadedSequential
@@ -1181,6 +1186,7 @@ impl Exchange {
                 }
                 Fault::UnloadedThenTryAgain
                 | Fault::UnloadedRateLimited
+                | Fault::UnloadedConnectionLost
                 | Fault::UnloadedBorrowed
                 | Fault::UnloadedSequential
                 | Fault::RetryNeverStarts
@@ -5003,6 +5009,15 @@ async fn a_visible_rate_limit_warning_holds_the_retry_back() {
     let f = fixture(Fault::UnloadedRateLimited, false).await;
     assert!(run(&f).await.is_err());
     assert!(presses(&f).is_empty());
+    stop(f).await;
+}
+/// The connection notice inside a failed assistant turn holds back that turn's own Retry.
+#[tokio::test]
+async fn a_connection_warning_holds_the_retry_of_a_failed_turn_back() {
+    let f = fixture(Fault::UnloadedConnectionLost, false).await;
+    assert!(run(&f).await.is_err());
+    assert!(presses(&f).is_empty());
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
     stop(f).await;
 }
 #[tokio::test]
