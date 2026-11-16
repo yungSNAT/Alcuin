@@ -697,20 +697,22 @@ pub(crate) async fn run(
     }
 }
 
-/// Leaves the Chrome this run launched running for the next run, and says where when the
-/// run was asked to keep it.
+/// Lets a Chrome this run launched and did not end outlive the run, and logs where it was
+/// left when the run was asked to keep it.
 fn retain_owned(
     connection: &mut ChromeConnection,
     terminate: bool,
     profile_dir: &Path,
     log: &(dyn Fn(&str) + Sync),
 ) -> Result<()> {
-    let retained = if connection.owns_process() {
+    // Retaining hands the process off, so ownership is read before it.
+    let owned = connection.owns_process();
+    let retained = if owned {
         connection.retain_process()
     } else {
         Ok(())
     };
-    if connection.owns_process() && !terminate && retained.is_ok() {
+    if owned && !terminate && retained.is_ok() {
         log(&format!(
             "Chrome left running on port {} with profile {}",
             connection.endpoint.port,
