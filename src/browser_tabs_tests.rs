@@ -11,7 +11,7 @@ fn target() -> Value {
     json!({"targetId":"PUBLIC-target","url":"https://chatgpt.com/c/public-a","title":"PUBLIC historical tab","type":"page"})
 }
 fn info() -> Value {
-    json!({"url":"https://chatgpt.com/c/public-a","authenticated":true,"lastAssistantText":"PUBLIC rendered answer","assistantCount":1,"assistantFollowsLatestUser":true,"lastAssistantTurnIndex":1,"lastUserTurnIndex":0,"lastUserText":"PUBLIC prompt","lastUserMessageId":"PUBLIC-user","lastUserOriginalSourceText":"PUBLIC exact source\n  indented","lastUserOriginalSourceMessageId":"PUBLIC-user","stopExists":false,"strongThinkingActive":false,"completionVisible":true,"assistantSnapshot":{"text":"PUBLIC exact\n\nanswer","turnIndex":1,"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"}})
+    json!({"url":"https://chatgpt.com/c/public-a","lastAssistantText":"PUBLIC rendered answer","assistantCount":1,"assistantFollowsLatestUser":true,"lastAssistantTurnIndex":1,"lastUserTurnIndex":0,"lastUserText":"PUBLIC prompt","lastUserMessageId":"PUBLIC-user","lastUserOriginalSourceText":"PUBLIC exact source\n  indented","lastUserOriginalSourceMessageId":"PUBLIC-user","stopExists":false,"strongThinkingActive":false,"completionVisible":true,"assistantSnapshot":{"text":"PUBLIC exact\n\nanswer","turnIndex":1,"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"}})
 }
 #[test]
 fn snapshots_must_match_the_inspected_turn_before_ids_or_completion_are_used() {
