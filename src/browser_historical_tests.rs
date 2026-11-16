@@ -28,6 +28,52 @@ fn disconnect_failure_preserves_the_first_retirement_or_settlement_cause() {
     }
 }
 use crate::{browser_chrome::AttachmentEndpoint, browser_harvest::HarvestIntegrity, storage};
+/// The check for another live controller of a target reads only the sessions that name it,
+/// not every saved session.
+#[test]
+fn a_foreign_controller_check_reads_only_sessions_naming_the_target() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path().join("PUBLIC-store"));
+    let owned = HistoricalTarget {
+        host: "127.0.0.1".into(),
+        port: 9222,
+        target_id: "PUBLIC-TARGET".into(),
+        browser_ws_endpoint: None,
+        claim_id: None,
+        conversation_id: "public-conversation".into(),
+    };
+    let session = |runtime: Value| {
+        let meta = store
+            .create(json!({"prompt":"PUBLIC prompt"}), home.path(), None)
+            .unwrap();
+        let id = meta["id"].as_str().unwrap().to_owned();
+        store
+            .update(&id, |_| Ok(Some(json!({"browser":{"runtime":runtime}}))))
+            .unwrap();
+        id
+    };
+    let own = session(json!({"chromeTargetId":"PUBLIC-TARGET","chromePort":9222}));
+    for index in 0..50 {
+        let id = format!("public-unrelated-{index}");
+        let directory = store.root().join(&id);
+        std::fs::create_dir_all(&directory).unwrap();
+        storage::atomic_json(
+            &directory.join("meta.json"),
+            &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
+        )
+        .unwrap();
+    }
+    crate::sessions::READ_SESSIONS.take();
+    assert!(!foreign_controller(&store, &own, &owned).unwrap());
+    let read = crate::sessions::READ_SESSIONS.take();
+    assert!(
+        !read.iter().any(|id| id.starts_with("public-unrelated-")),
+        "{read:?}"
+    );
+    session(json!({"chromeTargetId":"PUBLIC-TARGET","chromePort":9222,
+        "chromeHost":"127.0.0.1","controllerPid":std::process::id()}));
+    assert!(foreign_controller(&store, &own, &owned).unwrap());
+}
 
 #[tokio::test]
 async fn creatorless_restart_settles_only_saved_absence_with_inventory_traffic() {

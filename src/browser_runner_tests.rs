@@ -11,6 +11,11 @@ use tokio_tungstenite::{
     WebSocketStream,
     tungstenite::{Message, protocol::Role},
 };
+thread_local! {
+    /// The sessions read whole between marking a completed target and closing it.
+    static RETIREMENT_READS: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 enum Fault {
@@ -19,6 +24,8 @@ enum Fault {
     UploadCleanupWrongNavigation,
     #[default]
     None,
+    /// Unrelated sessions appear once the completed target is marked for retirement.
+    CrowdedRetirement,
     MarkedAnswer,
     TinyAnswer,
     CookieBootstrap,
@@ -1346,6 +1353,19 @@ impl Exchange {
         }
         if expression.contains("alcuin-dom:completed-disposition-retire") {
             assert_eq!(cfg["owner"], self.owner);
+            if matches!(self.fault, Fault::CrowdedRetirement) {
+                for index in 0..50 {
+                    let id = format!("public-unrelated-{index}");
+                    let directory = self.store.root().join(&id);
+                    std::fs::create_dir_all(&directory).unwrap();
+                    crate::storage::atomic_json(
+                        &directory.join("meta.json"),
+                        &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
+                    )
+                    .unwrap();
+                }
+                crate::sessions::READ_SESSIONS.take();
+            }
             let saved = self.store.require(&self.id).unwrap();
             assert_eq!(saved["status"], "completed");
             assert_eq!(saved["dispatch"]["state"], "completed");
@@ -1812,6 +1832,9 @@ impl Exchange {
                 }
                 "Target.closeTarget" => {
                     assert!(!self.borrowed(), "A borrowed tab run closed the user's tab");
+                    if matches!(self.fault, Fault::CrowdedRetirement) {
+                        RETIREMENT_READS.set(Some(crate::sessions::READ_SESSIONS.take()));
+                    }
                     assert_eq!(request["params"]["targetId"], "TARGET-PUBLIC");
                     self.closes.fetch_add(1, Ordering::SeqCst);
                     self.closed = !matches!(
@@ -3805,6 +3828,21 @@ async fn a_failed_stream_end_read_is_logged_and_the_answer_is_still_accepted() {
     assert!(
         log.contains("[browser] Stream-end trace: not observed; gate confirmed "),
         "{log}"
+    );
+    stop(f).await;
+}
+/// The last authority check before a completed target closes looks for other controllers among
+/// the sessions that name the target, not across every saved session.
+#[tokio::test]
+async fn retirement_authority_reads_only_sessions_naming_the_target() {
+    let f = fixture(Fault::CrowdedRetirement, false).await;
+    assert_eq!(run(&f).await.unwrap()["status"], "completed");
+    let read = RETIREMENT_READS
+        .take()
+        .expect("the completed target was marked and closed");
+    assert!(
+        !read.iter().any(|id| id.starts_with("public-unrelated-")),
+        "{read:?}"
     );
     stop(f).await;
 }
