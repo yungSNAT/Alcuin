@@ -175,9 +175,11 @@
             const payload = JSON.parse(init.body);
             const messages = payload?.messages;
             const message = Array.isArray(messages) && messages.length === 1 ? messages[0] : null;
-            if (payload?.action !== 'next' || message?.author?.role !== 'user' || !contentMatches(message?.content) || !hintsMatch(payload, message) ||
-                typeof message.id !== 'string' || !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(message.id)) {
-              invalidate('unqualified-submission-identity', 'unqualified-identity', 'matched-fetch');
+            const identified = payload?.action === 'next' && message?.author?.role === 'user' && hintsMatch(payload, message) &&
+                typeof message.id === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(message.id);
+            if (!identified || !contentMatches(message?.content)) {
+              // A message whose only fault is its content, such as text ChatGPT rewrote, is told apart.
+              invalidate('unqualified-submission-identity', identified ? 'unqualified-content' : 'unqualified-identity', 'matched-fetch');
             } else {
               // This records only a candidate during route-before-mount. It is
               // never exposed as capture evidence until the exact view is verified.
