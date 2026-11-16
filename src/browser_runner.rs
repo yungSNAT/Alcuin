@@ -6530,7 +6530,8 @@ async fn recover_existing_inner(
             );
         }
         lease.confirm_target_absent(target_id)?;
-        let result=store.update(id,|meta|{anyhow::ensure!(meta==&saved_raw,"Recovery owner changed during absence inspection");Ok(Some(json!({"recoveryRequired":false,"browser":merge_object(&meta["browser"],&json!({"runtime":merge_object(&meta["browser"]["runtime"],&json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}))}))})))})?;
+        retire_inputs(store, id, &committed)?;
+        let result=store.update(id,|meta|{anyhow::ensure!(meta==&saved_raw,"Recovery owner changed during absence inspection");Ok(Some(json!({"recoveryRequired":false,"cleanupWarning":null,"browser":merge_object(&meta["browser"],&json!({"runtime":merge_object(&meta["browser"]["runtime"],&json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}))}))})))})?;
         recovery_lock.release()?;
         return Ok(result);
     }
