@@ -72,8 +72,7 @@
         } catch {
             $failure = $_
             # Put back what was replaced, last first, so the old pair stays whole. Each is tried
-            # even if another fails, and a binary is only ever overwritten by its old one, never
-            # removed first.
+            # even if another fails.
             [array]::Reverse($replaced)
             foreach ($pair in $replaced) {
                 $target, $old = $pair
@@ -81,7 +80,21 @@
                     if (-not $old) {
                         Remove-Item $target -Force -ErrorAction SilentlyContinue
                     } elseif (Test-Path $old) {
-                        Move-Item $old $target -Force
+                        # Move-Item -Force deletes the target even when the move then fails, so
+                        # the new binary is moved aside instead, and back if the old one is held.
+                        $new = "$target.$([Guid]::NewGuid().ToString('N')).old"
+                        if (Test-Path $target) {
+                            Move-Item $target $new
+                        }
+                        try {
+                            Move-Item $old $target
+                        } catch {
+                            if (Test-Path $new) {
+                                Move-Item $new $target
+                            }
+                            throw
+                        }
+                        Remove-Item $new -Force -ErrorAction SilentlyContinue
                     }
                 } catch {
                     Write-Warning "alcuin install: the old $(Split-Path $target -Leaf) is in $old."
