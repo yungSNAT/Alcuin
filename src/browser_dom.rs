@@ -24,7 +24,15 @@ const EVIDENCE: &str = include_str!("../browser-scripts/attachment-evidence.js")
 const RESET_UPLOADS: &str = include_str!("../browser-scripts/upload-reset.js");
 const FILE_PREPARE: &str = include_str!("../browser-scripts/file-input-prepare.js");
 const SEND_FOCUS: &str = include_str!("../browser-scripts/send-focus.js");
-const SEND_PREPARE: &str = include_str!("../browser-scripts/send-prepare.js");
+/// `send-prepare.js` with the submission witness collector, `submission-witness.js`, in scope as
+/// `installWitness`. The native privacy checks drive that same file.
+const SEND_PREPARE: &str = concat!(
+    "(...args) => {\nconst installWitness = (\n",
+    include_str!("../browser-scripts/submission-witness.js"),
+    ");\nreturn (\n",
+    include_str!("../browser-scripts/send-prepare.js"),
+    ")(...args);\n}"
+);
 const WITNESS_CLEAN: &str = "(cfg) => { /* alcuin-dom:submission-witness-clean */ const record=window.__oracleSubmissionWitness; if(!record)return true; if(record.witnessId!==cfg.witnessId || record.dispatchGuardId!==cfg.dispatchGuardId || record.owner.claimId!==cfg.owner.claimId || record.owner.reservationId!==cfg.owner.reservationId) return false; if(typeof record.stop==='function')return cfg.retain===true ? record.stop() : record.cleanup(); if(cfg.retain!==true)delete window.__oracleSubmissionWitness; return true; }";
 const INSTALL: &str = include_str!("../browser-scripts/completion-install.js");
 /// A fresh completion tracker for a turn about to be retried. The first one stopped watching at
