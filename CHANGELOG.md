@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `alcuin --help` no longer lists the `tui` command, which this build refuses ('alcuin tui is not supported in this build'). `alcuin tui` still gives that reason.
+- When a completed ChatGPT run's cleanup is retried after its tab was closed outside Alcuin, it now deletes the session's staged copies of the attached files and clears the session's `cleanupWarning`, as cleanup does when Alcuin closes the tab itself. It marked the cleanup done but kept the copies.
 - Linux on aarch64 (64-bit Arm): each release now carries `alcuin-aarch64-unknown-linux-gnu.tar.gz`, built and smoke-tested on an Arm runner, and `install.sh` installs it on a machine whose `uname -m` is `aarch64` or `arm64`. CI runs the test suite on Arm Linux too.
 - When a browser send stays uncertain because the submission witness captured nothing, the error now names the check that refused it: 'commitment is ambiguous (submission-witness-unavailable: unqualified-content)' when the message ChatGPT sent does not carry the prompt's exact text, `unqualified-identity` for its other fields, `expired` and so on. Before, every such refusal read the same.
 - When Chrome fails to start, with 'Chrome startup deadline expired' or 'Native Chrome exited before its debugging endpoint was acknowledged', the error now ends with the last lines Chrome printed (`; Chrome stderr: ...`), which say why it never opened its debugging port. They come from `oracle-chrome-stderr.log` in the browser profile, which Alcuin already wrote but no message named.
@@ -19,6 +19,7 @@
 - Releases are listed on the MCP Registry as `io.github.yungSNAT/alcuin`: the release workflow writes `server.json` for the tag's bundle and publishes it by GitHub OIDC, with no stored secret.
 - The failed-run sweep no longer leaves its cursor lock held when another sweep contends for it as the lock is released. Such a lock stayed until the process exited, every later cursor write in that process was skipped as busy, and stderr showed 'Failed-run sweep cursor lock release remains pending'.
 - `--help` no longer lists options that Alcuin refuses: `--verbose-render`, the provider-native capture pair and `--retain-hours`. Its verbose form (`--help --verbose`, `--debug-help`) also drops the browser recheck and auto-reattach timings and `--browser-reuse-wait`, and subcommand help hides `--clear` and `--browser-reuse-wait`. Passing one is still refused (#121).
+- `alcuin --help` no longer lists the `tui` command, which this build refuses ('alcuin tui is not supported in this build'). `alcuin tui` still gives that reason.
 - When reattaching to a session (harvest) finds no Markdown from ChatGPT's Copy button, Alcuin still saves the answer's page text, but now logs that it did and records `captureSource: "page-text"` in the session's harvest, as a live run has since #126. It did so silently before.
 - Such a page-text answer is now committed to the target journal as `text`, not `markdown`, so the journal no longer claims Markdown formatting it does not have.
 - The MCP tools `consult` and `wait` are titled 'Run an Alcuin session' and 'Wait for an Alcuin session', and `consult`'s description says 'an Alcuin session', replacing 'a Alcuin' (#121).
