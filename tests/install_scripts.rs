@@ -302,6 +302,51 @@ fn the_linux_installer_fetches_the_archive_for_the_machine() {
     }
 }
 
+/// On macOS the script fetches the Apple silicon archive, and refuses an Intel Mac and a system
+/// no release is built for.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_installer_fetches_the_macos_archive_on_apple_silicon_only() {
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let shim = http_shim(root.path());
+    for (system, machine, expected) in [
+        (
+            "Darwin",
+            "arm64",
+            format!("could not download {url}/release/alcuin-aarch64-apple-darwin.tar.gz"),
+        ),
+        (
+            "Darwin",
+            "x86_64",
+            "macOS releases are built for Apple silicon only".to_owned(),
+        ),
+        (
+            "FreeBSD",
+            "amd64",
+            "this script installs the Linux and macOS builds".to_owned(),
+        ),
+    ] {
+        let uname = shim.join("uname");
+        fs::write(
+            &uname,
+            format!("#!/bin/sh\ncase \"$1\" in -s) echo {system} ;; -m) echo {machine} ;; *) exec /usr/bin/uname \"$@\" ;; esac\n"),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&uname, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let dir = root.path().join(format!("bin-{system}-{machine}"));
+        let output = install(&format!("{url}/release"), &dir, root.path());
+        let stderr = text(&output.stderr);
+        assert!(!output.status.success(), "{system} {machine}");
+        assert!(stderr.contains(&expected), "{system} {machine}: {stderr}");
+        assert!(!dir.exists(), "{system} {machine}");
+    }
+}
+
 /// The Linux script downloads only over HTTPS, so neither a plain HTTP mirror nor a redirect to
 /// one can swap the archive and its checksum together.
 #[cfg(target_os = "linux")]
