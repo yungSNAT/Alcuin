@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the alcuin and alcuin-mcp release binaries on Linux (x86_64):
+# Installs the alcuin and alcuin-mcp release binaries on Linux (x86_64 or aarch64):
 #   curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
 # It checks the archive's SHA-256 checksum and that the binary runs before it replaces anything.
 # ALCUIN_VERSION picks a release tag such as v0.1.0 (default: the latest release).
@@ -16,8 +16,9 @@ main() {
 
 	[ "$(uname -s)" = Linux ] || fail "this script installs the Linux build; on Windows run install.ps1 (docs/install.md)."
 	case "$(uname -m)" in
-	x86_64 | amd64) ;;
-	*) fail "releases are built for x86_64 only; build from source instead (docs/install.md#from-source)." ;;
+	x86_64 | amd64) arch=x86_64 ;;
+	aarch64 | arm64) arch=aarch64 ;;
+	*) fail "releases are built for x86_64 and aarch64 only; build from source instead (docs/install.md#from-source)." ;;
 	esac
 	command -v curl >/dev/null 2>&1 || fail "curl is required."
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -37,7 +38,7 @@ main() {
 		base="https://github.com/yungSNAT/Alcuin/releases/download/$version"
 	fi
 	dir="${ALCUIN_INSTALL_DIR:-$HOME/.local/bin}"
-	name=alcuin-x86_64-unknown-linux-gnu
+	name=alcuin-$arch-unknown-linux-gnu
 
 	tmp="$(mktemp -d)"
 	trap 'rm -rf "$tmp"' EXIT

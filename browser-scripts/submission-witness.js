@@ -24,18 +24,29 @@
   const canonical = value => value.normalize('NFC').replace(/\r\n?/g, '\n');
   let expected = canonical(cfg.prompt);
   const expectedImages = cfg.expectations.filter(item => item.image === true).length;
+  // With the inline Web search pill selected, ChatGPT sends the pill as an '@Web search'
+  // token at its composer position plus a 'search' system hint (observed 27 October 2026):
+  // '<prompt>@Web search' when selected after the staged prompt, '@Web search <prompt>' when
+  // the prompt follows an existing pill.
+  const webSearch = cfg.webSearch === true;
+  const textMatches = part => {
+    const text = canonical(part);
+    return webSearch ? text === expected + '@Web search' || text === '@Web search ' + expected : text === expected;
+  };
+  const hinted = hints => Array.isArray(hints) && hints.length === 1 && hints[0] === 'search';
+  const hintsMatch = (payload, message) => !webSearch || (hinted(payload?.system_hints) && hinted(message?.metadata?.system_hints));
   // Images use the provider's qualified multimodal_text envelope. The existing
   // upload guard binds composer attachments; this collector identifies the created
   // user message and never retains asset pointers or other request content.
   const contentMatches = content => {
     if (!content || !Array.isArray(content.parts)) return false;
     if (content.content_type === 'text')
-      return expectedImages === 0 && content.parts.length === 1 && typeof content.parts[0] === 'string' && canonical(content.parts[0]) === expected;
+      return expectedImages === 0 && content.parts.length === 1 && typeof content.parts[0] === 'string' && textMatches(content.parts[0]);
     if (content.content_type !== 'multimodal_text') return false;
     let texts = 0, images = 0;
     for (const part of content.parts) {
       if (typeof part === 'string') {
-        if (++texts !== 1 || canonical(part) !== expected) return false;
+        if (++texts !== 1 || !textMatches(part)) return false;
         continue;
       }
       if (!part || typeof part !== 'object' || Array.isArray(part) ||
@@ -164,9 +175,11 @@
             const payload = JSON.parse(init.body);
             const messages = payload?.messages;
             const message = Array.isArray(messages) && messages.length === 1 ? messages[0] : null;
-            if (payload?.action !== 'next' || message?.author?.role !== 'user' || !contentMatches(message?.content) ||
-                typeof message.id !== 'string' || !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(message.id)) {
-              invalidate('unqualified-submission-identity', 'unqualified-identity', 'matched-fetch');
+            const identified = payload?.action === 'next' && message?.author?.role === 'user' && hintsMatch(payload, message) &&
+                typeof message.id === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(message.id);
+            if (!identified || !contentMatches(message?.content)) {
+              // A message whose only fault is its content, such as text ChatGPT rewrote, is told apart.
+              invalidate('unqualified-submission-identity', identified ? 'unqualified-content' : 'unqualified-identity', 'matched-fetch');
             } else {
               // This records only a candidate during route-before-mount. It is
               // never exposed as capture evidence until the exact view is verified.

@@ -64,6 +64,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+          # Linux on Arm, for the aarch64 release build; no coverage, so it runs plain cargo test.
+          - os: ubuntu-24.04-arm
           # Windows runs its tests one at a time, so they are split across 2 runners by test
           # name; the serial run took 11.5 of the job's 13.2 minutes.
           - os: windows-latest
@@ -109,9 +111,9 @@ jobs:
       - if: runner.os == 'Linux'
         run: cargo test --locked --manifest-path packaging/smoke/Cargo.toml
       # Coverage needs llvm-tools and a prebuilt cargo-llvm-cov, with no fallback to compiling it.
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
         run: rustup component add llvm-tools
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
         with:
           tool: cargo-llvm-cov@0.9.1
@@ -131,13 +133,18 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      # The Linux leg runs the same tests under cargo-llvm-cov for the Codecov report.
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: cargo test --locked -- --test-threads=2
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+      # The x86_64 Linux leg runs the same tests under cargo-llvm-cov for the Codecov report.
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
         run: cargo llvm-cov --locked --lcov --output-path coverage-rust.lcov -- --test-threads=2
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-rust

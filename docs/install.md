@@ -1,6 +1,6 @@
 # Install, update and remove
 
-Alcuin ships as 2 binaries, `alcuin` (the CLI) and `alcuin-mcp` (the MCP server), for Linux and Windows on x86_64. Keep them in the same folder: the MCP server starts the CLI beside it for detached runs. Every release also has `alcuin.mcpb`, an MCP bundle for Claude Desktop ([MCP setup](mcp.md#claude-desktop)).
+Alcuin ships as 2 binaries, `alcuin` (the CLI) and `alcuin-mcp` (the MCP server), for Linux and Windows on x86_64, and for Linux on aarch64 (64-bit Arm) from the first release after v0.1.0. Keep them in the same folder: the MCP server starts the CLI beside it for detached runs. Every release also has `alcuin.mcpb`, an MCP bundle for Claude Desktop ([MCP setup](mcp.md#claude-desktop)).
 
 ## One command
 
@@ -50,7 +50,7 @@ mkdir -p ~/.local/bin && cp "$t/alcuin" "$t/alcuin-mcp" ~/.local/bin/
 alcuin --version
 ```
 
-`sha256sum -c` prints `alcuin-x86_64-unknown-linux-gnu.tar.gz: OK`. If `alcuin --version` is not found, put `~/.local/bin` on your `PATH`, for example in `~/.bashrc`:
+On a 64-bit Arm machine, set `t=alcuin-aarch64-unknown-linux-gnu` instead (from the first release after v0.1.0). `sha256sum -c` prints `alcuin-x86_64-unknown-linux-gnu.tar.gz: OK`. If `alcuin --version` is not found, put `~/.local/bin` on your `PATH`, for example in `~/.bashrc`:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"

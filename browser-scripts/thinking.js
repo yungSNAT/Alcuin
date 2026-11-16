@@ -221,9 +221,18 @@ return (async () => {
     const INTELLIGENCE_MENU_SELECTOR = '[data-testid="composer-intelligence-picker-content"]';
     const PRO_EFFORT_TRIGGER_SELECTOR = '[data-testid="composer-intelligence-pro-thinking-effort-trigger"]';
 
+    // As model.js: the earliest selector in the list that matches wins, so a stray composer pill
+    // that matches only the legacy fallback cannot outrank the named trigger.
+    const triggerTier = (accept = () => true) => {
+      for (const selector of MODEL_BUTTON_SELECTOR.split(', ')) {
+        const nodes = Array.from(document.querySelectorAll(selector)).filter(accept);
+        if (nodes.length > 0) return nodes;
+      }
+      return [];
+    };
     const findModelButton = () => {
-      if (!OWNED_SELECTION) return document.querySelector(MODEL_BUTTON_SELECTOR);
-      const triggers = [...new Set(Array.from(document.querySelectorAll(MODEL_BUTTON_SELECTOR)))].filter(node =>
+      if (!OWNED_SELECTION) return triggerTier()[0] ?? null;
+      const triggers = triggerTier(node =>
         isVisible(node) && !node.closest?.('[role="menu"], [data-radix-collection-root]'));
       return triggers.length === 1 ? triggers[0] : null;
     };

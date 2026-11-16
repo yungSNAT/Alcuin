@@ -620,12 +620,46 @@ pub async fn read_receipt(
         Some("pending") => return Ok(CommitObservation::Pending),
         Some("none") if before.submission_intent.is_none() => {}
         _ => {
-            return Ok(CommitObservation::Ambiguous(
-                "submission-witness-unavailable",
-            ));
+            return Ok(CommitObservation::Ambiguous(witness_refusal(
+                &observed["submission"],
+            )));
         }
     }
     Ok(observe(owner, before, value, latch))
+}
+
+/// The refusals a witness can report, from `submission-witness.js` and the receipt probe.
+const REFUSALS: [&str; 18] = [
+    "submission-witness-unavailable: unqualified-content",
+    "submission-witness-unavailable: unqualified-identity",
+    "submission-witness-unavailable: unqualified-endpoint",
+    "submission-witness-unavailable: unqualified-body",
+    "submission-witness-unavailable: multiple-requests",
+    "submission-witness-unavailable: history-disabled-not-true",
+    "submission-witness-unavailable: collector-probe-unavailable",
+    "submission-witness-unavailable: privacy-probe-unavailable",
+    "submission-witness-unavailable: document-changed",
+    "submission-witness-unavailable: frame-changed",
+    "submission-witness-unavailable: origin-changed",
+    "submission-witness-unavailable: temporary-refused",
+    "submission-witness-unavailable: conversation-changed",
+    "submission-witness-unavailable: path-changed",
+    "submission-witness-unavailable: expired",
+    "submission-witness-unavailable: unavailable",
+    "submission-witness-unavailable: invalid",
+    "submission-witness-unavailable: none",
+];
+
+/// Names the check a witness that captured nothing failed, so the error says why the send stays
+/// uncertain. Only the fixed vocabulary above passes; any other value gives the bare reason.
+fn witness_refusal(submission: &Value) -> &'static str {
+    let detail = submission["failureDetail"]
+        .as_str()
+        .or(submission["state"].as_str());
+    REFUSALS
+        .into_iter()
+        .find(|refusal| refusal.strip_prefix("submission-witness-unavailable: ") == detail)
+        .unwrap_or("submission-witness-unavailable")
 }
 
 #[cfg(test)]
@@ -642,6 +676,26 @@ mod tests {
     }
     fn message(id: &str, turn: &str, index: u64, source: &str) -> Value {
         json!({"id":id,"turnId":turn,"index":index,"matches":true,"fingerprintText":source})
+    }
+    #[test]
+    fn a_refused_witness_names_only_a_known_check() {
+        for (submission, reason) in [
+            (
+                json!({"state":"invalid","reason":"unqualified-submission-identity","failureDetail":"unqualified-content"}),
+                "submission-witness-unavailable: unqualified-content",
+            ),
+            (
+                json!({"state":"expired"}),
+                "submission-witness-unavailable: expired",
+            ),
+            (
+                json!({"state":"invalid","failureDetail":"https://PUBLIC.example/"}),
+                "submission-witness-unavailable",
+            ),
+            (json!({}), "submission-witness-unavailable"),
+        ] {
+            assert_eq!(witness_refusal(&submission), reason, "{submission}");
+        }
     }
     fn bound_landing(prompt: &str) -> CommitSnapshot {
         let mut landing = probe(vec![], vec![], prompt);
