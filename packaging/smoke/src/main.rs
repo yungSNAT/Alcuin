@@ -5,7 +5,7 @@
 
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, ExitCode, Output, Stdio},
     thread,
@@ -65,7 +65,9 @@ fn smoke(dir: &Path, version: &str) -> Result<(), String> {
     let reported = stdout(&run(command(&cli).arg("--version"))?).replace('\r', "");
     let reported = reported.trim_end_matches('\n');
     if reported != version {
-        return Err(format!("alcuin --version printed {reported:?}, not {version:?}"));
+        return Err(format!(
+            "alcuin --version printed {reported:?}, not {version:?}"
+        ));
     }
 
     fs::write(home.join("smoke.rs"), "pub fn smoke() {}\n").map_err(|e| e.to_string())?;
@@ -85,7 +87,7 @@ fn smoke(dir: &Path, version: &str) -> Result<(), String> {
         }
     }
 
-    let replies = handshake(command(&mcp))?;
+    let replies = handshake(command(&mcp), &home.join("mcp.jsonl"))?;
     let server = format!(r#""serverInfo":{{"name":"alcuin-mcp","version":"{version}"}}"#);
     if !replies.contains(&server) {
         return Err(format!("alcuin-mcp did not answer with {server}"));
@@ -110,13 +112,15 @@ fn scratch_home() -> Result<PathBuf, String> {
     Ok(home)
 }
 
-/// Runs `command` to completion and fails unless it exits 0.
+/// Runs `command` to completion and fails unless it exits 0, printing what it wrote to stdout
+/// first so a failure shows it.
 fn run(command: &mut Command) -> Result<Output, String> {
     let output = command
         .stderr(Stdio::inherit())
         .output()
         .map_err(|e| format!("{:?}: {e}", command.get_program()))?;
     if !output.status.success() {
+        print!("{}", stdout(&output));
         return Err(format!(
             "{:?} {:?} exited with {}",
             command.get_program(),
@@ -131,26 +135,25 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// Sends the MCP handshake and tool listing, closes stdin and returns what the server printed
-/// before it exited. A server that is still running after `MCP_TIMEOUT` is killed and fails.
-fn handshake(mut command: Command) -> Result<String, String> {
+/// Sends the MCP handshake and tool listing, closes stdin and returns what the server wrote to
+/// `out` before it exited. Its stdout goes to that file, not a pipe, so a process it leaves
+/// running cannot hold the step open. A server still running after `MCP_TIMEOUT` is killed and
+/// fails.
+fn handshake(mut command: Command, out: &Path) -> Result<String, String> {
+    let file = fs::File::create(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut child = command
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdout(file)
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| format!("alcuin-mcp: {e}"))?;
-    let mut stdout = child.stdout.take().ok_or("alcuin-mcp has no stdout")?;
-    let reader = thread::spawn(move || {
-        let mut text = String::new();
-        stdout.read_to_string(&mut text).map(|_| text)
-    });
+    let deadline = Instant::now() + MCP_TIMEOUT;
+    // The input is far smaller than a pipe's buffer, so this write cannot wait on the server.
     let written = child
         .stdin
         .take()
         .ok_or("alcuin-mcp has no stdin")?
         .write_all(MCP_INPUT.as_bytes());
-    let deadline = Instant::now() + MCP_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break status;
@@ -169,8 +172,43 @@ fn handshake(mut command: Command) -> Result<String, String> {
     if !status.success() {
         return Err(format!("alcuin-mcp exited with {status}"));
     }
-    reader
-        .join()
-        .map_err(|_| "the alcuin-mcp reader panicked".to_owned())?
-        .map_err(|e| format!("reading alcuin-mcp: {e}"))
+    fs::read_to_string(out).map_err(|e| format!("{}: {e}", out.display()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A server that answers and exits, leaving a process that holds its stdout, still passes
+    /// at once, as the Bash version did with `timeout 60 alcuin-mcp > mcp.jsonl`.
+    #[test]
+    fn a_process_the_server_leaves_running_does_not_hold_the_handshake() {
+        let home = scratch_home().unwrap();
+        let server = home.join("PUBLIC-mcp");
+        fs::write(
+            &server,
+            "#!/bin/sh
+cat > /dev/null
+echo PUBLIC-replies
+sleep 90 &
+exit 0
+",
+        )
+        .unwrap();
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o700)).unwrap();
+        let started = Instant::now();
+        let replies = handshake(Command::new(&server), &home.join("mcp.jsonl")).unwrap();
+        assert_eq!(
+            replies,
+            "PUBLIC-replies
+"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "{:?}",
+            started.elapsed()
+        );
+        fs::remove_dir_all(&home).unwrap();
+    }
 }
