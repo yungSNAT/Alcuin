@@ -513,10 +513,11 @@ impl StartingHost {
             if status != 0 {
                 let error = std::io::Error::last_os_error();
                 // BSD kill answers EPERM for a group whose members are all zombies.
-                let zombie_group = cfg!(target_os = "macos")
-                    && error.raw_os_error() == Some(libc::EPERM)
-                    && crate::process::ProcessIdentity::read(child.id())
-                        .is_ok_and(|identity| identity.is_none());
+                #[cfg(target_os = "macos")]
+                let zombie_group =
+                    error.raw_os_error() == Some(libc::EPERM) && zombie_group(child.id());
+                #[cfg(not(target_os = "macos"))]
+                let zombie_group = false;
                 let _ = child.kill();
                 if error.raw_os_error() != Some(libc::ESRCH) && !zombie_group {
                     return Err(error).context("Cannot stop background process group");
@@ -984,9 +985,44 @@ pub async fn run(
     ensure!(errors.is_empty(), "{}", errors.join("; "));
     Ok(())
 }
+/// Whether every process left in `group` is a zombie, so that EPERM from signalling it means
+/// nothing is left to stop.
+#[cfg(target_os = "macos")]
+fn zombie_group(group: u32) -> bool {
+    crate::process::ProcessIdentity::read(group).is_ok_and(|identity| identity.is_none())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A zombie leader with a live member is not a zombie group, so EPERM there still fails.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_group_with_a_live_member_is_not_a_zombie_group() {
+        use std::os::unix::process::CommandExt;
+        let mut leader = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30 & exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = leader.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // The leader exits at once and stays a zombie until it is reaped; its sleep lives on.
+        while crate::process::ProcessIdentity::read(group)
+            .unwrap()
+            .is_some()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!zombie_group(group));
+        // SAFETY: kill takes no pointers; the group is the one this test started.
+        assert_eq!(unsafe { libc::kill(-(group as i32), libc::SIGKILL) }, 0);
+        while !zombie_group(group) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        leader.wait().unwrap();
+    }
     #[test]
     fn credentials_rotate_except_for_internal_respawn_and_artifacts_remain_private() {
         let home = tempfile::tempdir().unwrap();
