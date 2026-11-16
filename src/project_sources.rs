@@ -677,18 +677,7 @@ pub(crate) async fn run(
                 "Chrome retained because final owned-process termination was unconfirmed: {error:#}"
             )));
     }
-    let retained = if connection.owns_process() {
-        connection.retain_process()
-    } else {
-        Ok(())
-    };
-    if connection.owns_process() && !terminate && retained.is_ok() {
-        log(&format!(
-            "Chrome left running on port {} with profile {}",
-            connection.endpoint.port,
-            profile_dir.display()
-        ));
-    }
+    let retained = retain_owned(&mut connection, terminate, &profile_dir, log);
     let disconnect = connection
         .browser
         .disconnect_and_wait(Duration::from_secs(1))
@@ -706,6 +695,29 @@ pub(crate) async fn run(
             Err(error.context(format!("Project Sources cleanup: target={}, release={cleanup:?}, retained={retained:?}, disconnect={disconnect:?}",target_id.as_deref().unwrap_or("not-allocated"))))
         }
     }
+}
+
+/// Leaves the Chrome this run launched running for the next run, and says where when the
+/// run was asked to keep it.
+fn retain_owned(
+    connection: &mut ChromeConnection,
+    terminate: bool,
+    profile_dir: &Path,
+    log: &(dyn Fn(&str) + Sync),
+) -> Result<()> {
+    let retained = if connection.owns_process() {
+        connection.retain_process()
+    } else {
+        Ok(())
+    };
+    if connection.owns_process() && !terminate && retained.is_ok() {
+        log(&format!(
+            "Chrome left running on port {} with profile {}",
+            connection.endpoint.port,
+            profile_dir.display()
+        ));
+    }
+    retained
 }
 
 async fn quarantine_failed_upload(
@@ -963,6 +975,59 @@ pub(crate) async fn native_surface_scope_cases(page: &crate::cdp::Cdp) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn a_kept_owned_chrome_is_logged_with_its_port_and_profile() {
+        use crate::browser_chrome::AttachmentEndpoint;
+        use std::process::{Command, Stdio};
+        use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+        let profile = Path::new("PUBLIC-profile");
+        for (owned, terminate, logged) in [
+            (true, false, true),
+            (true, true, false),
+            (false, false, false),
+        ] {
+            let (client, _peer) = tokio::io::duplex(64);
+            let browser = crate::cdp::Cdp::from_socket(
+                WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+                Duration::from_secs(1),
+            );
+            // Any owned child will do: retention only stops tracking it.
+            let child = owned.then(|| {
+                Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "PUBLIC-no-such-test"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap()
+            });
+            let endpoint = AttachmentEndpoint {
+                host: "127.0.0.1".into(),
+                port: 9333,
+                browser_ws_endpoint: "ws://127.0.0.1:9333/devtools/browser/PUBLIC".into(),
+            };
+            let mut connection = ChromeConnection::fixture(endpoint, browser, child);
+            let lines = std::sync::Mutex::new(Vec::new());
+            retain_owned(&mut connection, terminate, profile, &|line| {
+                lines.lock().unwrap().push(line.to_owned())
+            })
+            .unwrap();
+            assert!(!connection.owns_process());
+            let expected = if logged {
+                vec![format!(
+                    "Chrome left running on port 9333 with profile {}",
+                    profile.display()
+                )]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                lines.into_inner().unwrap(),
+                expected,
+                "owned={owned} terminate={terminate}"
+            );
+        }
+    }
     #[test]
     fn sources_list_rejects_every_malformed_row_without_salvaging_a_partial_list() {
         let good = json!({"name":"PUBLIC.txt","index":0,"status":"unknown"});
