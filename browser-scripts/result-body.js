@@ -66,13 +66,20 @@ for (let index = turns.length - 1; index >= 0; index--) {
   const node = lastAssistant(turns[index]);
   if (node) { assistant = node; assistantIndex = index; assistantTurn = turns[index]; break; }
 }
+const follows = assistant && assistantIndex >= user.index && (user.user.compareDocumentPosition(assistant) & 4);
+const assistantId = () => {
+  const ids = [assistant.getAttribute('data-message-id'), assistant.getAttribute('data-chatgpt-selection-message-id'),
+    ...(assistant.getAttribute('data-chatgpt-search-message-ids')?.trim().split(/\s+/) || [])].filter(Boolean);
+  if (new Set(ids).size > 1) throw Error('Assistant message identity is ambiguous');
+  return ids[0] || assistant.getAttribute('data-content-search-unit-key') || assistant.getAttribute('data-chatgpt-search-unit-key');
+};
 const streamFailure = readStreamFailure(user.turn);
 if (streamFailure) {
   if (cfg.uiErrors === true) return { ...source, uiError:'temporary_unavailable', uiErrorText:streamFailure.line,
-    lastAssistantMessageId:assistantIndex >= user.index && (user.user.compareDocumentPosition(assistant) & 4) ? assistant.getAttribute('data-message-id') : null };
+    lastAssistantMessageId:follows ? assistantId() || null : null };
   throw Error('Assistant displays a generation failure; result refused');
 }
-if (!assistant || assistantIndex < user.index || !(user.user.compareDocumentPosition(assistant) & 4)) {
+if (!follows) {
   // ChatGPT can announce a finished turn that holds only activity summaries and no answer unit.
   // Only an announcement the completion tracker saw arrive after this submission counts, and
   // Rust decides only once it has persisted.
@@ -82,10 +89,7 @@ if (!assistant || assistantIndex < user.index || !(user.user.compareDocumentPosi
       .some(node => (node.textContent || '').trim() === 'Response complete');
   return { pending:true, stopExists, strongThinkingActive, answerless };
 }
-const ids = [assistant.getAttribute('data-message-id'), assistant.getAttribute('data-chatgpt-selection-message-id'),
-  ...(assistant.getAttribute('data-chatgpt-search-message-ids')?.trim().split(/\s+/) || [])].filter(Boolean);
-if (new Set(ids).size > 1) throw Error('Assistant message identity is ambiguous');
-const messageId = ids[0] || assistant.getAttribute('data-content-search-unit-key') || assistant.getAttribute('data-chatgpt-search-unit-key');
+const messageId = assistantId();
 const turnId = assistantTurn.getAttribute('data-turn-key') || assistantTurn.getAttribute('data-testid') ||
   assistantTurn.getAttribute('data-content-search-unit-key') || assistantTurn.getAttribute('data-chatgpt-search-unit-key');
 if (!messageId && !turnId) throw Error('Assistant identity is unavailable');

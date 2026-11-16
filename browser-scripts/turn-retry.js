@@ -32,7 +32,7 @@ const assistant = turn && lastAssistant(turn);
 const controls = Array.from(assistant ? turn.querySelectorAll('button, [role="button"]') : [])
   .filter(node => (assistant.compareDocumentPosition(node) & 4) && visible(node));
 const fields = { baseline:observed.lastUserTurnIndex, messageId:observed.lastAssistantMessageId };
-if (stream) return point(stream.retry, { ...fields, label:label(stream.retry) });
+if (stream) return stream.retry ? point(stream.retry, { ...fields, label:label(stream.retry) }) : { ok:false, failed:true };
 const retry = controls.find(node => label(node).toLowerCase() === 'retry');
 if (retry) return point(retry, { ...fields, label:label(retry) });
 const regenerate = controls.filter(node => node.getAttribute('aria-label') === 'Regenerate response' &&
