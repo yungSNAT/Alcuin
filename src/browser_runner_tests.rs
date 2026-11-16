@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
 use std::sync::{
     Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokio_tungstenite::{
     WebSocketStream,
@@ -245,6 +245,7 @@ struct Exchange {
     sends: Arc<AtomicUsize>,
     closes: Arc<AtomicUsize>,
     closed: bool,
+    externally_closed: Arc<AtomicBool>,
     trace: Arc<Mutex<Vec<Value>>>,
     cancel: CancellationToken,
     store: SessionStore,
@@ -1884,7 +1885,9 @@ impl Exchange {
                     if self.closed && matches!(self.fault, Fault::UncertainClose) {
                         break;
                     }
-                    if self.borrowed() {
+                    if self.externally_closed.load(Ordering::SeqCst) {
+                        json!({"targetInfos":[{"targetId":"FOREIGN-PUBLIC","type":"page"}]})
+                    } else if self.borrowed() {
                         json!({"targetInfos":[{"targetId":"TARGET-PUBLIC","type":"page","url":self.url},{"targetId":"FOREIGN-PUBLIC","type":"page"}]})
                     } else {
                         json!({"targetInfos":if self.closed {vec![json!({"targetId":"FOREIGN-PUBLIC","type":"page"})]} else {vec![json!({"targetId":"TARGET-PUBLIC","type":"page"}),json!({"targetId":"FOREIGN-PUBLIC","type":"page"})]}})
@@ -1916,6 +1919,7 @@ struct Fixture {
     peer: tokio::task::JoinHandle<()>,
     sends: Arc<AtomicUsize>,
     closes: Arc<AtomicUsize>,
+    externally_closed: Arc<AtomicBool>,
     trace: Arc<Mutex<Vec<Value>>>,
     cancel: CancellationToken,
     endpoint: AttachmentEndpoint,
@@ -2270,6 +2274,7 @@ async fn fixture_attempt_in(
     let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
     let sends = Arc::new(AtomicUsize::new(0));
     let closes = Arc::new(AtomicUsize::new(0));
+    let externally_closed = Arc::new(AtomicBool::new(false));
     let trace = Arc::new(Mutex::new(vec![]));
     let cancel = CancellationToken::new();
     let peer = tokio::spawn(
@@ -2289,6 +2294,7 @@ async fn fixture_attempt_in(
             sends: sends.clone(),
             closes: closes.clone(),
             closed: false,
+            externally_closed: externally_closed.clone(),
             trace: trace.clone(),
             cancel: cancel.clone(),
             store: store.clone(),
@@ -2314,6 +2320,7 @@ async fn fixture_attempt_in(
         peer,
         sends,
         closes,
+        externally_closed,
         trace,
         cancel,
         endpoint: AttachmentEndpoint {
@@ -2784,6 +2791,7 @@ async fn saved_selected_cleanup_revokes_dead_worker_close_on_parent_model_or_obs
             sends: sends.clone(),
             closes: closes.clone(),
             closed: false,
+            externally_closed: Arc::default(),
             trace: trace.clone(),
             cancel: cancel.clone(),
             store: store.clone(),
@@ -3043,6 +3051,7 @@ async fn assert_parent_recovery_from(
             sends: sends.clone(),
             closes: closes.clone(),
             closed: false,
+            externally_closed: Arc::default(),
             trace: trace.clone(),
             cancel: cancel.clone(),
             store: store.clone(),
@@ -6455,6 +6464,7 @@ async fn sequential_recovery_refuses_unsent_turns_and_recovers_the_complete_fina
                 sends: f.sends.clone(),
                 closes: f.closes.clone(),
                 closed: false,
+                externally_closed: Arc::default(),
                 trace: trace.clone(),
                 cancel: CancellationToken::new(),
                 store: f.store.clone(),
@@ -6616,6 +6626,102 @@ async fn recovery_refuses_terminal_model_or_cancelled_session_before_changing_an
         assert_eq!(f.closes.load(Ordering::SeqCst), 0);
         stop(f).await;
     }
+}
+
+#[tokio::test]
+async fn completed_absent_target_recovery_retires_staged_inputs_without_replaying() {
+    let f = fixture(Fault::CleanupRetry, true).await;
+    let staged = request(&f.store, &f.id)
+        .unwrap()
+        .staged_uploads
+        .unwrap()
+        .directory;
+    let before = run(&f).await.unwrap();
+    assert_eq!(before["status"], "completed");
+    assert_eq!(before["recoveryRequired"], true);
+    assert!(before["cleanupWarning"].is_string());
+    assert!(staged.exists());
+
+    let model = before["model"].as_str().unwrap();
+    let model_path = f
+        .store
+        .directory(&f.id)
+        .unwrap()
+        .join(format!("models/{}.json", sessions::safe_model_slug(model)));
+    let model_bytes = fs::read(&model_path).unwrap();
+    let answer = captured(&f.store, &f.id).unwrap();
+    let output = fs::read(f.home.path().join("PUBLIC-output.md")).unwrap();
+    let log = f.store.log(&f.id).unwrap();
+    let trace_start = f.trace.lock().unwrap().len();
+    let closes = f.closes.load(Ordering::SeqCst);
+
+    // The user closed the owned tab after completion; the foreign tab is still present.
+    f.externally_closed.store(true, Ordering::SeqCst);
+    let recovered = recover_existing(
+        &f.store,
+        &f.id,
+        f.profile.clone(),
+        f.cdp.clone(),
+        f.endpoint.clone(),
+        &limits(),
+        &f.cancel,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !staged.exists(),
+        "completed recovery must remove staged input copies"
+    );
+    assert!(recovered["cleanupWarning"].is_null());
+    assert_eq!(recovered["recoveryRequired"], false);
+    assert_eq!(
+        recovered["browser"]["runtime"]["targetDispositionPending"],
+        false
+    );
+    assert_eq!(recovered["completedAt"], before["completedAt"]);
+    assert_eq!(recovered["capturedAnswer"], before["capturedAnswer"]);
+    assert_eq!(recovered["artifacts"], before["artifacts"]);
+    assert_eq!(captured(&f.store, &f.id).unwrap(), answer);
+    assert_eq!(fs::read(&model_path).unwrap(), model_bytes);
+    assert_eq!(
+        fs::read(f.home.path().join("PUBLIC-output.md")).unwrap(),
+        output
+    );
+    assert_eq!(f.store.log(&f.id).unwrap(), log);
+    assert_eq!(
+        fs::read(f.home.path().join("public.txt")).unwrap(),
+        b"PUBLIC file contents"
+    );
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+    assert_eq!(f.closes.load(Ordering::SeqCst), closes);
+    let creator = &before["browser"]["runtime"]["ownedRecoveryTarget"]["creator"];
+    let journal = TargetJournal::open(&f.store).unwrap();
+    let record = journal.read(&creator["allocationId"]).unwrap();
+    assert_eq!(record["disposition"]["decision"], "retired");
+    assert_eq!(record["disposition"]["absence"], "confirmed-absent");
+    assert!(
+        f.profile.records().unwrap()["leases"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    {
+        let trace = f.trace.lock().unwrap();
+        let recovery_calls = &trace[trace_start..];
+        assert_eq!(
+            recovery_calls
+                .iter()
+                .filter(|call| call["method"] == "Target.getTargets")
+                .count(),
+            2
+        );
+        assert!(!recovery_calls.iter().any(|call| matches!(
+            call["method"].as_str(),
+            Some("Target.attachToTarget" | "Target.closeTarget")
+        )));
+    }
+    stop(f).await;
 }
 
 #[tokio::test]
@@ -8165,6 +8271,7 @@ async fn explicit_lost_send_recovery_reads_original_commitment_without_a_second_
                 sends: f.sends.clone(),
                 closes: f.closes.clone(),
                 closed: false,
+                externally_closed: Arc::default(),
                 trace: trace.clone(),
                 cancel: recovery_cancel.clone(),
                 store: f.store.clone(),
