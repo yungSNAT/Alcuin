@@ -26,7 +26,7 @@ return (() => { const throttle=(() => {
     return null;
   })(); const models=(() => {
     const PHRASES = ["could not load chatgpt models","couldn't load chatgpt models","could not load models","couldn't load models"];
-    const BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], [data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
+    const BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], form[data-chatgpt-composer] button[data-composer-navigation-target="reasoning"], [data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
     const matches = (value) => {
       const text = (value || '').toLowerCase();
       return PHRASES.some((phrase) => text.includes(phrase));

@@ -115,12 +115,19 @@ fn summary(endpoint: &AttachmentEndpoint, target: &Value, info: &Value) -> Resul
         "sendExists",
         "promptReady",
         "loginButtonExists",
-        "authenticated",
         "assistantFollowsLatestUser",
         "focused",
     ] {
         output[key] = json!(info[key] == true);
     }
+    // Signed in: no login control, and a composer, send or stop control, or an answer, shows.
+    output["authenticated"] = json!(
+        output["loginButtonExists"] != true
+            && (output["promptReady"] == true
+                || output["sendExists"] == true
+                || output["stopExists"] == true
+                || output["assistantCount"].as_f64().is_some_and(|n| n > 0.0))
+    );
     for key in [
         "lastUserTextRaw",
         "lastUserContentText",
