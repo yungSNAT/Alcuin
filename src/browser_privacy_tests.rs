@@ -1921,8 +1921,8 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
     anyhow::ensure!(generating["started"] == true, "Stop control: {generating}");
     // ChatGPT's failed reply: its error line and a Retry, outside the assistant's turn, before any
     // assistant message or beside a turn still marked as thinking. Answer text, an earlier turn's
-    // failure and the line without a Retry are not the submitted turn's failure. Only the banner's
-    // own Retry may be pressed, and only when it is the one there.
+    // failure and the line without a Retry are not the submitted turn's failure. No Retry is offered
+    // for pressing: nothing in the page ties one to the failure, so the run ends instead.
     let shimmer = "<span class='loading-shimmer'>PUBLIC</span>";
     let banner =
         |line: &str| format!("<div role='alert'><div>{line}</div><button>Retry</button></div>");
@@ -1934,13 +1934,20 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
         )
     };
     let unmarked = "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><p>Error in message stream</p></div></article>";
-    for (case, turns, line, message, retried) in [
+    for (case, turns, line, message) in [
         (
             "split across elements",
             format!("{user}{}", banner("Error in <span>message</span> stream")),
             Some("Error in message stream"),
             Value::Null,
-            true,
+        ),
+        (
+            "banner without its own Retry",
+            format!(
+                "{user}<div><div role='alert'>Error in message stream</div><div><button>Retry</button></div></div>"
+            ),
+            Some("Error in message stream"),
+            Value::Null,
         ),
         (
             "unrelated Retry after the banner",
@@ -1950,7 +1957,6 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             ),
             Some("Error in message stream"),
             Value::Null,
-            true,
         ),
         (
             "two Retry controls in the banner",
@@ -1959,7 +1965,6 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             ),
             Some("Error in message stream"),
             Value::Null,
-            false,
         ),
         (
             "alternate assistant identity",
@@ -1970,28 +1975,34 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             ),
             Some("Error in message stream"),
             json!("PUBLIC-alt"),
-            true,
         ),
         (
             "unmarked answer text",
             format!("{user}{unmarked}<div><button>Retry</button></div>"),
             None,
             Value::Null,
-            false,
         ),
         (
             "no assistant message",
             format!("{user}{}", banner("Error in message stream")),
             Some("Error in message stream"),
             Value::Null,
-            true,
+        ),
+        (
+            "beside a finished turn's Regenerate menu",
+            format!(
+                "{user}{}{}",
+                assistant("PUBLIC partial", regenerate),
+                banner("Error in message stream")
+            ),
+            Some("Error in message stream"),
+            json!("PUBLIC-assistant"),
         ),
         (
             "beside a thinking turn",
             format!("{user}{partial}{}", banner("Error in message stream")),
             Some("Error in message stream"),
             json!("PUBLIC-assistant"),
-            true,
         ),
         (
             "delivery timeout",
@@ -2001,7 +2012,6 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             ),
             Some("Message delivery timed out. Please try again."),
             Value::Null,
-            true,
         ),
         (
             "still generating",
@@ -2011,21 +2021,18 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             ),
             Some("Error in message stream"),
             Value::Null,
-            false,
         ),
         (
             "without Retry",
             format!("{user}<div role='alert'>Error in message stream</div>"),
             None,
             Value::Null,
-            false,
         ),
         (
             "earlier turn",
             format!("{earlier}{}{user}", banner("Error in message stream")),
             None,
             Value::Null,
-            false,
         ),
         (
             "quoted in the answer",
@@ -2035,7 +2042,6 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             ),
             None,
             Value::Null,
-            false,
         ),
     ] {
         open(&turns).await?;
@@ -2059,24 +2065,9 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
         if line.is_some() {
             let found = retry(&reporting).await?;
             anyhow::ensure!(
-                (found["ok"] == true && found["label"] == "Retry") == retried
-                    && found["failed"] == true,
-                "Stream failure Retry, {case}: {found}"
+                found["ok"] == false && found["failed"] == true,
+                "Stream failure offered a Retry, {case}: {found}"
             );
-            if retried {
-                let hit = page
-                    .evaluate_with_arguments(
-                        "(p)=>!!document.elementFromPoint(p.x,p.y)?.closest('[role=alert]')",
-                        &json!([found]),
-                        SHORT,
-                        &cancel,
-                    )
-                    .await?;
-                anyhow::ensure!(
-                    hit == true,
-                    "Stream failure Retry outside the banner, {case}"
-                );
-            }
         }
     }
     // Once the banner is gone, the unchanged assistant is not a restarted turn.
