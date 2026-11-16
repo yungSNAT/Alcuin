@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- When the browser connection fails whilst Alcuin checks that ChatGPT is in Temporary Chat, the error now starts with the refusal it stands for, followed by the connection's error: 'Verified ChatGPT Temporary Chat is required; preserve uncertain requests without replay: CDP connection is closed; command was not sent.' It gave the connection's error alone, which did not say that the privacy check had refused the run.
 - Linux on aarch64 (64-bit Arm): each release now carries `alcuin-aarch64-unknown-linux-gnu.tar.gz`, built and smoke-tested on an Arm runner, and `install.sh` installs it on a machine whose `uname -m` is `aarch64` or `arm64`. CI runs the test suite on Arm Linux too.
 - When a browser send stays uncertain because the submission witness captured nothing, the error now names the check that refused it: 'commitment is ambiguous (submission-witness-unavailable: unqualified-content)' when the message ChatGPT sent does not carry the prompt's exact text, `unqualified-identity` for its other fields, `expired` and so on. Before, every such refusal read the same.
 - When Chrome fails to start, with 'Chrome startup deadline expired' or 'Native Chrome exited before its debugging endpoint was acknowledged', the error now ends with the last lines Chrome printed (`; Chrome stderr: ...`), which say why it never opened its debugging port. They come from `oracle-chrome-stderr.log` in the browser profile, which Alcuin already wrote but no message named.

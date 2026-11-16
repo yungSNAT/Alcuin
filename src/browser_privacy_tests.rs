@@ -17,6 +17,30 @@ const SHORT: Duration = Duration::from_secs(5);
 const UNKNOWN: Duration = Duration::from_millis(300);
 const ACTIVE: &str = "<main><header data-app-shell-titlebar='true'><button aria-label='Turn off temporary chat'>Temporary</button></header><form><textarea id='prompt-textarea' name='prompt-textarea'></textarea><input type='file' id='PUBLIC-file'><button data-testid='send-button' type='submit'>Send</button></form><div id='view'>PUBLIC view</div></main>";
 
+#[tokio::test]
+async fn a_failed_privacy_observation_keeps_its_refusal_and_original_transport_cause() {
+    use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+    let (client, _peer) = tokio::io::duplex(64);
+    let page = Cdp::from_socket(
+        WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+        SHORT,
+    );
+    page.disconnect_and_wait(SHORT).await.unwrap();
+    let cancel = CancellationToken::new();
+    let error = require(&page, SHORT, &cancel).await.unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains(REFUSAL), "{error:#}");
+    assert!(
+        message.contains("CDP connection is closed; command was not sent"),
+        "{error:#}"
+    );
+    assert!(
+        error.downcast_ref::<crate::cdp::NotSent>().is_some(),
+        "{error:#}"
+    );
+    assert!(!cancel.is_cancelled());
+}
+
 #[test]
 fn landing_url_requests_temporary_mode_without_claiming_it_is_verified() {
     assert_eq!(
