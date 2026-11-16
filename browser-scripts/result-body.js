@@ -75,7 +75,7 @@ const assistantId = () => {
 };
 const streamFailure = readStreamFailure(user.turn);
 if (streamFailure) {
-  if (cfg.uiErrors === true) return { ...source, uiError:'temporary_unavailable', uiErrorText:streamFailure.line,
+  if (cfg.uiErrors === true) return { ...source, uiError:'temporary_unavailable', uiErrorText:streamFailure,
     lastAssistantMessageId:follows ? assistantId() || null : null };
   throw Error('Assistant displays a generation failure; result refused');
 }
