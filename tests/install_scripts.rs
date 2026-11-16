@@ -91,7 +91,7 @@ fn release(root: &Path, bad: bool) -> PathBuf {
         zip.finish().unwrap();
         archive
     } else {
-        let name = "alcuin-x86_64-unknown-linux-gnu";
+        let name = &format!("alcuin-{}-unknown-linux-gnu", std::env::consts::ARCH);
         let stage = root.join("stage").join(name);
         fs::create_dir_all(&stage).unwrap();
         for bin in bins {
@@ -245,6 +245,61 @@ fn the_installer_checks_the_archive_then_installs_both_binaries() {
         text(&output.stderr)
     );
     assert!(!refused.exists());
+}
+
+/// The Linux script fetches the archive built for the machine `uname -m` names, and refuses a
+/// machine no release is built for.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_linux_installer_fetches_the_archive_for_the_machine() {
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    // The release holds only this machine's archive, so another machine's download fails.
+    release(root.path(), false);
+    let shim = http_shim(root.path());
+    for (machine, arch) in [
+        ("x86_64", Some("x86_64")),
+        ("amd64", Some("x86_64")),
+        ("aarch64", Some("aarch64")),
+        ("arm64", Some("aarch64")),
+        ("riscv64", None),
+    ] {
+        let uname = shim.join("uname");
+        fs::write(
+            &uname,
+            format!("#!/bin/sh\n[ \"$1\" = -m ] && {{ echo {machine}; exit; }}\nexec /usr/bin/uname \"$@\"\n"),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&uname, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let dir = root.path().join(format!("bin-{machine}"));
+        let output = install(&format!("{url}/release"), &dir, root.path());
+        let stderr = text(&output.stderr);
+        match arch {
+            Some(arch) if arch == std::env::consts::ARCH => {
+                assert!(output.status.success(), "{machine}: {stderr}");
+            }
+            Some(arch) => {
+                assert!(!output.status.success(), "{machine}");
+                assert!(
+                    stderr.contains(&format!(
+                        "could not download {url}/release/alcuin-{arch}-unknown-linux-gnu.tar.gz"
+                    )),
+                    "{machine}: {stderr}"
+                );
+            }
+            None => {
+                assert!(!output.status.success(), "{machine}");
+                assert!(
+                    stderr.contains("releases are built for x86_64 and aarch64 only"),
+                    "{machine}: {stderr}"
+                );
+            }
+        }
+        assert_eq!(dir.exists(), output.status.success(), "{machine}");
+    }
 }
 
 /// The Linux script downloads only over HTTPS, so neither a plain HTTP mirror nor a redirect to
