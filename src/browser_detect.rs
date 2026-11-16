@@ -95,6 +95,8 @@ fn candidates(environment: &Environment) -> Vec<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
+        // Applications install in /Applications whatever the environment says.
+        let _ = environment;
         paths.extend(
             [
                 "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",

@@ -179,7 +179,41 @@ impl ProcessIdentity {
             }))
         }
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    pub fn read(pid: u32) -> Result<Option<Self>> {
+        let Ok(raw) = libc::c_int::try_from(pid) else {
+            return Ok(None);
+        };
+        // SAFETY: proc_bsdinfo is plain old data, and the kernel writes at most `size` bytes.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let read = unsafe {
+            libc::proc_pidinfo(raw, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
+        };
+        if read <= 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(None);
+            }
+            return Err(error.into());
+        }
+        anyhow::ensure!(read == size, "Malformed native process record");
+        if info.pbi_status == libc::SZOMB {
+            return Ok(None);
+        }
+        let native_start = info
+            .pbi_start_tvsec
+            .checked_mul(1_000_000)
+            .and_then(|micros| micros.checked_add(info.pbi_start_tvusec))
+            .context("Malformed process start time")?;
+        Ok(Some(Self {
+            pid,
+            native_start,
+            // Whole seconds, as on Linux; the microseconds stay in native_start.
+            started_at_ms: info.pbi_start_tvsec as f64 * 1000.0,
+        }))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     pub fn read(_pid: u32) -> Result<Option<Self>> {
         bail!("Native process identity is not qualified on this platform")
     }

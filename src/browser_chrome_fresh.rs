@@ -736,7 +736,7 @@ pub(crate) async fn retire_saved_fresh(
     Ok(Some(outcome))
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 pub(super) fn saved_disposal_fixture(
     connection: &ChromeConnection,
     store: &SessionStore,
@@ -870,7 +870,7 @@ fn check_disposal_fixture(
     id
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 pub(super) async fn retire_last_page_fixture(
     connection: &ChromeConnection,
     store: &SessionStore,
@@ -1020,7 +1020,7 @@ pub(super) async fn retire_last_page_fixture(
 }
 /// Serves the synthetic completed ChatGPT conversation into an owned fixture page and
 /// records its target claim, as a completed run leaves its answer tab.
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 pub(crate) async fn mount_completed_page(
     browser: &Cdp,
     page: &Cdp,
