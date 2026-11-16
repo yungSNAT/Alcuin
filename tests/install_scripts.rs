@@ -8,10 +8,12 @@ use std::{
     process::{Command, Output},
 };
 
-/// Serves the files in `root` over HTTP, as the release download folder and the raw script do.
+/// Serves the files in `root` over HTTP, as the release download folder and the raw script do;
+/// `/redirect/<path>` answers with a redirect to `/<path>`.
 fn serve(root: PathBuf) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
+    let origin = address.clone();
     std::thread::spawn(move || {
         for socket in listener.incoming() {
             let Ok(mut socket) = socket else { continue };
@@ -29,6 +31,15 @@ fn serve(root: PathBuf) -> String {
                 .nth(1)
                 .unwrap_or("/")
                 .trim_start_matches('/');
+            if let Some(path) = path.strip_prefix("redirect/") {
+                let _ = socket.write_all(
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {origin}/{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+                continue;
+            }
             let (status, body) = match fs::read(root.join(path)) {
                 Ok(body) => ("200 OK", body),
                 Err(_) => ("404 Not Found", vec![]),
@@ -214,6 +225,25 @@ fn the_installer_checks_the_archive_then_installs_both_binaries() {
         text(&output.stderr)
     );
     assert!(!refused.exists());
+}
+
+/// A download redirected to plain HTTP is refused, so a redirect cannot downgrade the release
+/// download.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_redirect_to_plain_http_installs_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    let output = install(&format!("{url}/redirect/release"), &dir, root.path());
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    assert!(
+        text(&output.stderr).contains("could not download"),
+        "{}",
+        text(&output.stderr)
+    );
+    assert!(!dir.exists());
 }
 
 /// An update that cannot write its second binary leaves the old pair as it was.
