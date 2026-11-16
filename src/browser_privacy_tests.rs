@@ -1204,7 +1204,7 @@ const PRO_PICKER_SETUP: &str = r#"(cfg)=>{
   trigger.innerHTML='<span>Thinking effort</span><span aria-hidden="true"></span>';
   const form=document.querySelector('form');
   if(state.japanese)form.setAttribute('data-chatgpt-composer','');
-  if(state.decoy)form.insertAdjacentHTML('beforeend','<button type="button" class="__composer-pill">Thinking</button>');
+  if(state.decoy)form.insertAdjacentHTML('beforeend',`<button type="button" class="__composer-pill"${state.decoy==='menu'?' aria-haspopup="menu"':''}>Thinking</button>`);
   form.append(trigger);
   const radio=(label)=>`<div role="menuitemradio" aria-checked="false" tabindex="-1" data-orientation="vertical" data-radix-collection-item=""${label==='Pro'&&state.max<4?' aria-disabled="true" data-disabled=""':''}><div data-menu-row-content="true"><span>${label}</span></div></div>`;
   let wrapper=null;
@@ -1362,6 +1362,30 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
         "Japanese trigger beside a decoy pill: {observed}"
     );
     reservation.release_clean(SHORT).await?;
+    // A composer pill ahead of the trigger that matches only the legacy fallback selector,
+    // `button.__composer-pill[aria-haspopup="menu"]`, does not outrank the named trigger.
+    for japanese in [true, false] {
+        let mut reservation = picker(json!({"japanese":japanese,"decoy":"menu"})).await?;
+        let (_, _, chosen) = reservation
+            .select_pair("select", "GPT-6", "pro", SHORT, &cancel)
+            .await
+            .with_context(|| format!("Select pair beside a menu pill (Japanese: {japanese})"))?;
+        anyhow::ensure!(
+            chosen == "gpt-6-pro",
+            "Trigger beside a menu pill (Japanese: {japanese}): {chosen}"
+        );
+        reservation.release_clean(SHORT).await?;
+        let mut reservation =
+            picker(json!({"model":"Pro","level":4,"japanese":japanese,"decoy":"menu"})).await?;
+        let observed = reservation
+            .inspect_current_effort("pro", SHORT, &cancel)
+            .await?;
+        anyhow::ensure!(
+            observed["status"] == "ready",
+            "Inspection beside a menu pill (Japanese: {japanese}): {observed}"
+        );
+        reservation.release_clean(SHORT).await?;
+    }
     // A menu that will not close fails closed and names what stayed open.
     let mut reservation = picker(json!({"stuck":true})).await?;
     let error = reservation
