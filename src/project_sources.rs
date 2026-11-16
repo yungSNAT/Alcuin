@@ -698,21 +698,21 @@ pub(crate) async fn run(
 }
 
 /// Lets a Chrome this run launched and did not end outlive the run, and logs where it was
-/// left when the run was asked to keep it.
+/// left when the run was asked to keep it. A copied profile's Chrome stays owned for disposal.
 fn retain_owned(
     connection: &mut ChromeConnection,
     terminate: bool,
     profile_dir: &Path,
     log: &(dyn Fn(&str) + Sync),
 ) -> Result<()> {
-    // Retaining hands the process off, so ownership is read before it.
     let owned = connection.owns_process();
     let retained = if owned {
         connection.retain_process()
     } else {
         Ok(())
     };
-    if owned && !terminate && retained.is_ok() {
+    // Retention that keeps Chrome hands the process off.
+    if owned && !connection.owns_process() && !terminate {
         log(&format!(
             "Chrome left running on port {} with profile {}",
             connection.endpoint.port,
