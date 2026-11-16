@@ -229,6 +229,20 @@ fn project_config_cannot_redirect_credentials_routes_or_native_capture() {
     );
     assert!(merged.get("engine").is_none(), "{merged}");
     assert!(merged.get("promptSuffix").is_none(), "{merged}");
+    // Only the string browser is kept; other engine values and nested suffixes are dropped.
+    for engine in [
+        json!(["api"]),
+        json!({"api":true}),
+        json!("API"),
+        json!(null),
+    ] {
+        let sanitised = config::sanitise_project(&json!({"engine":engine}));
+        assert!(sanitised.get("engine").is_none(), "{engine}: {sanitised}");
+    }
+    let sanitised = config::sanitise_project(
+        &json!({"browser":{"promptSuffix":"PUBLIC nested"},"model":"gpt-6-pro","promptSuffix":{"text":"PUBLIC object"}}),
+    );
+    assert!(!sanitised.to_string().contains("PUBLIC"), "{sanitised}");
     let merged = config::deep_merge(
         &json!({"engine":"api","promptSuffix":"PUBLIC user suffix"}),
         &config::sanitise_project(&json!({"engine":"browser"})),
