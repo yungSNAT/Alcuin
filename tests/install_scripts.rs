@@ -8,12 +8,10 @@ use std::{
     process::{Command, Output},
 };
 
-/// Serves the files in `root` over HTTP, as the release download folder and the raw script do;
-/// `/redirect/<path>` answers with a redirect to `/<path>`.
+/// Serves the files in `root` over HTTP, as the release download folder and the raw script do.
 fn serve(root: PathBuf) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
-    let origin = address.clone();
     std::thread::spawn(move || {
         for socket in listener.incoming() {
             let Ok(mut socket) = socket else { continue };
@@ -31,15 +29,6 @@ fn serve(root: PathBuf) -> String {
                 .nth(1)
                 .unwrap_or("/")
                 .trim_start_matches('/');
-            if let Some(path) = path.strip_prefix("redirect/") {
-                let _ = socket.write_all(
-                    format!(
-                        "HTTP/1.1 302 Found\r\nLocation: {origin}/{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    )
-                    .as_bytes(),
-                );
-                continue;
-            }
             let (status, body) = match fs::read(root.join(path)) {
                 Ok(body) => ("200 OK", body),
                 Err(_) => ("404 Not Found", vec![]),
@@ -128,6 +117,25 @@ fn release(root: &Path, bad: bool) -> PathBuf {
     release
 }
 
+/// A folder for the front of the Linux installer's PATH whose `curl` drops the script's
+/// `--proto =https`, as the test server speaks plain HTTP.
+fn http_shim(home: &Path) -> PathBuf {
+    let shim = home.join("http-shim");
+    fs::create_dir_all(&shim).unwrap();
+    let curl = shim.join("curl");
+    fs::write(
+        &curl,
+        "#!/bin/sh\n[ \"$1\" = --proto ] && shift 2\nexec /usr/bin/curl \"$@\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    shim
+}
+
 /// Runs the README's one-liner with the download folder pointed at `url`, leaving the Windows
 /// user Path alone.
 fn install(url: &str, dir: &Path, home: &Path) -> Output {
@@ -149,7 +157,13 @@ fn install_with_path(url: &str, dir: &Path, home: &Path, modify_path: bool) -> O
         command
     } else {
         let mut command = Command::new("sh");
-        command.args(["-c", &format!("curl -fsSL {url}/install.sh | sh")]);
+        command.args([
+            "-c",
+            &format!(
+                "curl -fsSL {url}/install.sh | PATH={}:$PATH sh",
+                http_shim(home).display()
+            ),
+        ]);
         command
     };
     command
@@ -227,16 +241,23 @@ fn the_installer_checks_the_archive_then_installs_both_binaries() {
     assert!(!refused.exists());
 }
 
-/// A download redirected to plain HTTP is refused, so a redirect cannot downgrade the release
-/// download.
+/// The Linux script downloads only over HTTPS, so neither a plain HTTP mirror nor a redirect to
+/// one can swap the archive and its checksum together.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_redirect_to_plain_http_installs_nothing() {
+fn a_plain_http_download_installs_nothing() {
     let root = tempfile::tempdir().unwrap();
     let url = serve(root.path().to_owned());
     release(root.path(), false);
     let dir = root.path().join("bin");
-    let output = install(&format!("{url}/redirect/release"), &dir, root.path());
+    // As the README gives it, without the test's HTTP shim.
+    let output = Command::new("sh")
+        .args(["-c", &format!("curl -fsSL {url}/release/install.sh | sh")])
+        .env("ALCUIN_DOWNLOAD_URL", format!("{url}/release"))
+        .env("ALCUIN_INSTALL_DIR", &dir)
+        .env("HOME", root.path())
+        .output()
+        .unwrap();
     assert!(!output.status.success(), "{}", text(&output.stdout));
     assert!(
         text(&output.stderr).contains("could not download"),
@@ -348,28 +369,15 @@ fn an_interrupted_update_puts_the_old_binary_back() {
     for bin in ["alcuin", "alcuin-mcp"] {
         fs::write(dir.join(bin), "PUBLIC old").unwrap();
     }
-    // An mv that sends the installer TERM in place of the second rename.
-    let shim = root.path().join("shim");
-    fs::create_dir(&shim).unwrap();
+    // An mv, beside the test's curl, that sends the installer TERM in place of the second rename.
+    let mv = http_shim(root.path()).join("mv");
     fs::write(
-        shim.join("mv"),
+        &mv,
         "#!/bin/sh\ncase \"$*\" in\n*.alcuin-mcp.new*) kill -TERM \"$PPID\"; exit 0 ;;\nesac\nexec /bin/mv \"$@\"\n",
     )
     .unwrap();
-    fs::set_permissions(shim.join("mv"), fs::Permissions::from_mode(0o755)).unwrap();
-    let output = Command::new("sh")
-        .args([
-            "-c",
-            &format!(
-                "curl -fsSL {url}/release/install.sh | PATH={}:$PATH sh",
-                shim.display()
-            ),
-        ])
-        .env("ALCUIN_DOWNLOAD_URL", format!("{url}/release"))
-        .env("ALCUIN_INSTALL_DIR", &dir)
-        .env("HOME", root.path())
-        .output()
-        .unwrap();
+    fs::set_permissions(&mv, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = install(&format!("{url}/release"), &dir, root.path());
     assert!(!output.status.success(), "{}", text(&output.stdout));
     for bin in ["alcuin", "alcuin-mcp"] {
         assert!(
