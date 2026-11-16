@@ -707,9 +707,7 @@ return (() => {
   '[data-turn="assistant"]',
 ];
       const ASSISTANT_ROLE_SELECTOR = ':is([data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]), [data-turn="assistant"]';
-      const MODEL_BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], ' +
-  'button[data-codex-intelligence-trigger="true"], ' +
-  '[data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
+      const MODEL_BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], form[data-chatgpt-composer] button[data-composer-navigation-target="reasoning"], [data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
       const STOP_BUTTON_SELECTOR = ([
   '[data-testid="stop-button"]',
   '[data-testid="composer-stop-button"]',
