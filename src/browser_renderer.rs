@@ -1613,4 +1613,37 @@ mod model_button_tests {
             "MODEL_BUTTON differs from BUTTON_SELECTOR in browser-scripts/model.js"
         );
     }
+
+    /// The health guard and the history reader find the same button as the picker.
+    #[test]
+    fn page_readers_use_the_model_button_selector() {
+        let literal = format!("_SELECTOR = '{}';", super::MODEL_BUTTON);
+        for (name, script) in [
+            ("health-guard.js", crate::browser_health::GUARD),
+            (
+                "historical-inspection.js",
+                include_str!("../browser-scripts/historical-inspection.js"),
+            ),
+        ] {
+            assert!(
+                script.contains(&literal),
+                "browser-scripts/{name} has an old copy of MODEL_BUTTON"
+            );
+        }
+    }
+
+    /// The page scripts try the selectors one at a time, in order, by splitting the list on
+    /// ', ', which is safe only while no selector holds a comma of its own.
+    #[test]
+    fn model_button_splits_into_its_selectors() {
+        let parts = super::MODEL_BUTTON.split(", ").collect::<Vec<_>>();
+        assert!(parts.len() > 1, "{parts:?}");
+        let count = |part: &str, c: char| part.matches(c).count();
+        assert!(
+            parts.iter().all(|part| !part.contains(',')
+                && count(part, '(') == count(part, ')')
+                && count(part, '[') == count(part, ']')),
+            "{parts:?}"
+        );
+    }
 }

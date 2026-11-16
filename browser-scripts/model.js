@@ -49,6 +49,16 @@ return (() => {
     // The aria-label is localised; the composer-scoped navigation target is not
     // (after steipete/oracle 1503f8be, MIT, 5 November 2026).
     const BUTTON_SELECTOR = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], form[data-chatgpt-composer] button[data-composer-navigation-target="reasoning"], [data-testid="model-switcher-dropdown-button"], button.__composer-pill[aria-haspopup="menu"]';
+    // The trigger is the match of the earliest selector in the list that matches anything, not
+    // the earliest match on the page, so a stray composer pill that matches only the legacy
+    // fallback cannot outrank the named trigger. No selector holds a ', ' of its own.
+    const triggerTier = (accept = () => true) => {
+      for (const selector of BUTTON_SELECTOR.split(', ')) {
+        const nodes = Array.from(document.querySelectorAll(selector)).filter(accept);
+        if (nodes.length > 0) return nodes;
+      }
+      return [];
+    };
     const COMPOSER_MODEL_SIGNAL_SELECTOR = '[data-testid="composer-footer-actions"]';
     const LABEL_TOKENS = cfg.labelTokens;
     const TEST_IDS = cfg.testIdTokens;
@@ -190,7 +200,7 @@ return (() => {
       return modelTokens.some((token) => hasToken(label, token));
     };
     const findModelButton = () => {
-      const explicit = document.querySelector(BUTTON_SELECTOR);
+      const explicit = triggerTier()[0];
       if (explicit) return explicit;
       return Array.from(document.querySelectorAll('button.__composer-pill')).find(looksLikeModelPill) ?? null;
     };
@@ -521,8 +531,8 @@ return (() => {
     if ((targetIsLatest || PRIMARY_LABEL === 'GPT-5.6 Sol') &&
         (MODEL_STRATEGY !== 'current' || cfg.inspectCurrent !== false)) {
       return (async () => {
-      const triggers = () => [...new Set(Array.from(document.querySelectorAll(BUTTON_SELECTOR)))]
-        .filter(node => isVisibleElement(node) && !node.closest?.('[role="menu"], [data-radix-collection-root]'));
+      const triggers = () => triggerTier(node =>
+        isVisibleElement(node) && !node.closest?.('[role="menu"], [data-radix-collection-root]'));
       const resolveTrigger = () => { const nodes = triggers(); return nodes.length === 1 ? nodes[0] : null; };
       const trigger = resolveTrigger();
       const invalid = reason => ({ status: 'selection-invalid', reason });
