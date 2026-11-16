@@ -2899,6 +2899,18 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 }
             );
         }
+        // A message whose text differs from the prompt is told apart from one with a bad ID.
+        if case == "source" || case == "identity" {
+            assert_eq!(
+                observed["state"]["failureDetail"],
+                if case == "source" {
+                    "unqualified-content"
+                } else {
+                    "unqualified-identity"
+                },
+                "{case}: {observed}"
+            );
+        }
         anyhow::ensure!(
             (observed["state"]["state"] == "captured") == valid,
             "{case}: {observed}"
