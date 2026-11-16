@@ -24,7 +24,7 @@ Both read these environment variables:
 | --- | --- |
 | `ALCUIN_VERSION` | A release tag such as `v0.1.0`, in place of the latest release |
 | `ALCUIN_INSTALL_DIR` | The folder for both binaries |
-| `ALCUIN_DOWNLOAD_URL` | A folder holding the release archive and its `.sha256` file, such as a mirror; `install.sh` follows a redirect from it only to HTTPS |
+| `ALCUIN_DOWNLOAD_URL` | A folder holding the release archive and its `.sha256` file, such as a mirror; `install.sh` accepts only an HTTPS one |
 | `ALCUIN_NO_MODIFY_PATH` | `1` leaves your Windows user `Path` alone |
 
 The scripts check the checksum published beside the archive, which catches a damaged or swapped download but not a release replaced together with its checksum. The steps below also verify the build provenance attestation with the [GitHub CLI](https://cli.github.com/).
