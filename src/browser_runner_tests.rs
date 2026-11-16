@@ -218,6 +218,7 @@ enum Fault {
     DuplicateDownloadGuid,
     LostDownloadAck,
     TruncatedComposer,
+    RemoteTruncatedComposer,
     SmallComposerMismatch,
     PromptCleanupFailed,
     PromptRollbackFailed,
@@ -1047,6 +1048,7 @@ impl Exchange {
                 && matches!(
                     self.fault,
                     Fault::TruncatedComposer
+                        | Fault::RemoteTruncatedComposer
                         | Fault::SmallComposerMismatch
                         | Fault::PromptCleanupFailed
                         | Fault::PromptRollbackFailed
@@ -1961,8 +1963,17 @@ async fn fixture_attempt_in(
             json!(r#"[{"name":"PUBLIC-cookie","value":"PUBLIC-cookie-sentinel"}]"#);
     }
     if upload {
-        fs::write(home.path().join("public.txt"), b"PUBLIC file contents").unwrap();
-        input["files"] = json!(["public.txt"]);
+        if matches!(fault, Fault::RemoteTruncatedComposer) {
+            fs::write(
+                home.path().join("public.pdf"),
+                b"%PDF-1.7 PUBLIC raw source",
+            )
+            .unwrap();
+            input["files"] = json!(["public.pdf"]);
+        } else {
+            fs::write(home.path().join("public.txt"), b"PUBLIC file contents").unwrap();
+            input["files"] = json!(["public.txt"]);
+        }
         input["browserAttachments"] = json!("always");
     }
     if matches!(
@@ -1979,6 +1990,7 @@ async fn fixture_attempt_in(
     if matches!(
         fault,
         Fault::TruncatedComposer
+            | Fault::RemoteTruncatedComposer
             | Fault::SmallComposerMismatch
             | Fault::PromptCleanupFailed
             | Fault::PromptRollbackFailed
@@ -2215,10 +2227,30 @@ async fn fixture_attempt_in(
             _ => panic!("browser parent resolved as API"),
         }
     }
-    let meta = if matches!(fault, Fault::RemoteCapture | Fault::RemoteCaptureRejected) {
+    let meta = if matches!(
+        fault,
+        Fault::RemoteCapture | Fault::RemoteCaptureRejected | Fault::RemoteTruncatedComposer
+    ) {
+        let mut payload = json!({"prompt":resolved.options["prompt"],"options":{"model":resolved.options["model"]},"browserConfig":resolved.browser});
+        if matches!(fault, Fault::RemoteTruncatedComposer) {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            let mut sources = vec![
+                json!({"fileName":"alpha.rs","displayPath":"PUBLIC original/alpha.rs","contentBase64":STANDARD.encode(b"PUBLIC source alpha")}),
+                json!({"fileName":"beta.rs","displayPath":"PUBLIC original/beta.rs","contentBase64":STANDARD.encode(b"PUBLIC source beta")}),
+            ];
+            let attachments = if upload {
+                let raw = json!({"fileName":"public.pdf","displayPath":"PUBLIC original/public.pdf","contentBase64":STANDARD.encode(fs::read(home.path().join("public.pdf")).unwrap())});
+                sources.push(raw.clone());
+                vec![raw]
+            } else {
+                vec![]
+            };
+            payload["attachments"] = json!(attachments);
+            payload["fallbackSubmission"] = json!({"prompt":"PUBLIC inspect these original sources","attachments":sources,"bundle":{"format":"zip","scope":"all"}});
+        }
         let context = crate::remote_host::RunContext::fixture(
             "12345678-1234-1234-1234-123456789abc",
-            json!({"prompt":resolved.options["prompt"],"options":{"model":resolved.options["model"]},"browserConfig":resolved.browser}),
+            payload,
             store.clone(),
         );
         let driver = crate::remote_driver::BrowserDriver {
@@ -7751,6 +7783,130 @@ async fn truncated_prompt_refuses_before_send_without_a_fallback() {
     assert!(!request(&f.store, &f.id).unwrap().fallback_used);
     assert_ne!(f.store.require(&f.id).unwrap()["status"], "completed");
     stop(f).await;
+}
+#[tokio::test]
+async fn remote_truncation_commits_the_original_sources_before_a_single_send() {
+    const RUN: &str = "12345678-1234-1234-1234-123456789abc";
+    for upload in [false, true] {
+        let f = fixture(Fault::RemoteTruncatedComposer, upload).await;
+        let initial = request(&f.store, &f.id).unwrap();
+        assert!(initial.prompt.len() > 50_000);
+        assert!(!initial.fallback_used);
+        assert!(!initial.extra.contains_key("attachmentDisplayPaths"));
+        let source = initial
+            .fallback
+            .as_ref()
+            .unwrap()
+            .remote_source
+            .as_ref()
+            .unwrap();
+        assert_eq!(source.files.len(), 2 + usize::from(upload));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook: CaptureHook = {
+            let store = f.store.clone();
+            let calls = calls.clone();
+            Arc::new(move |captured| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let produced = crate::remote_protocol::produced(&store, RUN, captured, false)?;
+                crate::remote_result::save(
+                    &store,
+                    RUN,
+                    &produced.captured,
+                    &produced.result,
+                    &produced.artifacts,
+                    crate::remote_result::Phase::Capture,
+                    &CancellationToken::new(),
+                )?;
+                Ok(())
+            })
+        };
+        let result = execute_with_capture(
+            &f.store,
+            &f.id,
+            f.profile.clone(),
+            f.cdp.clone(),
+            f.endpoint.clone(),
+            &f.identity,
+            &limits(),
+            &f.cancel,
+            Some(&hook),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["status"], "running");
+        assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(f.closes.load(Ordering::SeqCst), 0);
+        let saved = request(&f.store, &f.id).unwrap();
+        assert!(saved.fallback_used);
+        assert!(
+            saved
+                .prompt
+                .starts_with("PUBLIC inspect these original sources\n\n")
+        );
+        assert!(saved.prompt.len() < 1_000);
+        assert_eq!(saved.prompt_sha256, sha256(saved.prompt.as_bytes()));
+        assert_eq!(saved.options_sha256, initial.options_sha256);
+        assert_eq!(saved.upload_paths.len(), 1);
+        let bundle = &saved.extra["bundled"];
+        assert_eq!(bundle["format"], "zip");
+        assert_eq!(bundle["originalCount"], 2 + usize::from(upload));
+        let archive = fs::read(&saved.upload_paths[0]).unwrap();
+        assert!(archive.starts_with(b"PK\x03\x04"));
+        for expected in [
+            b"PUBLIC original/alpha.rs".as_slice(),
+            b"PUBLIC original/beta.rs".as_slice(),
+            b"PUBLIC source alpha".as_slice(),
+            b"PUBLIC source beta".as_slice(),
+        ] {
+            assert!(archive.windows(expected.len()).any(|part| part == expected));
+        }
+        if upload {
+            assert!(
+                archive
+                    .windows(b"%PDF-1.7 PUBLIC raw source".len())
+                    .any(|part| part == b"%PDF-1.7 PUBLIC raw source")
+            );
+            assert_eq!(
+                fs::read(f.home.path().join("public.pdf")).unwrap(),
+                b"%PDF-1.7 PUBLIC raw source"
+            );
+        }
+        let meta = f.store.require(&f.id).unwrap();
+        let runtime = &meta["browser"]["runtime"];
+        assert_eq!(runtime["fallbackSubmissionUsed"], true);
+        assert_eq!(
+            runtime["fallbackPromptLength"],
+            initial.prompt.encode_utf16().count()
+        );
+        assert_eq!(runtime["fallbackObservedLength"], 30_000);
+        assert_eq!(runtime["uploads"].as_array().unwrap().len(), 1);
+        assert_eq!(runtime["fallbackUploadsCleared"] == true, upload);
+        if upload {
+            assert_eq!(runtime["priorUploads"].as_array().unwrap().len(), 1);
+        }
+        let resets = f
+            .trace
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                event["params"]["expression"]
+                    .as_str()
+                    .is_some_and(|expression| expression.contains("alcuin-dom:upload-reset"))
+            })
+            .count();
+        assert_eq!(resets, usize::from(upload));
+        let record = crate::remote_result::read(&f.store, RUN).unwrap();
+        assert_eq!(record.native()["phase"], "capture");
+        assert!(
+            !record.native()["result"]["answerMarkdown"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        stop(f).await;
+    }
 }
 #[tokio::test]
 async fn small_mismatch_and_uncertain_prompt_cleanup_never_authorise_fallback() {

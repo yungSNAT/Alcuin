@@ -4332,8 +4332,11 @@ async fn upload_inputs(
             !timeout.is_zero(),
             "Attachment upload budget expired before every file was ready; nothing was sent. Tune --browser-attachment-timeout."
         );
-        let display = request.extra["attachmentDisplayPaths"][index]
-            .as_str()
+        let display = request
+            .extra
+            .get("attachmentDisplayPaths")
+            .and_then(|paths| paths.get(index))
+            .and_then(Value::as_str)
             .map_or_else(|| path.display().to_string(), str::to_owned);
         automation_log(store, id, &format!("Uploading attachment: {display}"))?;
         let mut file = if let Some(staged) = &request.staged_uploads {
