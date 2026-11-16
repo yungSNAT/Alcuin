@@ -166,6 +166,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: bash r0698-probe.sh
       - run: cargo test --locked native_temporary_chat_predicate_and_retained_send_guard -- --ignored
 
   # The upload runs apart from the tests so the OIDC token is never available
