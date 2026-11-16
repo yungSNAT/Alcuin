@@ -989,7 +989,34 @@ pub async fn run(
 /// nothing is left to stop.
 #[cfg(target_os = "macos")]
 fn zombie_group(group: u32) -> bool {
-    crate::process::ProcessIdentity::read(group).is_ok_and(|identity| identity.is_none())
+    let Ok(group) = libc::pid_t::try_from(group) else {
+        return false;
+    };
+    // SAFETY: a null buffer asks only for the number of members.
+    let needed = unsafe { libc::proc_listpgrppids(group, std::ptr::null_mut(), 0) };
+    let Ok(needed) = usize::try_from(needed) else {
+        return false;
+    };
+    // Room for members that join between the two calls.
+    let mut pids = vec![0 as libc::pid_t; needed + 16];
+    let Ok(bytes) = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice())) else {
+        return false;
+    };
+    // SAFETY: the buffer holds `bytes` bytes of pid_t values.
+    let count = unsafe { libc::proc_listpgrppids(group, pids.as_mut_ptr().cast(), bytes) };
+    // A full buffer may have left members out.
+    let Ok(count) = usize::try_from(count) else {
+        return false;
+    };
+    if count >= pids.len() {
+        return false;
+    }
+    pids.truncate(count);
+    pids.into_iter()
+        .filter_map(|pid| u32::try_from(pid).ok().filter(|pid| *pid != 0))
+        .all(|pid| {
+            crate::process::ProcessIdentity::read(pid).is_ok_and(|identity| identity.is_none())
+        })
 }
 #[cfg(test)]
 mod tests {

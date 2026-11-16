@@ -2589,6 +2589,11 @@ mod macos_process {
         // SAFETY: the buffer holds `bytes` bytes of pid_t values.
         let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
         anyhow::ensure!(count > 0, "Native process list is unavailable");
+        // A full buffer may have left processes out, so occupancy would be unknown.
+        anyhow::ensure!(
+            (count as usize) < pids.len(),
+            "Native process list changed while it was read"
+        );
         pids.truncate(count as usize);
         Ok(pids
             .into_iter()
@@ -2708,6 +2713,8 @@ fn procargs(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
         .context("Malformed native argument record")?;
     let count =
         usize::try_from(i32::from_ne_bytes(*count)).context("Malformed native argument record")?;
+    // Each argument takes at least its terminating NUL.
+    anyhow::ensure!(count <= rest.len(), "Malformed native argument record");
     let path_end = rest
         .iter()
         .position(|byte| *byte == 0)
@@ -4139,6 +4146,9 @@ mod tests {
         assert!(procargs(&truncated).is_err());
         assert!(procargs(b"\x01\x00").is_err());
         assert!(procargs(&(-1i32).to_ne_bytes()).is_err());
+        let mut huge = i32::MAX.to_ne_bytes().to_vec();
+        huge.extend_from_slice(b"/PUBLIC\0");
+        assert!(procargs(&huge).is_err());
     }
     #[test]
     fn launch_and_occupancy_share_exact_case_insensitive_browser_names() {
