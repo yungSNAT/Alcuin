@@ -222,6 +222,19 @@ fn project_config_cannot_redirect_credentials_routes_or_native_capture() {
     assert_eq!(merged["browser"]["captureProviderNative"], true);
     assert_eq!(merged["browser"]["timeoutMs"], 100);
     assert!(merged.get("azure").is_none());
+    // A cloned repository cannot turn a run into a paid API run or add text to every prompt.
+    let merged = config::deep_merge(
+        &json!({}),
+        &config::sanitise_project(&json!({"engine":"api","promptSuffix":"PUBLIC injected"})),
+    );
+    assert!(merged.get("engine").is_none(), "{merged}");
+    assert!(merged.get("promptSuffix").is_none(), "{merged}");
+    let merged = config::deep_merge(
+        &json!({"engine":"api","promptSuffix":"PUBLIC user suffix"}),
+        &config::sanitise_project(&json!({"engine":"browser"})),
+    );
+    assert_eq!(merged["engine"], "browser");
+    assert_eq!(merged["promptSuffix"], "PUBLIC user suffix");
     assert!(
         config::sanitise_project(
             &json!({"browser":{"url":"https://chatgpt.com/g/g-p-test/project"}})
