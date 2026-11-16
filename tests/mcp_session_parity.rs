@@ -331,6 +331,51 @@ async fn wait_reports_a_partial_run_within_its_output_schema() {
     conforms(&wait, &output_schema("wait"), "wait");
 }
 
+/// An API run Alcuin did not price stores `"cost": null`, which the consult and wait output
+/// schemas must accept, as strict MCP clients reject a result that breaks its schema.
+#[tokio::test]
+async fn an_unpriced_api_run_conforms_to_the_consult_and_wait_output_schemas() {
+    let home = tempfile::tempdir().unwrap();
+    let server = server(home.path());
+    let meta = server
+        .store
+        .create(
+            json!({"prompt":"PUBLIC unpriced run","model":"gpt-6-astra","mode":"api"}),
+            home.path(),
+            None,
+        )
+        .unwrap();
+    let id = meta["id"].as_str().unwrap();
+    let usage =
+        json!({"inputTokens":10,"outputTokens":5,"reasoningTokens":0,"totalTokens":15,"cost":null});
+    server
+        .store
+        .update_model(
+            id,
+            "gpt-6-astra",
+            &json!({"status":"completed","usage":usage}),
+        )
+        .unwrap();
+    server
+        .store
+        .update(id, |_| {
+            Ok(Some(json!({"status":"completed","usage":usage})))
+        })
+        .unwrap();
+    let wait = structured(
+        server
+            .invoke("wait", json!({"id":id}), &CancellationToken::new())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(wait["models"][0]["usage"]["cost"], Value::Null, "{wait}");
+    conforms(&wait, &output_schema("wait"), "wait");
+    let mut out = json!({"sessionId":id,"status":"completed","output":""});
+    add_summaries(&mut out, &server.store.require(id).unwrap());
+    assert_eq!(out["models"][0]["usage"]["cost"], Value::Null, "{out}");
+    conforms(&out, &output_schema("consult"), "consult");
+}
+
 #[tokio::test]
 async fn consult_dry_runs_keep_the_fallback_consent() {
     let home = tempfile::tempdir().unwrap();
