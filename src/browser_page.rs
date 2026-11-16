@@ -309,6 +309,11 @@ static RATE_LIMIT: LazyLock<regex::Regex> = LazyLock::new(|| {
 static UNAVAILABLE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?-u:\b)(?:temporarily unavailable|something went wrong|failed to generate|try again later)(?-u:\b)").expect("unavailable pattern")
 });
+/// ChatGPT's 'No response from ChatGPT. Check your connection.' notice (reference 0.23.1).
+static CONNECTION: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?-u:\b)(?:no response from chatgpt|check your connection)(?-u:\b)")
+        .expect("connection pattern")
+});
 static CHALLENGE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?-u:\b)(?:verify you are human|unusual activity|cloudflare|challenge|login required|sign in)(?-u:\b)").expect("challenge pattern")
 });
@@ -335,6 +340,7 @@ pub(crate) fn classify_ui_warning(text: &str) -> Option<&'static str> {
     [
         (&*RATE_LIMIT, "rate_limit"),
         (&*UNAVAILABLE, "temporary_unavailable"),
+        (&*CONNECTION, "temporary_unavailable"),
         (&*CHALLENGE, "auth_or_challenge"),
     ]
     .into_iter()
@@ -373,15 +379,19 @@ pub(crate) fn first_ui_warning(raw: &Value) -> Option<(&'static str, String)> {
 }
 /// Any warning counts, not just the first, and by its words rather than its class: 'try again
 /// later' classifies limit and account notices as temporary. A truly temporary notice can be the
-/// failure being retried, so it does not count.
+/// failure being retried, so it does not count; a lost connection does, as the reference does not
+/// retry it either.
 fn holds_retry_back(raw: &Value) -> bool {
     ui_warning_texts(raw).any(|text| {
         let words = warning_words(&text);
-        words.contains("limit") || RATE_LIMIT.is_match(&words) || CHALLENGE.is_match(&words)
+        words.contains("limit")
+            || RATE_LIMIT.is_match(&words)
+            || CHALLENGE.is_match(&words)
+            || CONNECTION.is_match(&words)
     })
 }
-/// True when ChatGPT shows a rate-limit or account warning, so retrying a failed turn would only
-/// add load.
+/// True when ChatGPT shows a rate-limit, account or connection warning, so retrying a failed turn
+/// would only add load or fail again.
 pub(crate) async fn warns_against_retry(
     page: &Cdp,
     timeout: Duration,
@@ -407,6 +417,36 @@ pub(crate) async fn ui_warning(
         .await
         .ok()?;
     let (kind, message) = first_ui_warning(&raw)?;
+    Some(warning_error(kind, &message, wait_target, log))
+}
+/// ChatGPT's connection notice, worded and logged as `ui_warning` words it. The reference fails
+/// the answer wait on it at once (0.23.1), where other warnings wait for the answer deadline. A
+/// failed read finds no warning.
+pub(crate) async fn connection_warning(
+    page: &Cdp,
+    wait_target: &str,
+    timeout: Duration,
+    cancel: &CancellationToken,
+    log: &(dyn Fn(&str) + Sync),
+) -> Option<String> {
+    let raw = page
+        .evaluate_with_arguments(UI_WARNINGS, &json!([{}]), timeout, cancel)
+        .await
+        .ok()?;
+    let message = ui_warning_texts(&raw).find(|text| CONNECTION.is_match(&warning_words(text)))?;
+    Some(warning_error(
+        "temporary_unavailable",
+        &message,
+        wait_target,
+        log,
+    ))
+}
+fn warning_error(
+    kind: &str,
+    message: &str,
+    wait_target: &str,
+    log: &(dyn Fn(&str) + Sync),
+) -> String {
     log(&format!(
         "[browser] ChatGPT UI warning detected ({kind}): {message}"
     ));
@@ -415,9 +455,7 @@ pub(crate) async fn ui_warning(
         "temporary_unavailable" => "temporary-unavailable",
         _ => "authentication/challenge",
     };
-    Some(format!(
-        "ChatGPT displayed a {label} warning while waiting for {wait_target}: {message}"
-    ))
+    format!("ChatGPT displayed a {label} warning while waiting for {wait_target}: {message}")
 }
 
 /// Reference ensureChatMode for a new owned chat: once the composer is ready, a selected

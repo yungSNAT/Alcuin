@@ -303,6 +303,7 @@ return (() => {
   if (/^thinking failed[.!]?(?:\s+retry)?(?:\s+is this conversation helpful so far\??(?:\s+yes\s+no)?)?$/.test(text)) return true;
   if (!retryVisible) return false;
   return (
+    /^no response from chatgpt[.!]?(?:\s+check your connection[.!]?)?(?:\s+retry)?$/.test(text) ||
     text.includes("something went wrong") ||
     text.includes("failed to generate") ||
     text.includes("try again later")
