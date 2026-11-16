@@ -127,10 +127,27 @@ fn command_path(line: &str, name: &str) -> Option<String> {
     }
     Some(path.join(" "))
 }
+/// `line` with another command's text inside `$(...)` or PowerShell's `(git ...)` blanked, so
+/// its options are not read as Alcuin's.
+fn without_substitutions(line: &str) -> String {
+    let mut line = line.to_owned();
+    for open in ["$(", "(git "] {
+        let mut from = 0;
+        while let Some(start) = line[from..].find(open).map(|at| at + from) {
+            let end = line[start..]
+                .find(')')
+                .map_or(line.len(), |at| start + at + 1);
+            line.replace_range(start..end, &" ".repeat(end - start));
+            from = end;
+        }
+    }
+    line
+}
 fn references(markdown: &str, name: &str) -> Vec<Reference> {
     let mut references = vec![];
     let mut section = None;
     for line in markdown.lines() {
+        let line = &without_substitutions(line);
         let hashes = line.bytes().take_while(|b| *b == b'#').count();
         if hashes >= 2
             && line[hashes..].starts_with(char::is_whitespace)
@@ -142,7 +159,7 @@ fn references(markdown: &str, name: &str) -> Vec<Reference> {
         let trimmed = line.trim().trim_start_matches(['$', '>']).trim_start();
         if matches!(
             trimmed.split_whitespace().next(),
-            Some("corepack" | "pnpm" | "npm" | "npx" | "cargo" | "gh" | "codex")
+            Some("corepack" | "pnpm" | "npm" | "npx" | "cargo" | "gh" | "codex" | "git")
         ) && command.is_none()
         {
             continue;
