@@ -1001,7 +1001,7 @@ impl ChromeConnection {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(private_file(
-                &profile.path().join("oracle-chrome-stderr.log"),
+                &profile.path().join(STARTUP_STDERR),
                 false,
             )?));
         #[cfg(unix)]
@@ -1049,15 +1049,20 @@ impl ChromeConnection {
             "; launch record retained for recovery"
         };
         let deadline = Instant::now() + options.timeout;
+        let stderr = profile.path().join(STARTUP_STDERR);
         let endpoint = loop {
             anyhow::ensure!(!cancel.is_cancelled(), "Chrome startup cancelled{kept}");
             anyhow::ensure!(
                 Instant::now() < deadline,
-                "Chrome startup deadline expired{kept}"
+                "Chrome startup deadline expired{kept}{}",
+                startup_stderr(&stderr)
             );
             profile.check()?;
             if child.try_wait()?.is_some() {
-                bail!("Native Chrome exited before its debugging endpoint was acknowledged");
+                bail!(
+                    "Native Chrome exited before its debugging endpoint was acknowledged{}",
+                    startup_stderr(&stderr)
+                );
             }
             if let Some(endpoint) = read_devtools_endpoint(profile.path())?
                 && options.debug_port.is_none_or(|port| port == endpoint.port)
@@ -2010,6 +2015,37 @@ async fn browser_pid(
         (Some(row), None) => row["id"].as_u64(),
         _ => None,
     })
+}
+/// Where a launched Chrome's stderr goes, inside its profile.
+const STARTUP_STDERR: &str = "oracle-chrome-stderr.log";
+/// The last lines Chrome wrote to `log` before a failed startup, as '; Chrome stderr: ...', or
+/// nothing when it wrote none. It names why Chrome never opened its debugging port.
+fn startup_stderr(log: &Path) -> String {
+    const TAIL: u64 = 2048;
+    let Ok(mut file) = fs::File::open(log) else {
+        return String::new();
+    };
+    let start = file
+        .metadata()
+        .map_or(0, |meta| meta.len().saturating_sub(TAIL));
+    let mut bytes = Vec::new();
+    if std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(start)).is_err()
+        || file.read_to_end(&mut bytes).is_err()
+    {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let tail = lines[lines.len().saturating_sub(5)..].join(" | ");
+    if tail.is_empty() {
+        tail
+    } else {
+        format!("; Chrome stderr: {tail}")
+    }
 }
 pub fn read_devtools_endpoint(profile: &Path) -> Result<Option<AttachmentEndpoint>> {
     let directory = NativeEntry::open(profile, true)?;
@@ -4266,6 +4302,59 @@ mod tests {
         );
         let sandboxless = chrome_flags(None, true, false, false, true);
         assert!(sandboxless.ends_with(&["--no-sandbox".into(), "--disable-dev-shm-usage".into()]));
+    }
+    /// A Chrome that never opens its debugging port, or exits first, has the last lines it
+    /// printed named in the startup error (R0698).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_startup_names_what_chrome_printed() {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(startup_stderr(Path::new("PUBLIC-missing-log")), "");
+        for (script, failure, line) in [
+            (
+                "echo 'PUBLIC first line' >&2\necho 'PUBLIC hang reason' >&2\nexec sleep 5\n",
+                "Chrome startup deadline expired",
+                "PUBLIC first line | PUBLIC hang reason",
+            ),
+            (
+                "echo 'PUBLIC exit reason' >&2\nexit 3\n",
+                "Native Chrome exited before its debugging endpoint was acknowledged",
+                "PUBLIC exit reason",
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let bin = home.path().join("PUBLIC-bin");
+            fs::create_dir(&bin).unwrap();
+            let executable = bin.join("chrome");
+            fs::write(&executable, format!("#!/bin/sh\n{script}")).unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            let profile = ProfileRegistry::open(&home.path().join("PUBLIC-profile")).unwrap();
+            let error = ChromeConnection::launch_or_reuse(
+                profile,
+                ChromeLaunch {
+                    executable,
+                    cwd: home.path().into(),
+                    environment: Environment::new(),
+                    debug_port: None,
+                    timeout: Duration::from_secs(2),
+                    keep_browser: false,
+                    headless: true,
+                    hide_window: true,
+                    keep_window_behind: false,
+                    borrow_profile_owner: false,
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .err()
+            .expect("A fake Chrome must not start");
+            let message = format!("{error:#}");
+            assert!(message.contains(failure), "{message}");
+            assert!(
+                message.contains(&format!("; Chrome stderr: {line}")),
+                "{message}"
+            );
+        }
     }
     #[tokio::test]
     async fn cancellation_while_waiting_for_bringup_lock_prevents_a_new_launch() {
