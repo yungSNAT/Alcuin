@@ -8,8 +8,9 @@ use std::{
     process::{Command, Output},
 };
 
-/// Serves the files in `root` over HTTP, as the release download folder and the raw script do.
-fn serve(root: PathBuf) -> String {
+/// Answers each HTTP request on a new local port with the status, headers and body `answer`
+/// gives for its path (without the leading slash); returns the server's address.
+fn listen(answer: impl Fn(&str) -> (&'static str, String, Vec<u8>) + Send + 'static) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -29,13 +30,10 @@ fn serve(root: PathBuf) -> String {
                 .nth(1)
                 .unwrap_or("/")
                 .trim_start_matches('/');
-            let (status, body) = match fs::read(root.join(path)) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("404 Not Found", vec![]),
-            };
+            let (status, headers, body) = answer(path);
             let _ = socket.write_all(
                 format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 )
                 .as_bytes(),
@@ -44,6 +42,14 @@ fn serve(root: PathBuf) -> String {
         }
     });
     address
+}
+
+/// Serves the files in `root` over HTTP, as the release download folder and the raw script do.
+fn serve(root: PathBuf) -> String {
+    listen(move |path| match fs::read(root.join(path)) {
+        Ok(body) => ("200 OK", String::new(), body),
+        Err(_) => ("404 Not Found", String::new(), vec![]),
+    })
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -265,6 +271,103 @@ fn a_plain_http_download_installs_nothing() {
         text(&output.stderr)
     );
     assert!(!dir.exists());
+}
+
+/// Answers every request over HTTP with a redirect to the same path under `target`.
+#[cfg(windows)]
+fn redirect_to(target: String) -> String {
+    listen(move |path| {
+        (
+            "302 Found",
+            format!("Location: {target}/{path}\r\n"),
+            vec![],
+        )
+    })
+}
+
+/// The Windows script downloads over plain HTTP only from a folder on this machine that it is
+/// pointed at, as the tests are: not from another machine, not from a file path and not by a
+/// redirect.
+#[cfg(windows)]
+#[test]
+fn a_plain_http_download_installs_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let redirector = redirect_to(url.clone());
+    let dir = root.path().join("bin");
+    for (download, refusal) in [
+        (
+            "http://mirror.example/alcuin".to_owned(),
+            "http://mirror.example/alcuin is not an HTTPS address".to_owned(),
+        ),
+        (
+            "file:///C:/alcuin".to_owned(),
+            "file:///C:/alcuin is not an HTTPS address".to_owned(),
+        ),
+        (
+            format!("{redirector}/release"),
+            format!(
+                "was redirected to {url}/release/alcuin-x86_64-pc-windows-msvc.zip, which is not HTTPS"
+            ),
+        ),
+    ] {
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("irm {url}/release/install.ps1 | iex"),
+            ])
+            .env("ALCUIN_DOWNLOAD_URL", &download)
+            .env("ALCUIN_INSTALL_DIR", &dir)
+            .env("ALCUIN_NO_MODIFY_PATH", "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{}", text(&output.stdout));
+        // PowerShell wraps the error to its console width, so whitespace is ignored.
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        assert!(
+            squash(&text(&output.stderr)).contains(&squash(&refusal)),
+            "{download}: {}",
+            text(&output.stderr)
+        );
+        assert!(!dir.exists(), "{download}");
+    }
+}
+
+/// A restore that itself fails keeps the old binary under the name it gives.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_old_binary_that_cannot_be_put_back_is_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let url = serve(root.path().to_owned());
+    release(root.path(), false);
+    let dir = root.path().join("bin");
+    fs::create_dir_all(&dir).unwrap();
+    for bin in ["alcuin", "alcuin-mcp"] {
+        fs::write(dir.join(bin), "PUBLIC old").unwrap();
+    }
+    // An mv, beside the test's curl, that fails the second rename and the move of the old
+    // alcuin back.
+    let mv = http_shim(root.path()).join("mv");
+    fs::write(
+        &mv,
+        "#!/bin/sh\ncase \"$*\" in\n*.alcuin-mcp.new* | *.alcuin.old*) exit 1 ;;\nesac\nexec /bin/mv \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&mv, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = install(&format!("{url}/release"), &dir, root.path());
+    assert!(!output.status.success(), "{}", text(&output.stdout));
+    let kept = dir.join(".alcuin.old");
+    assert!(
+        text(&output.stderr).contains(&format!("the old alcuin is in {}.", kept.display())),
+        "{}",
+        text(&output.stderr)
+    );
+    assert_eq!(fs::read(&kept).unwrap(), b"PUBLIC old");
+    assert_eq!(fs::read(dir.join("alcuin-mcp")).unwrap(), b"PUBLIC old");
 }
 
 /// An update that cannot write its second binary leaves the old pair as it was.
