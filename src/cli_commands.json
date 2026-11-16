@@ -361,6 +361,7 @@
   {
     "command": "tui",
     "about": "Launch the interactive terminal UI for humans (no automation).",
+    "hidden": true,
     "options": [],
     "children": []
   },
