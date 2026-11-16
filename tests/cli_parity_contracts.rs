@@ -163,6 +163,16 @@ fn excluded_features_refuse_with_the_unsupported_reason() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("ORACLE_FORCE_TUI=1 requests the terminal UI"));
+    // Help lists no command that only refuses.
+    let output = cli(home.path(), &["--help"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !stdout(&output)
+            .lines()
+            .any(|line| line.trim_start().starts_with("tui ")),
+        "{}",
+        stdout(&output)
+    );
     for (args, flag) in [
         (
             vec!["-p", "PUBLIC pruning", "--retain-hours", "1"],
