@@ -105,6 +105,9 @@ jobs:
         run: cargo fmt --check && cargo fmt --check --manifest-path packaging/smoke/Cargo.toml
       - if: matrix.shard != 2 && env.SKIP != 'true'
         run: cargo clippy --all-targets --locked -- -D warnings && cargo clippy --all-targets --locked --manifest-path packaging/smoke/Cargo.toml -- -D warnings
+      # The release smoke test's own test needs a Unix shell.
+      - if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path packaging/smoke/Cargo.toml
       # Coverage needs llvm-tools and a prebuilt cargo-llvm-cov, with no fallback to compiling it.
       - if: runner.os == 'Linux'
         run: rustup component add llvm-tools

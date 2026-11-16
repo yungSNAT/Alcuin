@@ -191,7 +191,7 @@ mod tests {
             "#!/bin/sh
 cat > /dev/null
 echo PUBLIC-replies
-sleep 90 &
+sleep 90 2> /dev/null &
 exit 0
 ",
         )
