@@ -66,6 +66,8 @@ jobs:
           - os: ubuntu-latest
           # Linux on Arm, for the aarch64 release build; no coverage, so it runs plain cargo test.
           - os: ubuntu-24.04-arm
+          # macOS on Apple silicon, for the macOS release build.
+          - os: macos-latest
           # Windows runs its tests one at a time, so they are split across 2 runners by test
           # name; the serial run took 11.5 of the job's 13.2 minutes.
           - os: windows-latest
@@ -108,7 +110,7 @@ jobs:
       - if: matrix.shard != 2 && env.SKIP != 'true'
         run: cargo clippy --all-targets --locked -- -D warnings && cargo clippy --all-targets --locked --manifest-path packaging/smoke/Cargo.toml -- -D warnings
       # The release smoke test's own test needs a Unix shell.
-      - if: runner.os == 'Linux'
+      - if: runner.os != 'Windows'
         run: cargo test --locked --manifest-path packaging/smoke/Cargo.toml
       # Coverage needs llvm-tools and a prebuilt cargo-llvm-cov, with no fallback to compiling it.
       - if: runner.os == 'Linux' && runner.arch == 'X64'
@@ -133,8 +135,8 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      - if: runner.os == 'Linux' && runner.arch == 'ARM64'
-        run: cargo test --locked -- --test-threads=2
+      - if: runner.os == 'macOS' || (runner.os == 'Linux' && runner.arch == 'ARM64')
+        run: cargo test --locked --no-fail-fast -- --test-threads=2
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -157,6 +159,23 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs-only != 'true') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --locked native_temporary_chat_predicate_and_retained_send_guard -- --ignored
+
+  # The same test on macOS, whose Chrome launch, process identity and profile ownership checks
+  # are its own code.
+  native-chrome-macos:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs-only != 'true') }}
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

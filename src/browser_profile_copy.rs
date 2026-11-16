@@ -470,7 +470,7 @@ mod tests {
     use std::time::Duration;
     #[test]
     fn selects_only_one_direct_profile_and_copies_full_bytes_without_caches() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::native_fs::tempdir();
         let source = home.path().join("source");
         private_dir(&source.join("Profile 2/Service Worker/CacheStorage")).unwrap();
         private_dir(&source.join("Default")).unwrap();

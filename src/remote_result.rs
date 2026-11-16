@@ -779,7 +779,7 @@ async fn finish_owned(
 /// Leaves `run`'s session as a native remote run does once its final result is saved and
 /// before the client acknowledges it: owned answer target `creator` (a live page showing the
 /// synthetic completed conversation), acknowledged dispatch, capture ACK, final record.
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 pub(crate) fn native_ack_fixture(
     store: &SessionStore,
     run: &str,

@@ -475,7 +475,7 @@ pub(crate) async fn retire_saved_idle(
     Ok(Some(disposal))
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 async fn saved_fixture(connection: &ChromeConnection, store: &SessionStore) -> Result<String> {
     let created=store.create(json!({"prompt":"PUBLIC persistent cleanup fixture","model":"gpt-6-pro","engine":"browser"}),
         connection.profile.as_ref().unwrap().path(),None)?;
@@ -541,7 +541,7 @@ async fn saved_fixture(connection: &ChromeConnection, store: &SessionStore) -> R
 
 /// Native component coverage starts with durable completion, then abandons the
 /// original CDP connection. Production retirement must reconnect by its receipt.
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 pub(super) async fn check_native_saved(
     connection: &mut ChromeConnection,
     store: &SessionStore,

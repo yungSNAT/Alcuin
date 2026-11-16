@@ -1770,7 +1770,11 @@ fn native_executable(pid: u32) -> Result<PathBuf> {
         &buffer[..length as usize],
     )))
 }
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn native_executable(pid: u32) -> Result<PathBuf> {
+    macos_process::executable(pid)?.context("Health Chrome executable is unavailable")
+}
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn native_executable(_: u32) -> Result<PathBuf> {
     bail!("Native Chrome image verification is unqualified on this platform")
 }
@@ -2132,6 +2136,13 @@ const CHROME_BASENAMES: &[&str] = &[
     "brave",
     "brave.exe",
     "brave-browser",
+    // macOS app bundles: Contents/MacOS/<name>.
+    "Google Chrome",
+    "Google Chrome for Testing",
+    "Google Chrome Beta",
+    "Google Chrome Dev",
+    "Google Chrome Canary",
+    "Brave Browser",
 ];
 fn chrome_basename(name: &str) -> bool {
     CHROME_BASENAMES
@@ -2534,7 +2545,222 @@ fn windows_arguments(command: &str) -> Result<Vec<String>> {
     }
     Ok(args)
 }
-#[cfg(not(any(target_os = "linux", windows)))]
+// Native argv, as on Linux; macOS keeps each process's own argv, so no title is reassembled.
+#[cfg(target_os = "macos")]
+fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut owners = Vec::new();
+    for pid in macos_process::all()? {
+        let executable = match macos_process::executable(pid) {
+            Ok(Some(path)) => path,
+            Ok(None) => continue,
+            Err(error) => {
+                // Another account's process: its name still says whether it could be a browser.
+                match macos_process::name(pid)? {
+                    None => continue,
+                    Some(name) => {
+                        anyhow::ensure!(
+                            !chrome_basename(&name),
+                            "Profile occupancy is unknown for native process {pid}: {error}"
+                        );
+                        continue;
+                    }
+                }
+            }
+        };
+        let name = executable.file_name().unwrap_or_default().to_string_lossy();
+        if !chrome_basename(&name) {
+            continue;
+        }
+        let Some(args) = macos_process::arguments(pid)
+            .with_context(|| format!("Profile occupancy is unknown for native process {pid}"))?
+        else {
+            continue;
+        };
+        if args.iter().any(|a| a.starts_with(b"--type=")) {
+            continue;
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let value = arg.strip_prefix(b"--user-data-dir=").or_else(|| {
+                (arg.as_slice() == b"--user-data-dir")
+                    .then(|| args.get(index + 1).map(Vec::as_slice))
+                    .flatten()
+            });
+            if let Some(value) = value
+                && fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(value)))? == profile
+            {
+                owners.push(pid);
+            }
+        }
+    }
+    Ok(owners)
+}
+/// macOS process records from libproc and `kern.procargs2`. A process that exits during a read
+/// gives `None`.
+#[cfg(target_os = "macos")]
+mod macos_process {
+    use anyhow::{Context, Result};
+    use std::path::PathBuf;
+
+    fn gone(error: &std::io::Error) -> bool {
+        error.raw_os_error() == Some(libc::ESRCH)
+    }
+    pub(super) fn all() -> Result<Vec<u32>> {
+        // SAFETY: a null buffer asks only for the size the list needs.
+        let needed = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        anyhow::ensure!(needed > 0, "Native process list is unavailable");
+        // Room for processes started between the two calls.
+        let mut pids = vec![0 as libc::pid_t; needed as usize + 64];
+        let bytes = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice()))?;
+        // SAFETY: the buffer holds `bytes` bytes of pid_t values.
+        let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        anyhow::ensure!(count > 0, "Native process list is unavailable");
+        // A full buffer may have left processes out, so occupancy would be unknown.
+        anyhow::ensure!(
+            (count as usize) < pids.len(),
+            "Native process list changed while it was read"
+        );
+        pids.truncate(count as usize);
+        Ok(pids
+            .into_iter()
+            .filter_map(|pid| u32::try_from(pid).ok().filter(|pid| *pid != 0))
+            .collect())
+    }
+    pub(super) fn executable(pid: u32) -> Result<Option<PathBuf>> {
+        use std::os::unix::ffi::OsStringExt;
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: the buffer holds PROC_PIDPATHINFO_MAXSIZE bytes.
+        let length = unsafe {
+            libc::proc_pidpath(
+                libc::c_int::try_from(pid)?,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+            )
+        };
+        if length <= 0 {
+            let error = std::io::Error::last_os_error();
+            return if gone(&error) {
+                Ok(None)
+            } else {
+                Err(error.into())
+            };
+        }
+        buffer.truncate(length as usize);
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(buffer))))
+    }
+    /// The kernel's short process name, readable for another account's process.
+    pub(super) fn name(pid: u32) -> Result<Option<String>> {
+        // SAFETY: proc_bsdshortinfo is plain old data, and the kernel writes at most `size` bytes.
+        let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+        let read = unsafe {
+            libc::proc_pidinfo(
+                libc::c_int::try_from(pid)?,
+                libc::PROC_PIDT_SHORTBSDINFO,
+                0,
+                (&raw mut info).cast(),
+                size,
+            )
+        };
+        if read <= 0 {
+            let error = std::io::Error::last_os_error();
+            return if gone(&error) {
+                Ok(None)
+            } else {
+                Err(error).context("Native process name is unavailable")
+            };
+        }
+        let name: Vec<u8> = info
+            .pbsi_comm
+            .iter()
+            .take_while(|byte| **byte != 0)
+            .map(|byte| *byte as u8)
+            .collect();
+        Ok(Some(String::from_utf8_lossy(&name).into_owned()))
+    }
+    /// The process's argv, without the executable path `kern.procargs2` puts first.
+    pub(super) fn arguments(pid: u32) -> Result<Option<Vec<Vec<u8>>>> {
+        let mut mib = [
+            libc::CTL_KERN,
+            libc::KERN_PROCARGS2,
+            libc::c_int::try_from(pid)?,
+        ];
+        let mut size: libc::size_t = 0;
+        // SAFETY: a null buffer asks only for the size.
+        if unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            let error = std::io::Error::last_os_error();
+            // The kernel answers EINVAL for a process that has exited.
+            return if gone(&error) || error.raw_os_error() == Some(libc::EINVAL) {
+                Ok(None)
+            } else {
+                Err(error.into())
+            };
+        }
+        let mut raw = vec![0u8; size];
+        // SAFETY: the buffer holds `size` bytes, and the kernel updates `size` to what it wrote.
+        if unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                raw.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            let error = std::io::Error::last_os_error();
+            return if gone(&error) || error.raw_os_error() == Some(libc::EINVAL) {
+                Ok(None)
+            } else {
+                Err(error.into())
+            };
+        }
+        raw.truncate(size);
+        Ok(Some(super::procargs(&raw)?))
+    }
+}
+/// Parses `kern.procargs2`: argc as a native int, the executable path, NUL padding, then argc
+/// NUL-terminated arguments. Environment strings follow and are never read.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn procargs(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let (count, rest) = raw
+        .split_first_chunk::<4>()
+        .context("Malformed native argument record")?;
+    let count =
+        usize::try_from(i32::from_ne_bytes(*count)).context("Malformed native argument record")?;
+    // Each argument takes at least its terminating NUL.
+    anyhow::ensure!(count <= rest.len(), "Malformed native argument record");
+    let path_end = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .context("Malformed native argument record")?;
+    let mut rest = &rest[path_end..];
+    while let [0, tail @ ..] = rest {
+        rest = tail;
+    }
+    let mut args = Vec::with_capacity(count);
+    for _ in 0..count {
+        let end = rest
+            .iter()
+            .position(|byte| *byte == 0)
+            .context("Truncated native argument record")?;
+        args.push(rest[..end].to_vec());
+        rest = &rest[end + 1..];
+    }
+    Ok(args)
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn profile_processes(_profile: &Path) -> Result<Vec<u32>> {
     bail!(
         "Native Chrome profile occupancy enumeration is unqualified on this platform; launch remains gated"
@@ -3926,6 +4152,29 @@ mod tests {
         ] {
             assert_eq!(browser_internal(&row), internal, "{row}");
         }
+    }
+    #[test]
+    fn procargs_reads_argv_after_the_executable_path_and_its_padding() {
+        let mut raw = 3i32.to_ne_bytes().to_vec();
+        raw.extend_from_slice(b"/Applications/PUBLIC Chrome\0\0\0\0");
+        raw.extend_from_slice(b"PUBLIC Chrome\0--user-data-dir=/tmp/PUBLIC profile\0\0");
+        raw.extend_from_slice(b"PUBLIC_ENV=1\0");
+        assert_eq!(
+            procargs(&raw).unwrap(),
+            [
+                b"PUBLIC Chrome".to_vec(),
+                b"--user-data-dir=/tmp/PUBLIC profile".to_vec(),
+                Vec::new(),
+            ]
+        );
+        let mut truncated = 2i32.to_ne_bytes().to_vec();
+        truncated.extend_from_slice(b"/PUBLIC\0PUBLIC");
+        assert!(procargs(&truncated).is_err());
+        assert!(procargs(b"\x01\x00").is_err());
+        assert!(procargs(&(-1i32).to_ne_bytes()).is_err());
+        let mut huge = i32::MAX.to_ne_bytes().to_vec();
+        huge.extend_from_slice(b"/PUBLIC\0");
+        assert!(procargs(&huge).is_err());
     }
     #[test]
     fn launch_and_occupancy_share_exact_case_insensitive_browser_names() {

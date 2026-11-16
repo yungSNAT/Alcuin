@@ -512,8 +512,14 @@ impl StartingHost {
             let status = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
             if status != 0 {
                 let error = std::io::Error::last_os_error();
+                // BSD kill answers EPERM for a group whose members are all zombies.
+                #[cfg(target_os = "macos")]
+                let zombie_group =
+                    error.raw_os_error() == Some(libc::EPERM) && zombie_group(child.id());
+                #[cfg(not(target_os = "macos"))]
+                let zombie_group = false;
                 let _ = child.kill();
-                if error.raw_os_error() != Some(libc::ESRCH) {
+                if error.raw_os_error() != Some(libc::ESRCH) && !zombie_group {
                     return Err(error).context("Cannot stop background process group");
                 }
             }
@@ -979,9 +985,71 @@ pub async fn run(
     ensure!(errors.is_empty(), "{}", errors.join("; "));
     Ok(())
 }
+/// Whether every process left in `group` is a zombie, so that EPERM from signalling it means
+/// nothing is left to stop.
+#[cfg(target_os = "macos")]
+fn zombie_group(group: u32) -> bool {
+    let Ok(group) = libc::pid_t::try_from(group) else {
+        return false;
+    };
+    // SAFETY: a null buffer asks only for the number of members.
+    let needed = unsafe { libc::proc_listpgrppids(group, std::ptr::null_mut(), 0) };
+    let Ok(needed) = usize::try_from(needed) else {
+        return false;
+    };
+    // Room for members that join between the two calls.
+    let mut pids = vec![0 as libc::pid_t; needed + 16];
+    let Ok(bytes) = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice())) else {
+        return false;
+    };
+    // SAFETY: the buffer holds `bytes` bytes of pid_t values.
+    let count = unsafe { libc::proc_listpgrppids(group, pids.as_mut_ptr().cast(), bytes) };
+    // A full buffer may have left members out.
+    let Ok(count) = usize::try_from(count) else {
+        return false;
+    };
+    if count >= pids.len() {
+        return false;
+    }
+    pids.truncate(count);
+    pids.into_iter()
+        .filter_map(|pid| u32::try_from(pid).ok().filter(|pid| *pid != 0))
+        .all(|pid| {
+            crate::process::ProcessIdentity::read(pid).is_ok_and(|identity| identity.is_none())
+        })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A zombie leader with a live member is not a zombie group, so EPERM there still fails.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_group_with_a_live_member_is_not_a_zombie_group() {
+        use std::os::unix::process::CommandExt;
+        let mut leader = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30 & exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = leader.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // The leader exits at once and stays a zombie until it is reaped; its sleep lives on.
+        while crate::process::ProcessIdentity::read(group)
+            .unwrap()
+            .is_some()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!zombie_group(group));
+        // SAFETY: kill takes no pointers; the group is the one this test started.
+        assert_eq!(unsafe { libc::kill(-(group as i32), libc::SIGKILL) }, 0);
+        while !zombie_group(group) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        leader.wait().unwrap();
+    }
     #[test]
     fn credentials_rotate_except_for_internal_respawn_and_artifacts_remain_private() {
         let home = tempfile::tempdir().unwrap();

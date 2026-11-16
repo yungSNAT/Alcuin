@@ -98,6 +98,15 @@ impl NativeIdentity {
     }
 }
 
+/// A temporary directory that native path walks accept: macOS keeps its temporary folder
+/// behind the /var symbolic link, which they refuse.
+#[cfg(test)]
+pub(crate) fn tempdir() -> tempfile::TempDir {
+    let parent = std::env::temp_dir();
+    #[cfg(target_os = "macos")]
+    let parent = fs::canonicalize(parent).unwrap();
+    tempfile::tempdir_in(parent).unwrap()
+}
 pub fn reject_link(path: &Path) -> Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.is_symlink() {
@@ -365,7 +374,19 @@ pub fn rename_no_replace(source: &Path, target: &Path) -> std::io::Result<()> {
             Ok(())
         }
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let source = CString::new(source.as_os_str().as_bytes())?;
+        let target = CString::new(target.as_os_str().as_bytes())?;
+        // SAFETY: both C strings live through the call. No file descriptors are borrowed.
+        if unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) } != 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (source, target);
         Err(std::io::Error::new(
