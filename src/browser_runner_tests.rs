@@ -1353,19 +1353,6 @@ impl Exchange {
         }
         if expression.contains("alcuin-dom:completed-disposition-retire") {
             assert_eq!(cfg["owner"], self.owner);
-            if matches!(self.fault, Fault::CrowdedRetirement) {
-                for index in 0..50 {
-                    let id = format!("public-unrelated-{index}");
-                    let directory = self.store.root().join(&id);
-                    std::fs::create_dir_all(&directory).unwrap();
-                    crate::storage::atomic_json(
-                        &directory.join("meta.json"),
-                        &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
-                    )
-                    .unwrap();
-                }
-                crate::sessions::READ_SESSIONS.take();
-            }
             let saved = self.store.require(&self.id).unwrap();
             assert_eq!(saved["status"], "completed");
             assert_eq!(saved["dispatch"]["state"], "completed");
@@ -1395,6 +1382,20 @@ impl Exchange {
                 ) || self.recovery_observed);
             if accepted {
                 self.retirement_marker = Some(cfg["retirementId"].clone());
+            }
+            // Marking a completed target comes just before its last authority check.
+            if matches!(self.fault, Fault::CrowdedRetirement) {
+                for index in 0..50 {
+                    let id = format!("public-unrelated-{index}");
+                    let directory = self.store.root().join(&id);
+                    std::fs::create_dir_all(&directory).unwrap();
+                    crate::storage::atomic_json(
+                        &directory.join("meta.json"),
+                        &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
+                    )
+                    .unwrap();
+                }
+                crate::sessions::READ_SESSIONS.take();
             }
             return json!(accepted);
         }
