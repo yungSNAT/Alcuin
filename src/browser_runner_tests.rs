@@ -228,6 +228,7 @@ enum Fault {
     ManualLoginTimeout,
     OwnedWork,
     UiWarningTimeout,
+    ConnectionLost,
     PageStallAfterSend,
     PrivacyRefusalAfterSend,
     StreamEndThrows,
@@ -311,6 +312,8 @@ impl Exchange {
                 ) {
                     json!([{"text":"  Too many requests.
  Contact PUBLIC@example.com  ","source":"selector","role":"alert","ariaLive":null,"selector":"[role=\"alert\"]"}])
+                } else if matches!(self.fault, Fault::ConnectionLost) {
+                    json!([{"text":"No response from ChatGPT. Check your connection. Retry","source":"selector","role":"alert","ariaLive":null,"selector":"[role=\"alert\"]"}])
                 } else {
                     json!([])
                 },
@@ -1187,7 +1190,7 @@ impl Exchange {
                 {
                     result = unloaded(result);
                 }
-                Fault::RetriedThenTimesOut => {
+                Fault::RetriedThenTimesOut | Fault::ConnectionLost => {
                     return json!({"pending":true,"stopExists":false,"strongThinkingActive":false});
                 }
                 Fault::RetriedThenGenerationFails => {
@@ -9959,6 +9962,35 @@ async fn answer_timeout_reports_a_chatgpt_ui_warning_and_keeps_the_typed_deadlin
     assert_eq!(
         f.store.require(&f.id).unwrap()["errorMessage"],
         error.to_string()
+    );
+    stop(f).await;
+}
+/// Reference 0.23.1: ChatGPT's connection notice, shown with no assistant turn, ends the wait at
+/// once rather than at the answer deadline, and neither its Retry nor a new message is sent.
+#[tokio::test]
+async fn a_connection_warning_ends_the_answer_wait_without_a_retry() {
+    let f = fixture(Fault::ConnectionLost, false).await;
+    let error = run(&f).await.unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref::<crate::browser_provider::Failure>(),
+            Some(crate::browser_provider::Failure::GenerationFailed)
+        ),
+        "{error:#}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "ChatGPT displayed a temporary-unavailable warning while waiting for the assistant: No response from ChatGPT. Check your connection. Retry"
+    );
+    assert!(presses(&f).is_empty());
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+    assert!(
+        f.store
+            .log(&f.id)
+            .unwrap()
+            .contains("Not retrying the failed turn: ChatGPT shows a warning."),
+        "{}",
+        f.store.log(&f.id).unwrap()
     );
     stop(f).await;
 }
