@@ -136,7 +136,7 @@ jobs:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
       - if: runner.os == 'macOS' || (runner.os == 'Linux' && runner.arch == 'ARM64')
-        run: cargo test --locked -- --test-threads=2
+        run: cargo test --locked --no-fail-fast -- --test-threads=2
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}

@@ -31,7 +31,13 @@ fn refusal(home: &Path, args: &[&str]) -> String {
 #[test]
 fn connection_artifacts_and_host_ports_name_the_offending_input() {
     let home = tempfile::tempdir().unwrap();
-    let absolute = |name: &str| home.path().join(name).display().to_string();
+    // The CLI names a path from its working directory, which macOS gives through the /private link.
+    let root = if cfg!(target_os = "macos") {
+        std::fs::canonicalize(home.path()).unwrap()
+    } else {
+        home.path().to_owned()
+    };
+    let absolute = |name: &str| root.join(name).display().to_string();
     let client = |name: &str| refusal(home.path(), &["bridge", "client", "--connect", name]);
     assert!(client("missing.json").contains(&format!(
         "Connection artifact not found at {}",
