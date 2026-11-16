@@ -4,7 +4,7 @@
 # then adds the folder to your user Path.
 # ALCUIN_VERSION picks a release tag such as v0.1.0 (default: the latest release).
 # ALCUIN_INSTALL_DIR is the folder for both binaries (default: %LOCALAPPDATA%\Programs\Alcuin).
-# ALCUIN_DOWNLOAD_URL replaces the release download folder, for a mirror.
+# ALCUIN_DOWNLOAD_URL replaces the release download folder, for an HTTPS mirror.
 # ALCUIN_NO_MODIFY_PATH=1 leaves your user Path alone.
 & {
     $ErrorActionPreference = 'Stop'
@@ -19,6 +19,12 @@
         'https://github.com/yungSNAT/Alcuin/releases/latest/download'
     } else {
         "https://github.com/yungSNAT/Alcuin/releases/download/$version"
+    }
+    # Over plain HTTP the archive and its checksum could be swapped together, except from this
+    # machine itself.
+    $uri = [Uri]$base
+    if (-not $uri.IsAbsoluteUri -or ($uri.Scheme -ne 'https' -and -not $uri.IsLoopback)) {
+        throw "alcuin install: $base is not an HTTPS address; nothing was installed."
     }
     $dir = if ($env:ALCUIN_INSTALL_DIR) { $env:ALCUIN_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\Alcuin' }
     $name = 'alcuin-x86_64-pc-windows-msvc'
