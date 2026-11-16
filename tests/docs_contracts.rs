@@ -368,3 +368,25 @@ fn mcp_tool_reference_covers_every_tool_input_and_output() {
     }
     assert!(missing.is_empty(), "{missing:#?}");
 }
+#[test]
+fn command_substitutions_and_git_lines_keep_their_own_flags() {
+    let home = tempfile::tempdir().unwrap();
+    fs::write(
+        home.path().join("files.md"),
+        concat!(
+            "alcuin -p \"Review\" --file $(git diff --name-only main...)\n",
+            "In PowerShell, write `--file (git diff --diff-filter=d main...)`.\n",
+            "git diff --name-only main... > changed.txt\n",
+            "alcuin --stale-flag --file \"${files[@]}\"\n",
+        ),
+    )
+    .unwrap();
+    let result = docs_check::check(home.path(), &["files.md".into()]).unwrap();
+    let flags: Vec<_> = result
+        .issues
+        .iter()
+        .map(|issue| issue.flag.as_str())
+        .collect();
+    // git's options, run alone or inside $(...) or PowerShell's (...), are not Alcuin's.
+    assert_eq!(flags, ["--stale-flag"]);
+}
