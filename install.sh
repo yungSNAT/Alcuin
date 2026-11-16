@@ -44,8 +44,8 @@ main() {
 	# A signal exits through the EXIT trap, which cleans up and, between the renames below,
 	# puts the old binaries back.
 	trap 'exit 1' HUP INT TERM
-	curl -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "could not download $base/$name.tar.gz"
-	curl -fsSL "$base/$name.tar.gz.sha256" -o "$tmp/$name.tar.gz.sha256" || fail "could not download $base/$name.tar.gz.sha256"
+	curl --proto-redir =https -fsSL "$base/$name.tar.gz" -o "$tmp/$name.tar.gz" || fail "could not download $base/$name.tar.gz"
+	curl --proto-redir =https -fsSL "$base/$name.tar.gz.sha256" -o "$tmp/$name.tar.gz.sha256" || fail "could not download $base/$name.tar.gz.sha256"
 	expected="$(cut -d ' ' -f 1 "$tmp/$name.tar.gz.sha256")"
 	actual="$(sum "$tmp/$name.tar.gz" | cut -d ' ' -f 1)"
 	[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for $name.tar.gz; nothing was installed."
