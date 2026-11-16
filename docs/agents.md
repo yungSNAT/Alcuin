@@ -16,7 +16,7 @@ It lands in `~/.agents/skills/alcuin`, linked into each agent's own skills folde
 npx skills add yungSNAT/Alcuin --skill alcuin --agent claude-code codex --yes
 ```
 
-The [Claude Code plugin](mcp.md#claude-code-plugin) adds the same skill together with the MCP server.
+The [Claude Code plugin](mcp.md#claude-code-plugin) adds the same skill together with the MCP server. For Codex, one `codex mcp add` command adds the server ([Codex in one command](mcp.md#codex-in-one-command)).
 
 ## What the skill asks of the agent
 

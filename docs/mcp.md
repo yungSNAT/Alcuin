@@ -34,6 +34,16 @@ With `alcuin` and `alcuin-mcp` on your `PATH`, add this repository as a plugin m
 
 The plugin runs `alcuin-mcp` with `ORACLE_ENGINE=browser` and the default session folder and browser profile, the same server as `alcuin bridge claude-config --local-browser` prints, and adds the `alcuin` skill. `/mcp` lists it as `plugin:alcuin:alcuin`; if it shows as failed, check first that `alcuin-mcp` is on the `PATH` Claude Code started with. The plugin's files come from this repository's default branch; the binaries are the ones you downloaded. For another session folder or profile, use the entry printed below instead.
 
+## Codex in one command
+
+With `alcuin` and `alcuin-mcp` on your `PATH`, add the server to Codex with the Codex CLI:
+
+```sh
+codex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp
+```
+
+Codex writes it to `~/.codex/config.toml` as `[mcp_servers.alcuin]`, and `codex mcp list` shows it. It runs `alcuin-mcp` with `ORACLE_ENGINE=browser` and the default session folder and browser profile, the server the Claude Code plugin runs. For another session folder or profile, use the entry printed below instead.
+
 ## Claude Code and Codex on the browser's machine
 
 With `alcuin` and `alcuin-mcp` on your `PATH`, print an entry that uses the browser profile the CLI signs in to:
@@ -51,4 +61,4 @@ Without `--local-browser`, the same commands print entries for the remote browse
 
 Alcuin looks for Chrome and Edge on Windows, and for Chrome, Chromium, Brave and Edge on Linux. To use another Chromium-based browser, such as Brave on Windows, set `CHROME_PATH` to its executable in the entry's `env`; the server passes it on to the runs it starts. `alcuin bridge doctor` shows the browser it found.
 
-<sub>Checked with the v0.1.0 release on 13 November 2026: the bundle's checksum and attestation, both config commands with and without `--local-browser`, `bridge doctor` with and without `CHROME_PATH`, and the server's `tools/list`. Installing the bundle in Claude Desktop and calling the tools from a client need a signed-in ChatGPT account and were not run. On 15 November 2026 the plugin was installed from a local copy of this repository into an empty Claude Code 2.1.322 configuration, which listed its skill and server; the server connected with the v0.1.0 `alcuin-mcp`.</sub>
+<sub>Checked with the v0.1.0 release on 13 November 2026: the bundle's checksum and attestation, both config commands with and without `--local-browser`, `bridge doctor` with and without `CHROME_PATH`, and the server's `tools/list`. Installing the bundle in Claude Desktop and calling the tools from a client need a signed-in ChatGPT account and were not run. On 15 November 2026 the plugin was installed from a local copy of this repository into an empty Claude Code 2.1.322 configuration, which listed its skill and server; the server connected with the v0.1.0 `alcuin-mcp`. On 16 November 2026 the `codex mcp add` command above wrote that entry into an empty Codex CLI 0.169.0 home, and `codex mcp list` listed it as enabled.</sub>

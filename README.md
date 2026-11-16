@@ -76,6 +76,8 @@ For Claude Code, with both binaries on your `PATH`, install the plugin from this
 /plugin install alcuin@alcuin
 ```
 
+In Codex, `codex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp` adds the same server.
+
 For Codex or Claude Code on the machine that runs the browser, `alcuin bridge codex-config --local-browser` and `alcuin bridge claude-config --local-browser` print a server entry that uses the browser profile you sign in to under [Use](#use). Without `--local-browser` they print entries for the remote browser bridge: the Codex entry points at an `alcuin serve` host, and the Claude Code entry uses a remote host only when your config or `ORACLE_REMOTE_HOST` names one, otherwise a separate `~/.oracle-local` home and browser profile.
 
 Browser runs need a Chromium-based browser. Alcuin looks for Chrome and Edge on Windows, and for Chrome, Chromium, Brave and Edge on Linux; to use another, such as Brave on Windows, set `CHROME_PATH` to its executable.
