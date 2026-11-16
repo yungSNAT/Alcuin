@@ -287,15 +287,3 @@ const readStreamFailure = turn => {
   }
   return null;
 };
-  const counts = node => (turn.compareDocumentPosition(node) & 4) && !node.closest(user) && shown(node);
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let line = null;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node.data.replace(/\s+/g, ' ').trim();
-    if (/^(?:error in message stream|message delivery timed out\b.{0,80})$/i.test(text) &&
-        counts(node.parentElement) && !node.parentElement.closest(answer)) line = text;
-  }
-  const retry = line && Array.from(document.querySelectorAll('button, [role="button"]')).filter(node => counts(node) &&
-    (node.innerText || node.textContent || node.getAttribute('aria-label') || '').trim().toLowerCase() === 'retry').at(-1);
-  return retry ? { line, retry } : null;
-};
