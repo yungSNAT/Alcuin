@@ -98,6 +98,15 @@ impl NativeIdentity {
     }
 }
 
+/// A temporary directory that native path walks accept: macOS keeps its temporary folder
+/// behind the /var symbolic link, which they refuse.
+#[cfg(test)]
+pub(crate) fn tempdir() -> tempfile::TempDir {
+    let parent = std::env::temp_dir();
+    #[cfg(target_os = "macos")]
+    let parent = fs::canonicalize(parent).unwrap();
+    tempfile::tempdir_in(parent).unwrap()
+}
 pub fn reject_link(path: &Path) -> Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.is_symlink() {

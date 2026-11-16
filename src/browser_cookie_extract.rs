@@ -310,7 +310,7 @@ mod tests {
     }
     #[test]
     fn stable_wal_snapshot_selects_only_usable_requested_provider_cookies_without_source_writes() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::native_fs::tempdir();
         let source = home.path().join("PUBLIC-Cookies");
         let temporary = home.path().join("PUBLIC-copies");
         let db = database(&source, true);
@@ -457,7 +457,7 @@ mod tests {
     }
     #[test]
     fn snapshot_refuses_mutation_and_cancellation_and_removes_partial_private_files() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::native_fs::tempdir();
         let source = home.path().join("Cookies");
         let temporary = home.path().join("PUBLIC-copies");
         fs::write(&source, b"PUBLIC original").unwrap();

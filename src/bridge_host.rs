@@ -512,8 +512,13 @@ impl StartingHost {
             let status = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
             if status != 0 {
                 let error = std::io::Error::last_os_error();
+                // BSD kill answers EPERM for a group whose members are all zombies.
+                let zombie_group = cfg!(target_os = "macos")
+                    && error.raw_os_error() == Some(libc::EPERM)
+                    && crate::process::ProcessIdentity::read(child.id())
+                        .is_ok_and(|identity| identity.is_none());
                 let _ = child.kill();
-                if error.raw_os_error() != Some(libc::ESRCH) {
+                if error.raw_os_error() != Some(libc::ESRCH) && !zombie_group {
                     return Err(error).context("Cannot stop background process group");
                 }
             }
