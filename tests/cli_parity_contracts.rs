@@ -1305,3 +1305,54 @@ fn program_options_reach_every_command_like_commander() {
         stdout(&output)
     );
 }
+
+#[test]
+fn root_search_normalisation_uses_the_parser_whitespace_contract() {
+    let home = tempfile::tempdir().unwrap();
+    let args = [
+        "--engine",
+        "api",
+        "--render",
+        "-p",
+        "PUBLIC search normalisation contract",
+    ];
+    let baseline = cli(home.path(), &args);
+    assert_eq!(baseline.status.code(), Some(0), "{}", stderr(&baseline));
+    assert_eq!(stderr(&baseline), "");
+    let mut invalid_args = args.to_vec();
+    invalid_args.extend(["--search", "sometimes"]);
+    let invalid = cli(home.path(), &invalid_args);
+    assert_eq!(invalid.status.code(), Some(1));
+    assert_eq!(stdout(&invalid), "");
+    assert_eq!(
+        stderr(&invalid),
+        "error: option '--search <mode>' argument 'sometimes' is invalid. Search mode must be \"on\" or \"off\".\n(use --help for usage)\n"
+    );
+    for search in [
+        "on",
+        "Off",
+        "true",
+        "FALSE",
+        "1",
+        "0",
+        "YeS",
+        "no",
+        "\u{feff}on\u{feff}",
+        "\u{feff} OFF \u{feff}",
+        "\u{feff}YeS\u{feff}",
+        "\u{feff}0\u{feff}",
+    ] {
+        let mut request = args.to_vec();
+        request.extend(["--search", search]);
+        let output = cli(home.path(), &request);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{search:?}: {}",
+            stderr(&output)
+        );
+        assert_eq!(stderr(&output), "");
+        assert_eq!(stdout(&output), stdout(&baseline), "{search:?}");
+    }
+    assert!(!home.path().join("sessions").exists());
+}
