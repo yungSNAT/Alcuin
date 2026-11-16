@@ -821,7 +821,6 @@ return (() => {
 
       const sourceMessageId = userMessageId(lastUserMessage, lastUserContainer);
       const original = readUserOriginalSource(lastUserMessage, lastUserContainer, sourceMessageId);
-      const authenticated = !loginButtonExists && (promptReady || sendExists || stopExists || assistantCount > 0);
       return {
         title: normalize(document.title),
         url: location.href,
@@ -830,7 +829,6 @@ return (() => {
         sendExists,
         promptReady,
         loginButtonExists,
-        authenticated,
         assistantCount,
         assistantSnapshot,
         completionVisible,

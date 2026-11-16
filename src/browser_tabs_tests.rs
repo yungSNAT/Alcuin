@@ -11,7 +11,7 @@ fn target() -> Value {
     json!({"targetId":"PUBLIC-target","url":"https://chatgpt.com/c/public-a","title":"PUBLIC historical tab","type":"page"})
 }
 fn info() -> Value {
-    json!({"url":"https://chatgpt.com/c/public-a","authenticated":true,"lastAssistantText":"PUBLIC rendered answer","assistantCount":1,"assistantFollowsLatestUser":true,"lastAssistantTurnIndex":1,"lastUserTurnIndex":0,"lastUserText":"PUBLIC prompt","lastUserMessageId":"PUBLIC-user","lastUserOriginalSourceText":"PUBLIC exact source\n  indented","lastUserOriginalSourceMessageId":"PUBLIC-user","stopExists":false,"strongThinkingActive":false,"completionVisible":true,"assistantSnapshot":{"text":"PUBLIC exact\n\nanswer","turnIndex":1,"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"}})
+    json!({"url":"https://chatgpt.com/c/public-a","lastAssistantText":"PUBLIC rendered answer","assistantCount":1,"assistantFollowsLatestUser":true,"lastAssistantTurnIndex":1,"lastUserTurnIndex":0,"lastUserText":"PUBLIC prompt","lastUserMessageId":"PUBLIC-user","lastUserOriginalSourceText":"PUBLIC exact source\n  indented","lastUserOriginalSourceMessageId":"PUBLIC-user","stopExists":false,"strongThinkingActive":false,"completionVisible":true,"assistantSnapshot":{"text":"PUBLIC exact\n\nanswer","turnIndex":1,"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"}})
 }
 #[test]
 fn snapshots_must_match_the_inspected_turn_before_ids_or_completion_are_used() {
@@ -157,6 +157,41 @@ fn positive_completion_is_stable_and_bound_to_user_and_assistant_identity() {
     tab["authenticated"] = json!(false);
     gate.observe(&mut tab, 21_000, 3, 1200);
     assert_eq!(tab["state"], "detached");
+}
+#[test]
+fn signed_in_comes_from_the_page_facts_the_inspection_returns() {
+    // A login control vetoes; otherwise any composer, send, stop control or answer shows the app.
+    for (facts, expected) in [
+        (json!({}), false),
+        (json!({"promptReady":true}), true),
+        (json!({"sendExists":true}), true),
+        (json!({"stopExists":true}), true),
+        (json!({"assistantCount":2}), true),
+        (json!({"assistantCount":0}), false),
+        (
+            json!({"loginButtonExists":true,"promptReady":true,"assistantCount":1}),
+            false,
+        ),
+        // A page value is never taken as the verdict.
+        (json!({"authenticated":true}), false),
+    ] {
+        let mut raw = info();
+        for key in [
+            "authenticated",
+            "assistantCount",
+            "stopExists",
+            "sendExists",
+            "promptReady",
+            "loginButtonExists",
+        ] {
+            raw.as_object_mut().unwrap().remove(key);
+        }
+        for (key, value) in facts.as_object().unwrap() {
+            raw[key] = value.clone();
+        }
+        let tab = summary(&endpoint(), &target(), &raw).unwrap();
+        assert_eq!(tab["authenticated"], expected, "{facts}");
+    }
 }
 #[test]
 fn exact_references_precede_titles_and_ambiguous_titles_refuse_selection() {
