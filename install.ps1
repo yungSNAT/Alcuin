@@ -23,7 +23,8 @@
     # Over plain HTTP the archive and its checksum could be swapped together, except from this
     # machine itself.
     $uri = [Uri]$base
-    if (-not $uri.IsAbsoluteUri -or ($uri.Scheme -ne 'https' -and -not $uri.IsLoopback)) {
+    $plain = $uri.IsAbsoluteUri -and $uri.Scheme -eq 'http' -and $uri.IsLoopback
+    if (-not ($uri.IsAbsoluteUri -and $uri.Scheme -eq 'https') -and -not $plain) {
         throw "alcuin install: $base is not an HTTPS address; nothing was installed."
     }
     $dir = if ($env:ALCUIN_INSTALL_DIR) { $env:ALCUIN_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\Alcuin' }
@@ -35,8 +36,19 @@
         # Windows PowerShell 5.1 may not offer TLS 1.2 by default, which GitHub requires. The
         # setting is the whole process's, so it is put back afterwards.
         [Net.ServicePointManager]::SecurityProtocol = $protocols -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest "$base/$name.zip" -OutFile "$tmp\$name.zip" -UseBasicParsing
-        Invoke-WebRequest "$base/$name.zip.sha256" -OutFile "$tmp\$name.zip.sha256" -UseBasicParsing
+        foreach ($file in "$name.zip", "$name.zip.sha256") {
+            $response = Invoke-WebRequest "$base/$file" -OutFile "$tmp\$file" -UseBasicParsing -PassThru
+            # Windows PowerShell 5.1 follows a redirect from HTTPS to plain HTTP, so where each
+            # file came from is checked: HTTPS, or the plain HTTP folder on this machine above.
+            $from = if ($response.BaseResponse.ResponseUri) {
+                $response.BaseResponse.ResponseUri
+            } else {
+                $response.BaseResponse.RequestMessage.RequestUri
+            }
+            if ($from.Scheme -ne 'https' -and -not ($plain -and $from.Authority -eq $uri.Authority)) {
+                throw "alcuin install: $base/$file was redirected to $from, which is not HTTPS; nothing was installed."
+            }
+        }
         $expected = (Get-Content "$tmp\$name.zip.sha256" -Raw).Trim().Split(' ')[0]
         # .NET rather than Get-FileHash and Expand-Archive, which live in modules that a
         # PowerShell started from another version's environment may fail to load.
@@ -97,11 +109,12 @@
                             Move-Item $old $target
                         } catch {
                             # Held open by another program, it can still be read: a copy goes
-                            # back through the staging name, and a later install removes the
-                            # held one.
+                            # back, under a name of its own so the staged new binary is kept,
+                            # and a later install removes the held one.
+                            $copy = "$target.$([Guid]::NewGuid().ToString('N')).old"
                             try {
-                                Copy-Item $old "$target.new"
-                                Move-Item "$target.new" $target
+                                Copy-Item $old $copy
+                                Move-Item $copy $target
                             } catch {
                                 if (Test-Path $new) {
                                     Move-Item $new $target
