@@ -1,6 +1,6 @@
 # Linux
 
-The release runs on x86_64 Linux with glibc 2.39 or later, such as Ubuntu 24.04 ([Install](install.md#linux)). There is no arm64 build; on other machines, build from source.
+The release runs on x86_64 Linux with glibc 2.39 or later, such as Ubuntu 24.04 ([Install](install.md#linux)), and on aarch64 (64-bit Arm) Linux with the same glibc from the first release after v0.1.0, which has no aarch64 build. On other machines, build from source.
 
 ## The browser
 
