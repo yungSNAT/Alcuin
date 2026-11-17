@@ -710,11 +710,13 @@ pub fn format_report(report: &Report) -> String {
 }
 
 /// Whether a file was modified after the session's creation, to the millisecond, as `createdAt`
-/// has millisecond precision. A time jiff cannot hold counts as changed.
+/// has millisecond precision. Milliseconds are floored, so a time before 1970 falls in the right
+/// one. A time jiff cannot hold counts as changed.
 fn changed_after(modified: std::time::SystemTime, created: jiff::Timestamp) -> bool {
+    let millis = |at: jiff::Timestamp| at.as_nanosecond().div_euclid(1_000_000);
     jiff::Timestamp::try_from(modified)
         .ok()
-        .is_none_or(|modified| modified.as_millisecond() > created.as_millisecond())
+        .is_none_or(|modified| millis(modified) > millis(created))
 }
 
 #[cfg(test)]

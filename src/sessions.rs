@@ -1291,8 +1291,8 @@ pub fn merge_artifacts(current: &Value, additions: &Value, basis: &Value) -> Val
 /// The latest of `times` that jiff can hold.
 fn latest(times: impl Iterator<Item = std::time::SystemTime>) -> Option<jiff::Timestamp> {
     times
+        .filter_map(|modified| jiff::Timestamp::try_from(modified).ok())
         .max()
-        .and_then(|modified| jiff::Timestamp::try_from(modified).ok())
 }
 
 #[cfg(test)]
