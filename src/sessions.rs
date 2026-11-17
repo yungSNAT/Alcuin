@@ -1298,6 +1298,9 @@ mod deadline_tests {
         let shape = regex::Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$").unwrap();
         let text = timestamp();
         assert!(shape.is_match(&text), "{text}");
+        // `timestamp` truncates to the millisecond, as chrono's `SecondsFormat::Millis` did.
+        let last = jiff::Timestamp::new(1_792_976_523, 999_999_999).unwrap();
+        assert_eq!(format!("{last:.3}"), "2026-10-26T01:02:03.999Z");
     }
     #[test]
     fn a_contended_cleanup_update_respects_its_remaining_deadline_without_mutation() {
