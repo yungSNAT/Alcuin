@@ -48,7 +48,7 @@ alcuin ground <id>
 
 `status` lists recent sessions with their IDs. `session <id> --render` prints a saved answer. `ground <id>` flags citations (`path:line`) that point past the end of a sent file or at a file that was not sent, and quotes found in neither the files nor the prompt. It exits 0 when it flags nothing, 1 when it flags something and 2 when it cannot check, such as for an unknown session. Add `--json` for every citation and quote with its status.
 
-To continue a conversation, pass `--followup <id>` with a new `-p`. An API run can be continued only if it was started with `--store`.
+To continue a conversation, pass `--followup <id>` with a new `-p`. An API run can be continued only if it was started with `--store` or is itself a follow-up.
 
 ## Next
 
