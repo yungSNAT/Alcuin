@@ -70,8 +70,9 @@ pub(crate) fn saved_partial(meta: &Value) -> bool {
 pub(crate) fn answered(status: &Value) -> bool {
     matches!(status.as_str(), Some("completed" | "partial"))
 }
+/// The current UTC time in RFC 3339 with milliseconds, truncated, as `2026-10-26T01:02:03.456Z`.
 pub fn timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    format!("{:.3}", jiff::Timestamp::now())
 }
 
 #[derive(Clone, Debug)]
@@ -961,19 +962,19 @@ impl SessionStore {
         let Some(started) = current["startedAt"]
             .as_str()
             .or(current["createdAt"].as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .and_then(|s| s.parse::<jiff::Timestamp>().ok())
         else {
             return Ok(None);
         };
-        let mut anchor = started.with_timezone(&chrono::Utc);
+        let mut anchor = started;
         if current["options"]["zombieUseLastActivity"] == true
             && let Some(activity) = self.last_activity(id, &current["model"], &runs)?
         {
             anchor = activity;
         }
         let max_age = zombie_max_age(current);
-        let stale = chrono::Utc::now().signed_duration_since(anchor);
-        if stale.to_std().is_ok_and(|stale| stale > max_age) {
+        let stale = jiff::Timestamp::now().duration_since(anchor);
+        if Duration::try_from(stale).is_ok_and(|stale| stale > max_age) {
             Ok(Some(json!({
                 "status": "error",
                 "errorMessage": format!(
@@ -993,7 +994,7 @@ impl SessionStore {
         id: &str,
         model: &Value,
         runs: &[Value],
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    ) -> Result<Option<jiff::Timestamp>> {
         let dir = self.directory(id)?;
         let mut paths = vec![dir.join("output.log")];
         for model in std::iter::once(model).chain(runs.iter().map(|run| &run["model"])) {
@@ -1005,7 +1006,7 @@ impl SessionStore {
             .iter()
             .filter_map(|path| fs::symlink_metadata(path).ok()?.modified().ok())
             .max()
-            .map(chrono::DateTime::<chrono::Utc>::from))
+            .and_then(|modified| jiff::Timestamp::try_from(modified).ok()))
     }
     /// Capacity release records worker death without deleting dispatch or target evidence.
     pub fn release_dead_worker_capacity(&self, id: &str) -> Result<Value> {
@@ -1150,12 +1151,12 @@ pub fn filter_range(
     limit: usize,
 ) -> (Vec<Value>, usize, bool) {
     if !include_all {
-        let cutoff = chrono::Utc::now().timestamp_millis() as f64 - hours * 3600000.0;
+        let cutoff = jiff::Timestamp::now().as_millisecond() as f64 - hours * 3600000.0;
         entries.retain(|meta| {
             meta["createdAt"]
                 .as_str()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .is_some_and(|time| time.timestamp_millis() as f64 >= cutoff)
+                .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+                .is_some_and(|time| time.as_millisecond() as f64 >= cutoff)
         });
     }
     let total = entries.len();

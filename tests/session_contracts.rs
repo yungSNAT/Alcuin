@@ -4,6 +4,7 @@ use alcuin::{
     sessions::{self, SessionStore, merge_artifacts, merge_browser},
     storage::{self, DirectoryLock},
 };
+use jiff::SignedDuration;
 use serde_json::{Value, json};
 use std::{fs, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -573,7 +574,7 @@ fn native_lock_survives_owner_crash_and_is_recovered() {
         .unwrap();
     assert!(!path.exists());
 }
-fn running(store: &SessionStore, slug: &str, age: chrono::Duration, extra: Value) -> String {
+fn running(store: &SessionStore, slug: &str, age: SignedDuration, extra: Value) -> String {
     let created = store
         .create(
             json!({"prompt":"PUBLIC zombie contract","model":"gpt-6-astra"}),
@@ -582,7 +583,7 @@ fn running(store: &SessionStore, slug: &str, age: chrono::Duration, extra: Value
         )
         .unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
-    let started = (chrono::Utc::now() - age).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let started = format!("{:.3}", jiff::Timestamp::now() - age);
     store
         .update(&id, |current| {
             let mut patch = json!({"status":"running","startedAt":started,"mode":"api"});
@@ -597,7 +598,7 @@ fn running(store: &SessionStore, slug: &str, age: chrono::Duration, extra: Value
 fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path());
-    let hours = chrono::Duration::hours;
+    let hours = SignedDuration::from_hours;
     let current = ProcessIdentity::current().unwrap();
     let zombie = |id: &str| store.reconcile_unverified_zombie(id).unwrap();
     // Unverifiable workers past the default hour are marked; dispatch evidence keeps recovery.
@@ -631,10 +632,10 @@ fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
             hours(3),
             json!({"lifecycle":{"workerPid":current.pid}}),
         ),
-        ("young", chrono::Duration::minutes(10), json!({})),
+        ("young", SignedDuration::from_mins(10), json!({})),
         (
             "long-timeout",
-            chrono::Duration::minutes(90),
+            SignedDuration::from_mins(90),
             json!({"options":{"timeoutSeconds":7200}}),
         ),
         (
@@ -652,7 +653,7 @@ fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
     let explicit = running(
         &store,
         "explicit",
-        chrono::Duration::seconds(3),
+        SignedDuration::from_secs(3),
         json!({"options":{"zombieTimeoutMs":1000}}),
     );
     assert_eq!(
@@ -694,11 +695,11 @@ fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
 fn status_listing_marks_unverifiable_zombies_and_leaves_live_workers() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path());
-    let stale = running(&store, "stale", chrono::Duration::hours(2), json!({}));
+    let stale = running(&store, "stale", SignedDuration::from_hours(2), json!({}));
     let live = running(
         &store,
         "live",
-        chrono::Duration::hours(2),
+        SignedDuration::from_hours(2),
         json!({"lifecycle":{"processIdentity":ProcessIdentity::current().unwrap()}}),
     );
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))

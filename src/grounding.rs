@@ -563,7 +563,7 @@ fn current_files(
 ) -> Result<(Vec<SentFile>, [Vec<String>; 2])> {
     let created = meta["createdAt"]
         .as_str()
-        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .and_then(|at| at.parse::<jiff::Timestamp>().ok())
         .with_context(|| format!("Session \"{id}\" has no valid creation time."))?;
     let options = &meta["options"];
     let inputs: Vec<String> = options["file"]
@@ -586,8 +586,9 @@ fn current_files(
             .and_then(|metadata| metadata.modified())
             .with_context(|| format!("Cannot read {}", file.display_path))?;
         // createdAt has millisecond precision.
-        if chrono::DateTime::<chrono::Utc>::from(modified).timestamp_millis()
-            > created.timestamp_millis()
+        if jiff::Timestamp::try_from(modified)
+            .ok()
+            .is_none_or(|modified| modified.as_millisecond() > created.as_millisecond())
         {
             changed.push(file.display_path.clone());
         }

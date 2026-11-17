@@ -580,9 +580,9 @@ fn retry_after(headers: &reqwest::header::HeaderMap, now_ms: i64) -> Option<Dura
                 .map(|seconds| seconds * 1000.0)
                 .ok()
                 .or_else(|| {
-                    chrono::DateTime::parse_from_rfc2822(value)
+                    jiff::fmt::rfc2822::parse(value)
                         .ok()
-                        .map(|date| (date.timestamp_millis() - now_ms) as f64)
+                        .map(|date| (date.timestamp().as_millisecond() - now_ms) as f64)
                 })
         })?;
     (millis.is_finite() && (0.0..60_000.0).contains(&millis))
@@ -760,7 +760,7 @@ impl HttpProvider {
                 .as_ref()
                 .ok()
                 .and_then(|response| {
-                    retry_after(response.headers(), chrono::Utc::now().timestamp_millis())
+                    retry_after(response.headers(), jiff::Timestamp::now().as_millisecond())
                 })
                 .unwrap_or_else(|| Duration::from_millis((500u64 << attempt).min(8000)));
             attempt += 1;
@@ -860,7 +860,7 @@ impl HttpProvider {
                     if chat.get("id").is_none() {
                         chat["id"] = json!(format!(
                             "openrouter-{}",
-                            chrono::Utc::now().timestamp_millis()
+                            jiff::Timestamp::now().as_millisecond()
                         ));
                     }
                     observer.response(&chat)?;
@@ -1022,7 +1022,7 @@ pub fn chat_response(response: &Value) -> Value {
     let text = response["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("");
-    json!({"id":response["id"].as_str().map(str::to_owned).unwrap_or_else(||format!("openrouter-{}",chrono::Utc::now().timestamp_millis())),"status":"completed","output_text":[text],"output":[{"type":"text","text":text}],"usage":chat_usage(&response["usage"])})
+    json!({"id":response["id"].as_str().map(str::to_owned).unwrap_or_else(||format!("openrouter-{}",jiff::Timestamp::now().as_millisecond())),"status":"completed","output_text":[text],"output":[{"type":"text","text":text}],"usage":chat_usage(&response["usage"])})
 }
 pub fn text_output(response: &Value) -> String {
     if let Some(parts) = response["output_text"]

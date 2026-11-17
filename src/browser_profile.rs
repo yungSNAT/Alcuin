@@ -349,12 +349,12 @@ impl ProfileRegistry {
                         Err(error) => Err(error),
                     }).transpose()?.unwrap_or(false);
                     anyhow::ensure!(!retiring, "Fresh browser profile is being retired; admission is closed");
-                    prune(registry, chrono::Utc::now().timestamp_millis())?;
+                    prune(registry, jiff::Timestamp::now().as_millisecond())?;
                     let leases = registry["leases"].as_array().unwrap();
                     holding = holding_sessions(leases.iter().filter(|l| l["capacityReleased"] != true));
                     let records = waiters["waiters"].as_array_mut().unwrap();
                     records.retain(|w| !leases.iter().any(|l| l["waiterId"] == w["id"] && same_admission(l, w))
-                        && (fresh(w, chrono::Utc::now().timestamp_millis()) || record_liveness(w) != Liveness::Dead));
+                        && (fresh(w, jiff::Timestamp::now().as_millisecond()) || record_liveness(w) != Liveness::Dead));
                     if let Some(prior) = leases.iter().find(|l| l["id"] == lease_id && l["waiterId"] == waiter_id && l["processIdentity"] == json!(process) && l["sessionId"] == session_id) {
                         return Ok((Some(prior.clone()), 1, false));
                     }
@@ -492,7 +492,7 @@ impl ProfileRegistry {
             "Browser attachment markers are malformed; preserving ownership"
         );
         let before = value.clone();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = jiff::Timestamp::now().as_millisecond();
         let rows = value["attachments"].as_array_mut().unwrap();
         rows.retain(|row| attachment_active(row, now));
         let result = edit(rows);
@@ -538,7 +538,7 @@ impl ProfileRegistry {
         let lock =
             DirectoryLock::acquire_until(&self.path.join("oracle-tab-leases.lock"), deadline)?;
         self.edit_attachments(Some(deadline), |rows| {
-            rows.push(json!({"id":id,"processIdentity":process,"createdAtMs":chrono::Utc::now().timestamp_millis()}));
+            rows.push(json!({"id":id,"processIdentity":process,"createdAtMs":jiff::Timestamp::now().as_millisecond()}));
         })?;
         lock.release()?;
         Ok(AttachMarker {
@@ -717,7 +717,7 @@ impl ProfileRegistry {
     }
     pub fn reclaim_dead_capacity(&self) -> Result<Value> {
         self.transaction(|registry, _| {
-            prune(registry, chrono::Utc::now().timestamp_millis())?;
+            prune(registry, jiff::Timestamp::now().as_millisecond())?;
             Ok(registry.clone())
         })
     }
@@ -1268,9 +1268,10 @@ fn uuid_shaped(v: &Value) -> bool {
         .is_some_and(|s| s.len() == 36 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
 }
 fn date(v: &Value) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(v.as_str()?)
+    v.as_str()?
+        .parse::<jiff::Timestamp>()
         .ok()
-        .map(|d| d.timestamp_millis())
+        .map(jiff::Timestamp::as_millisecond)
 }
 fn fresh(v: &Value, now: i64) -> bool {
     date(&v["updatedAt"]).is_none_or(|then| now.saturating_sub(then) <= STALE_MS)
@@ -1656,7 +1657,7 @@ mod tests {
         let ahead = registry.mark_attachment(soon()).unwrap();
         let mut moved = attachments();
         moved["attachments"][0]["createdAtMs"] =
-            json!(chrono::Utc::now().timestamp_millis() + 60_000);
+            json!(jiff::Timestamp::now().as_millisecond() + 60_000);
         atomic_json(&home.path().join(ATTACHMENTS), &moved).unwrap();
         assert!(registry.empty_disposal_lock(soon()).is_err());
         drop(ahead);
@@ -1665,7 +1666,7 @@ mod tests {
         let mut dead = current.clone();
         dead.native_start += 1;
         assert_eq!(dead.liveness(), Liveness::Dead);
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = jiff::Timestamp::now().as_millisecond();
         atomic_json(
             &home.path().join(ATTACHMENTS),
             &json!({"version":1,"attachments":[
@@ -2608,7 +2609,7 @@ mod tests {
         let lease = json!({"id":"retained","pid":dead.pid,"processStartedAtMs":dead.started_at_ms,"processIdentity":dead,"sessionId":"public-session","chromeHost":"127.0.0.1","chromePort":9222,"chromeTargetId":"PUBLIC-TARGET","targetDispositionPending":true,"promptSubmitted":false,"createdAt":old,"updatedAt":old,"unknownHistorical":{"mustRemain":true},"uncertainSubmission":{"id":"PUBLIC-RESERVATION"}});
         let mut registry = json!({"version":1,"leases":[lease],"unknownTopLevel":17});
         validate_registry(&registry, &json!({"version":1,"waiters":[]})).unwrap();
-        prune(&mut registry, chrono::Utc::now().timestamp_millis()).unwrap();
+        prune(&mut registry, jiff::Timestamp::now().as_millisecond()).unwrap();
         assert_eq!(registry["leases"][0]["capacityReleased"], true);
         assert_eq!(
             registry["leases"][0]["uncertainSubmission"]["id"],
@@ -2620,7 +2621,7 @@ mod tests {
         );
         assert_eq!(registry["unknownTopLevel"], 17);
         let retained = registry.clone();
-        prune(&mut registry, chrono::Utc::now().timestamp_millis()).unwrap();
+        prune(&mut registry, jiff::Timestamp::now().as_millisecond()).unwrap();
         assert_eq!(registry, retained);
     }
     #[test]
@@ -2642,7 +2643,7 @@ mod tests {
             }
             let mut registry = json!({"version":1,"leases":[lease]});
             let before = registry.clone();
-            prune(&mut registry, chrono::Utc::now().timestamp_millis()).unwrap();
+            prune(&mut registry, jiff::Timestamp::now().as_millisecond()).unwrap();
             assert_eq!(registry, before);
         }
     }
@@ -2849,7 +2850,7 @@ mod tests {
                 })
                 .unwrap();
             let mut pruned = before.clone();
-            prune(&mut pruned, chrono::Utc::now().timestamp_millis()).unwrap();
+            prune(&mut pruned, jiff::Timestamp::now().as_millisecond()).unwrap();
             assert_eq!(pruned, before, "{patch}");
         }
     }
@@ -2867,7 +2868,7 @@ mod tests {
         let mut records = registry.records().unwrap();
         records["leases"][0]["processIdentity"] = malformed;
         let before = records.clone();
-        prune(&mut records, chrono::Utc::now().timestamp_millis()).unwrap();
+        prune(&mut records, jiff::Timestamp::now().as_millisecond()).unwrap();
         assert_eq!(records, before);
     }
     fn exited_identity() -> ProcessIdentity {
