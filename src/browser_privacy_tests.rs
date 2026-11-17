@@ -2921,7 +2921,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         const record=window.__oracleStreamEnd;
         window.__oracleSubmissionWitness.cleanup();window.fetch=saved;
         return record&&record.witnessId==='PUBLIC-native-witness'?record.fetch:null;
-    }}"#, collector = include_str!("../browser-scripts/submission-witness.js")), &json!([{"id":MESSAGE}]), SHORT, &cancel).await?;
+    }}"#, collector = crate::browser_dom::WITNESS), &json!([{"id":MESSAGE}]), SHORT, &cancel).await?;
     anyhow::ensure!(
         looks == "native",
         "Untouched fetch did not read as native: {looks}"
@@ -2962,13 +2962,45 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         "search-unhinted",
         "search-unselected",
         "expired",
+        "autolink",
+        "autolink-other",
+        "autolink-mislabelled",
+        "autolink-extra",
+        "escaped-unlinked",
+        "literal-link",
+        "literal-link-incomplete",
     ] {
         let checked: Result<()> = async {
         mount(page, ACTIVE, "/", "").await?;
-        let prompt = if case == "unicode" {
-            "PUBLIC e\u{301} prompt"
-        } else {
-            "PUBLIC witness prompt"
+        // ChatGPT stores a prompt holding a web address or link syntax as escaped Markdown, the
+        // address made a link (browser_commit.rs). The witness takes only that rewriting of this
+        // prompt as the prompt; another address, a link whose label differs, added text, escapes
+        // with no link, or link syntax left incomplete are not.
+        let (prompt, sent) = match case {
+            "unicode" => ("PUBLIC e\u{301} prompt", None),
+            "autolink" => (
+                "PUBLIC see https://public.example/a_b.",
+                Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\."),
+            ),
+            "autolink-other" => (
+                "PUBLIC see https://public.example/a_b.",
+                Some(r"PUBLIC see [https://other.example/a\_b](https://other.example/a\_b)\."),
+            ),
+            "autolink-mislabelled" => (
+                "PUBLIC see https://public.example/a_b.",
+                Some(r"PUBLIC see [https://public.example/a\_b](https://other.example/a\_b)\."),
+            ),
+            "autolink-extra" => (
+                "PUBLIC see https://public.example/a_b.",
+                Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\. More"),
+            ),
+            "escaped-unlinked" => ("PUBLIC witness prompt.", Some(r"PUBLIC witness prompt\.")),
+            "literal-link" => (
+                "PUBLIC type [label](target).",
+                Some(r"PUBLIC type \[label\]\(target\)\."),
+            ),
+            "literal-link-incomplete" => ("PUBLIC type [label]( now", Some(r"PUBLIC type [label]\( now")),
+            _ => ("PUBLIC witness prompt", None),
         };
         page.evaluate_with_arguments(r#"(cfg)=>{
             sessionStorage.removeItem('oracle:target-claim');
@@ -2981,7 +3013,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             window.fetch=window.PUBLIC_transport;
             document.querySelector('form').onsubmit=e=>{
                 e.preventDefault();
-                const payload={action:'next',history_and_training_disabled:cfg.case!=='privacy',messages:[{id:cfg.case==='identity'?'PUBLIC unqualified':cfg.messageId,author:{role:'user'},content:{content_type:'text',parts:[cfg.case==='source'?'PUBLIC wrong source':cfg.case==='unicode'?cfg.prompt.normalize('NFC'):cfg.prompt]}}]};
+                const payload={action:'next',history_and_training_disabled:cfg.case!=='privacy',messages:[{id:cfg.case==='identity'?'PUBLIC unqualified':cfg.messageId,author:{role:'user'},content:{content_type:'text',parts:[cfg.sent??(cfg.case==='source'?'PUBLIC wrong source':cfg.case==='unicode'?cfg.prompt.normalize('NFC'):cfg.prompt)]}}]};
                 if(cfg.case.startsWith('multimodal-')){
                     const image={content_type:'image_asset_pointer',asset_pointer:'file-service://PUBLIC-image',width:1,height:1,size_bytes:68};
                     let parts=[image,cfg.prompt];
@@ -3019,7 +3051,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 if(cfg.case==='immediate'||cfg.case==='unicode'||cfg.case==='probe-conflict')window.PUBLIC_pending();
             };
             return true;
-        }"#,&json!([{"case":case,"prompt":prompt,"messageId":MESSAGE}]),SHORT,&cancel).await?;
+        }"#,&json!([{"case":case,"prompt":prompt,"sent":sent,"messageId":MESSAGE}]),SHORT,&cancel).await?;
         let mut reservation = RendererReservation::acquire(
             page.clone(),
             "PUBLIC-witness-claim".into(),
@@ -3104,6 +3136,8 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 | "multimodal-two-images"
                 | "search-inline"
                 | "search-suffix"
+                | "autolink"
+                | "literal-link"
         );
         if case == "privacy" || case == "privacy-view" {
             assert_eq!(
@@ -3116,13 +3150,13 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
             );
         }
         // A message whose text differs from the prompt is told apart from one with a bad ID.
-        if case == "source" || case == "identity" {
+        if case == "identity" || case == "source" || !valid && sent.is_some() {
             assert_eq!(
                 observed["state"]["failureDetail"],
-                if case == "source" {
-                    "unqualified-content"
-                } else {
+                if case == "identity" {
                     "unqualified-identity"
+                } else {
+                    "unqualified-content"
                 },
                 "{case}: {observed}"
             );
@@ -3403,7 +3437,7 @@ async fn witness_closure_release_cases(page: &Cdp) -> Result<()> {
             ({collector})(cfg,{{admitted:true}},()=>{{}},()=>{{window.PUBLIC_privacyCalls++;if(window.PUBLIC_throwAtStop)throw Error('PUBLIC');return true;}});
             return true;
         }}"#,
-            collector = include_str!("../browser-scripts/submission-witness.js")
+            collector = crate::browser_dom::WITNESS
         );
         page.evaluate_with_arguments(&install, &json!([]), SHORT, &cancel)
             .await?;

@@ -24,12 +24,27 @@ const EVIDENCE: &str = include_str!("../browser-scripts/attachment-evidence.js")
 const RESET_UPLOADS: &str = include_str!("../browser-scripts/upload-reset.js");
 const FILE_PREPARE: &str = include_str!("../browser-scripts/file-input-prepare.js");
 const SEND_FOCUS: &str = include_str!("../browser-scripts/send-focus.js");
-/// `send-prepare.js` with the submission witness collector, `submission-witness.js`, in scope as
-/// `installWitness`. The native privacy checks drive that same file.
+/// The submission witness collector, `submission-witness.js`, with the Markdown decoder it shares
+/// with the commit probe in scope.
+macro_rules! witness {
+    () => {
+        concat!(
+            "(() => {\n",
+            include_str!("../browser-scripts/markdown-source.js"),
+            "return (\n",
+            include_str!("../browser-scripts/submission-witness.js"),
+            ");\n})()"
+        )
+    };
+}
+/// The collector the send installs, which the native privacy checks drive.
+#[cfg(test)]
+pub(crate) const WITNESS: &str = witness!();
+/// `send-prepare.js` with the submission witness collector in scope as `installWitness`.
 const SEND_PREPARE: &str = concat!(
-    "(...args) => {\nconst installWitness = (\n",
-    include_str!("../browser-scripts/submission-witness.js"),
-    ");\nreturn (\n",
+    "(...args) => {\nconst installWitness = ",
+    witness!(),
+    ";\nreturn (\n",
     include_str!("../browser-scripts/send-prepare.js"),
     ")(...args);\n}"
 );
@@ -1305,10 +1320,9 @@ mod upload_tests {
 
     #[test]
     fn the_send_installs_the_submission_witness_the_privacy_checks_run() {
-        // The native privacy checks drive submission-witness.js directly, so the send must
-        // install that file's collector and no copy of its own.
-        let witness = include_str!("../browser-scripts/submission-witness.js");
-        assert!(SEND_PREPARE.contains(witness));
+        // The native privacy checks drive WITNESS directly, so the send must install that
+        // collector and no copy of its own.
+        assert!(SEND_PREPARE.contains(WITNESS));
         assert_eq!(
             SEND_PREPARE
                 .matches("window.__oracleSubmissionWitness = record;")

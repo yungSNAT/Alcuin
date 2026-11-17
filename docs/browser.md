@@ -20,6 +20,12 @@ Every new request asks for Latest (GPT-6). `--model` takes `gpt-6-pro` (the brow
 
 Each new request opens a Temporary Chat. ChatGPT offers neither Deep Research nor image generation in Temporary Chat, so `--browser-research deep`, `--generate-image` and `--output` are refused before anything is sent. `--browser-research search` turns on web search.
 
+## Web addresses in the prompt
+
+Alcuin counts a send as made only when the message ChatGPT sends carries exactly your prompt. ChatGPT stores a prompt holding a web address, such as `https://example.com/a_b`, as escaped Markdown with the address made a link: `[https://example.com/a\_b](https://example.com/a\_b)`. Alcuin accepts that form in the sent message too, but only when decoding it gives your prompt exactly and each link's text and target are the address you typed. A message that differs in any other way leaves the send uncertain, with 'commitment is ambiguous (submission-witness-unavailable: unqualified-content)', and the prompt may still have reached ChatGPT: recover the session rather than sending it again ([Troubleshooting](troubleshooting.md#a-run-stopped-or-timed-out)).
+
+With `--browser-research search`, ChatGPT adds a search token to the message and Alcuin does not decode that form, so a send whose prompt holds a web address stays uncertain. Put such addresses in an attached file instead.
+
 ## Files
 
 `--file` takes files, folders and glob patterns; prefix a pattern with `!` to leave matching files out. Alcuin uploads the files as attachments rather than pasting them into the prompt:
