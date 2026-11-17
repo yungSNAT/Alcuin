@@ -335,7 +335,10 @@ pub fn build_request(
 /// Whether OpenAI keeps the run's response for at least 30 days: only when the run asked for it
 /// (`--store`) or continues a response that was kept, so it can be continued in turn.
 pub fn stores(options: &Value) -> bool {
-    options["store"] == true || options.get("previousResponseId").is_some()
+    options["store"] == true
+        || options["previousResponseId"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
 }
 #[derive(Debug, Clone)]
 pub struct ModelSettings {
