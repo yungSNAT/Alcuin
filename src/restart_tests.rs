@@ -420,6 +420,27 @@ fn restart_keeps_the_saved_notification_choice() {
     );
 }
 #[test]
+fn restart_keeps_the_saved_choice_to_keep_the_response() {
+    let home = tempfile::tempdir().unwrap();
+    let mut meta = metadata("api");
+    // A fresh run, not a follow-up, so only its own choice can keep it.
+    for key in ["previousResponseId", "followupSessionId", "followupModel"] {
+        meta["options"].as_object_mut().unwrap().remove(key);
+    }
+    let kept = |meta: &Value| {
+        saved_request(meta, home.path(), &Environment::new())
+            .unwrap()
+            .0
+            .options["store"]
+            .clone()
+    };
+    assert_eq!(kept(&meta), false, "saved before --store existed");
+    meta["options"]["store"] = json!(false);
+    assert_eq!(kept(&meta), false);
+    meta["options"]["store"] = json!(true);
+    assert_eq!(kept(&meta), true, "started with --store");
+}
+#[test]
 fn restart_routes_saved_azure_options_without_current_azure_environment() {
     let home = tempfile::tempdir().unwrap();
     let env = Environment::from([
