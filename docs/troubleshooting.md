@@ -42,7 +42,7 @@ prints '--retain-hours is not supported in this build: session pruning is not in
 
 ## Sessions, settings and the browser profile
 
-They live in `~/.oracle`, the name Oracle uses, so existing setups carry over. Set `ORACLE_HOME_DIR` to move them. A server entry printed without `--local-browser` uses a different profile, under `~/.oracle-local`, so a sign-in made with the CLI does not apply to it; see [MCP setup](mcp.md#claude-code-and-codex-on-the-browsers-machine).
+They live in `~/.oracle`, the name Oracle uses, so existing setups carry over. `ORACLE_HOME_DIR` moves the sessions and settings, and `ORACLE_BROWSER_PROFILE_DIR` the browser profile. A server entry printed without `--local-browser` uses a different profile, under `~/.oracle-local`, so a sign-in made with the CLI does not apply to it; see [MCP setup](mcp.md#claude-code-and-codex-on-the-browsers-machine).
 
 ## A remote browser
 

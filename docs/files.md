@@ -12,6 +12,14 @@ alcuin -p "Review the parser" --file src "!src/**/*_tests.rs" README.md
 
 Quote glob patterns so your shell passes them to Alcuin unexpanded. Paths are relative to the current directory.
 
+To attach the files a branch changed since it left `main`, leaving out deleted files, run from the repository's top folder:
+
+```sh
+alcuin -p "Review this change" --file $(git diff --name-only --diff-filter=d main...)
+```
+
+In PowerShell, write `--file (git diff --name-only --diff-filter=d main...)`. The `sh` form splits file names at spaces; PowerShell keeps each name whole. [Review a pull request in GitHub Actions](pull-requests.md) runs the same selection for each pull request.
+
 When Alcuin expands a folder or pattern it skips:
 
 - files and folders your `.gitignore` files exclude;

@@ -1,12 +1,12 @@
 # Install, update and remove
 
-Alcuin ships as 2 binaries, `alcuin` (the CLI) and `alcuin-mcp` (the MCP server), for Linux and Windows on x86_64, and for Linux on aarch64 (64-bit Arm) from the first release after v0.1.0. Keep them in the same folder: the MCP server starts the CLI beside it for detached runs. Every release also has `alcuin.mcpb`, an MCP bundle for Claude Desktop ([MCP setup](mcp.md#claude-desktop)).
+Alcuin ships as 2 binaries, `alcuin` (the CLI) and `alcuin-mcp` (the MCP server), for Linux and Windows on x86_64, and, from the first release after v0.1.0, for Linux on aarch64 (64-bit Arm) and macOS on Apple silicon. Keep them in the same folder: the MCP server starts the CLI beside it for detached runs. Every release also has `alcuin.mcpb`, an MCP bundle for Claude Desktop ([MCP setup](mcp.md#claude-desktop)).
 
 ## One command
 
 The install scripts download the latest release, check its SHA-256 checksum, check that `alcuin` runs on your machine and only then put both binaries in place. Running one again updates Alcuin.
 
-Linux, into `~/.local/bin` (it says so if that folder is not on your `PATH`):
+Linux, or macOS from the first release after v0.1.0, into `~/.local/bin` (it says so if that folder is not on your `PATH`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
@@ -56,6 +56,10 @@ On a 64-bit Arm machine, set `t=alcuin-aarch64-unknown-linux-gnu` instead (from 
 export PATH="$HOME/.local/bin:$PATH"
 command -v alcuin alcuin-mcp
 ```
+
+## macOS
+
+From the first release after v0.1.0, `alcuin-aarch64-apple-darwin` runs on Apple silicon; there is no Intel build. Follow the Linux steps with `t=alcuin-aarch64-apple-darwin` and `shasum -a 256 -c` in place of `sha256sum -c`. Put `~/.local/bin` on your `PATH` in `~/.zshrc`.
 
 ## Windows
 
@@ -114,6 +118,6 @@ On Windows:
 Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\Alcuin"
 ```
 
-This leaves `~/.oracle` (`%USERPROFILE%\.oracle` on Windows), which holds your saved sessions, settings and Alcuin's browser profile with its ChatGPT sign-in, or the folder `ORACLE_HOME_DIR` names. Delete it too only if you no longer want those sessions.
+This leaves `~/.oracle` (`%USERPROFILE%\.oracle` on Windows), which holds your saved sessions, settings and Alcuin's browser profile with its ChatGPT sign-in. If you set `ORACLE_HOME_DIR`, the sessions and settings are in that folder instead. Delete it too only if you no longer want those sessions.
 
 <sub>Checked on 15 November 2026: both blocks downloaded v0.1.0, passed the checksum and attestation checks and printed `0.1.0`, the Linux one on glibc 2.44 and the Windows one in PowerShell 7 with `%LOCALAPPDATA%` pointed at a scratch folder; the `PATH` lines, the version check against the release tag and both removals were run there too.</sub>

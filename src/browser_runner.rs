@@ -5417,7 +5417,9 @@ fn require_retirement_authority(
             );
         }
     }
-    for other in store.list(true)? {
+    // An empty id is not indexable, so it falls back to every session.
+    let named = creator["target"]["targetId"].as_str().unwrap_or_default();
+    for other in store.list_naming_target(named)? {
         if other["id"] == id {
             continue;
         }

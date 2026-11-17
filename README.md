@@ -15,19 +15,19 @@
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
-Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [CLI reference](docs/cli-reference.md) · [MCP setup](docs/mcp.md) · [MCP tool reference](docs/mcp-tools.md) · [Coding agents](docs/agents.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
+Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/install.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Configuration](docs/configuration.md) · [Browser runs](docs/browser.md) · [Files and limits](docs/files.md) · [A browser on another machine](docs/remote.md) · [Exit codes and errors](docs/exit-codes.md) · [Sessions and checking answers](docs/sessions.md) · [CLI reference](docs/cli-reference.md) · [MCP setup](docs/mcp.md) · [MCP tool reference](docs/mcp-tools.md) · [Coding agents](docs/agents.md) · [Pull requests in GitHub Actions](docs/pull-requests.md) · [Notifications](docs/notifications.md) · [Troubleshooting](docs/troubleshooting.md)
 
 </div>
 
-Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows and Linux.
+Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows, Linux and macOS (Apple silicon, from the first release after v0.1.0).
 
-It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. Use Oracle itself on macOS, or for Gemini, Claude or multi-model runs: see [When to choose something else](#when-to-choose-something-else).
+It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. Use Oracle itself for Gemini, Claude or multi-model runs, or on an Intel Mac: see [When to choose something else](#when-to-choose-something-else).
 
 ## Install
 
 One command installs both binaries from the latest release, after checking the archive's SHA-256 checksum and that the binary runs on your machine.
 
-Linux, into `~/.local/bin`:
+Linux, or macOS from the first release after v0.1.0, into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
@@ -39,7 +39,7 @@ Windows, in PowerShell, into `%LOCALAPPDATA%\Programs\Alcuin`, which it adds to 
 irm https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.ps1 | iex
 ```
 
-[Install](docs/install.md) covers the scripts' options. To check each step yourself, and the build provenance too, download both binaries from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest), built for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64). Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs. Each block checks the archive's SHA-256 checksum, unpacks it and, with the [GitHub CLI](https://cli.github.com/), verifies its build provenance attestation.
+[Install](docs/install.md) covers the scripts' options. To check each step yourself, and the build provenance too, download both binaries from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest), built for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64); [Install](docs/install.md#macos) covers macOS. Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs. Each block checks the archive's SHA-256 checksum, unpacks it and, with the [GitHub CLI](https://cli.github.com/), verifies its build provenance attestation.
 
 Linux (put `~/.local/bin` on your `PATH`):
 
@@ -75,6 +75,8 @@ For Claude Code, with both binaries on your `PATH`, install the plugin from this
 /plugin marketplace add yungSNAT/Alcuin
 /plugin install alcuin@alcuin
 ```
+
+In Codex, `codex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp` adds the same server.
 
 For Codex or Claude Code on the machine that runs the browser, `alcuin bridge codex-config --local-browser` and `alcuin bridge claude-config --local-browser` print a server entry that uses the browser profile you sign in to under [Use](#use). Without `--local-browser` they print entries for the remote browser bridge: the Codex entry points at an `alcuin serve` host, and the Claude Code entry uses a remote host only when your config or `ORACLE_REMOTE_HOST` names one, otherwise a separate `~/.oracle-local` home and browser profile.
 
@@ -131,11 +133,11 @@ Run `alcuin --help --verbose` for every option, or see the [CLI reference](docs/
 
 ## Settings and storage
 
-Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_*` environment variables and sessions, profiles and config live in `~/.oracle` (set `ORACLE_HOME_DIR` to move it).
+Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_*` environment variables, and sessions, config and the ChatGPT browser profile live in `~/.oracle`. `ORACLE_HOME_DIR` moves the sessions and config; the browser profile stays in `~/.oracle/browser-profile`, as in Oracle, unless `ORACLE_BROWSER_PROFILE_DIR` names another folder.
 
 ## Known limitations
 
-- Windows and Linux only. macOS, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
+- Windows, Linux and macOS on Apple silicon; macOS from the first release after v0.1.0. On macOS, CI runs the offline tests and the Chrome fixture test; no browser run has been checked against live ChatGPT there. Intel Macs, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
 - Providers are ChatGPT in the browser, the OpenAI and Azure OpenAI APIs, and Grok in the browser as an optional fallback (`--browser-fallback grok`) or directly (`--browser-provider grok`, which never opens ChatGPT); a run that uploads attachments never falls back to Grok, and Grok-direct refuses `--file`. Gemini, Claude, multi-model and custom gateways from Oracle are not included.
 - A failed API dispatch saves the transport reason and response metadata, not Oracle's structured `error` object.
 - Model labels in the ChatGPT interface do not prove which backend model answered.
@@ -156,7 +158,7 @@ Alcuin suits you if you want a model from another vendor to answer about a fixed
 - **A second look from the same family, with nothing to install:** Claude Code's [advisor tool](https://code.claude.com/docs/en/advisor) lets Claude consult a stronger Claude model, which reads the whole conversation.
 - **Review without driving a web page:** OpenAI's [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) runs Codex reviews from Claude Code. Codex reads what it chooses, not a packet you fix in advance.
 - **Several models at once:** [consult-llm](https://github.com/raine/consult-llm) and [pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) consult several providers through their APIs or local CLIs.
-- **macOS, Gemini or Claude:** [Oracle](https://github.com/steipete/oracle), the tool Alcuin is ported from.
+- **Gemini, Claude or an Intel Mac:** [Oracle](https://github.com/steipete/oracle), the tool Alcuin is ported from.
 
 ## Development
 

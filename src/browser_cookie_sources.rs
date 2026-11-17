@@ -335,7 +335,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     fn fixture() -> (tempfile::TempDir, Environment, PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::native_fs::tempdir();
         let env = Environment::from_iter([
             ("HOME".into(), temp.path().to_string_lossy().into_owned()),
             (

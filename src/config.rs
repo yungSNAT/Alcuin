@@ -126,10 +126,14 @@ pub fn deep_merge(base: &Value, overlay: &Value) -> Value {
     }
     Value::Object(output)
 }
+/// The keys a project file may set. It comes with the code under review, so it may keep a run in
+/// the browser but never make it a paid API run, and it adds no text to the prompt.
 pub fn sanitise_project(config: &Value) -> Value {
     let mut output = json!({});
+    if config["engine"] == "browser" {
+        output["engine"] = json!("browser");
+    }
     for key in [
-        "engine",
         "model",
         "search",
         "maxFileSizeBytes",
@@ -137,7 +141,6 @@ pub fn sanitise_project(config: &Value) -> Value {
         "heartbeatSeconds",
         "filesReport",
         "background",
-        "promptSuffix",
     ] {
         if let Some(value) = config.get(key) {
             output[key] = value.clone();

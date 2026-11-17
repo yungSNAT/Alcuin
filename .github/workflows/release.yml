@@ -1,6 +1,6 @@
 name: release
 
-# Builds alcuin and alcuin-mcp for Linux and Windows and bundles alcuin-mcp as an MCP bundle
+# Builds alcuin and alcuin-mcp for Linux, macOS and Windows and bundles alcuin-mcp as an MCP bundle
 # (.mcpb) for Claude Desktop. A tag such as v0.1.0 attests the archives and publishes them as a
 # GitHub release and then lists the bundle on the MCP Registry; a manual run attests and uploads
 # artefacts; a pull request that changes this workflow, the bundle manifest or server.json only
@@ -38,6 +38,9 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             exe: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            exe: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             exe: .exe
@@ -68,6 +71,8 @@ jobs:
           cargo build --locked --release --target ${{ matrix.target }}
       - name: Package
         run: |
+          # macOS has shasum, not sha256sum; the checksum file reads the same.
+          command -v sha256sum > /dev/null || sha256sum() { shasum -a 256 "$@"; }
           name=alcuin-${{ matrix.target }}
           mkdir -p "dist/$name"
           for bin in alcuin alcuin-mcp; do
@@ -85,6 +90,7 @@ jobs:
           rm -r "$name"
       - name: Smoke-test the packaged archive
         run: |
+          command -v sha256sum > /dev/null || sha256sum() { shasum -a 256 "$@"; }
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           name=alcuin-${{ matrix.target }}
           smoke="$RUNNER_TEMP/smoke"
