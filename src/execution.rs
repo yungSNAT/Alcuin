@@ -424,6 +424,7 @@ fn resolve_origin(
         "previousResponseId",
         "followupSessionId",
         "followupModel",
+        "store",
         "browserResumeConversationUrl",
         "generateImage",
         "outputPath",
@@ -472,6 +473,8 @@ fn resolve_origin(
         options["background"] = value.clone();
     }
     if engine == "api" {
+        // Saved so a later --followup knows whether OpenAI kept this response.
+        options["store"] = json!(providers::stores(&options));
         options["reasoningMode"] =
             json!(policy::require_api_pro(options["reasoningMode"].as_str())?);
         if let Some(overrides) = config.get("modelOverrides") {

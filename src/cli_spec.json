@@ -87,6 +87,9 @@
     "flags": "--no-background"
   },
   {
+    "flags": "--store"
+  },
+  {
     "flags": "--http-timeout <ms|s|m|h>"
   },
   {

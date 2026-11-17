@@ -45,6 +45,7 @@ A bare argument is the prompt, as `-p` gives it.
 | `--timeout <seconds\|duration\|auto>` | Overall limit for an API call (`auto`: 60 minutes for Pro models, 120 seconds otherwise) |
 | `--http-timeout <ms\|s\|m\|h>` | HTTP client timeout for API requests (20 minutes by default) |
 | `--background`, `--no-background` | Use or skip the Responses API's background mode for API runs |
+| `--store` | Keep an API run's response at OpenAI for at least 30 days, so `--followup` can continue it; API runs are not kept otherwise |
 | `--heartbeat <seconds>` | Print a progress line this often (30 by default; 0 turns it off) |
 | `--zombie-timeout <ms\|s\|m\|h>` | Age after which `alcuin status` treats a running session as stale (60 minutes by default) |
 | `--zombie-last-activity` | Measure that age from the last log activity rather than the start |

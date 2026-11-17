@@ -160,6 +160,10 @@ pub fn resolve(store: &SessionStore, reference: &str, model: Option<&str>) -> Re
             config,
         });
     }
+    ensure!(
+        parent["options"]["store"] != false,
+        "Session {reference} was not stored at OpenAI, so it cannot be continued. API runs are stored only with --store; run it again with --store."
+    );
     let response_id=metadata_response(&parent,model)?.or_else(||last_log_response(&store.log(reference).unwrap_or_default())).with_context(||format!("Session {reference} does not contain a stored response id. Ensure the original run produced a Responses API response id (background/store helps)."))?;
     Ok(Followup::Api {
         response_id,

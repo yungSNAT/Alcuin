@@ -1357,6 +1357,9 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
     if flag(&matches, "no-background") {
         input["background"] = json!(false);
     }
+    if flag(&matches, "store") {
+        input["store"] = json!(true);
+    }
     if flag(&matches, "browser-inline-files") {
         input["browserAttachments"] = json!("never");
     }
@@ -1563,6 +1566,10 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
     anyhow::ensure!(
         remote.is_none() || text(&matches, "remote-chrome").is_none(),
         "--remote-host cannot be combined with --remote-chrome."
+    );
+    anyhow::ensure!(
+        !flag(&matches, "store") || request.engine == "api",
+        "--store applies only to API runs (--engine api)."
     );
     if input.get("previousResponseId").is_some() {
         followup::require_api(
@@ -2010,6 +2017,7 @@ const ROOT_RUN_FLAGS: &[&str] = &[
     "timeout",
     "background",
     "no-background",
+    "store",
     "http-timeout",
     "preview",
     "dry-run",

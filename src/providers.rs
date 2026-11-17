@@ -322,9 +322,8 @@ pub fn build_request(
     if background {
         body["background"] = json!(true);
     }
-    if background || options.get("previousResponseId").is_some() {
-        body["store"] = json!(true);
-    }
+    // Sent every time: the API keeps a response whose request omits `store`.
+    body["store"] = json!(stores(options));
     if let Some(previous) = options["previousResponseId"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -332,6 +331,11 @@ pub fn build_request(
         body["previous_response_id"] = json!(previous);
     }
     Ok(body)
+}
+/// Whether OpenAI keeps the run's response for at least 30 days: only when the run asked for it
+/// (`--store`) or continues a response that was kept, so it can be continued in turn.
+pub fn stores(options: &Value) -> bool {
+    options["store"] == true || options.get("previousResponseId").is_some()
 }
 #[derive(Debug, Clone)]
 pub struct ModelSettings {
