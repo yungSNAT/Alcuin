@@ -121,7 +121,7 @@ Alcuin keeps Oracle's names, so existing setups carry over.
 
 | Variable | Effect |
 | --- | --- |
-| `ORACLE_HOME_DIR` | Folder for sessions, profiles and the user config (default `~/.oracle`) |
+| `ORACLE_HOME_DIR` | Folder for sessions, the Grok profile and the user config (default `~/.oracle`); the ChatGPT browser profile stays in `~/.oracle/browser-profile` |
 | `ORACLE_ENGINE` | `api` or `browser`; any other value is ignored |
 | `ORACLE_MAX_FILE_SIZE_BYTES` | File size limit, in bytes |
 | `ORACLE_MIN_PROMPT_CHARS` | Shortest prompt an API run accepts (default 10; a browser run always needs 10) |

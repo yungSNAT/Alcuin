@@ -17,7 +17,7 @@ By default, Windows browser runs use Alcuin's own profile, where you sign in onc
 
 ## Where Alcuin keeps its files
 
-Sessions, settings and the browser profile live in `%USERPROFILE%\.oracle`. To keep them elsewhere, set `ORACLE_HOME_DIR`; `bridge doctor` shows the config file it then reads:
+Sessions, settings and the browser profile live in `%USERPROFILE%\.oracle`. To keep the sessions and settings elsewhere, set `ORACLE_HOME_DIR`, and set `ORACLE_BROWSER_PROFILE_DIR` to move the browser profile; `bridge doctor` shows the config file it then reads:
 
 ```powershell
 $env:ORACLE_HOME_DIR = "$env:USERPROFILE\alcuin-data"

@@ -27,7 +27,7 @@ It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Stein
 
 One command installs both binaries from the latest release, after checking the archive's SHA-256 checksum and that the binary runs on your machine.
 
-Linux or macOS, into `~/.local/bin`:
+Linux, or macOS from the first release after v0.1.0, into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
@@ -133,7 +133,7 @@ Run `alcuin --help --verbose` for every option, or see the [CLI reference](docs/
 
 ## Settings and storage
 
-Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_*` environment variables and sessions, profiles and config live in `~/.oracle` (set `ORACLE_HOME_DIR` to move it).
+Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_*` environment variables, and sessions, config and the ChatGPT browser profile live in `~/.oracle`. `ORACLE_HOME_DIR` moves the sessions and config; the browser profile stays in `~/.oracle/browser-profile`, as in Oracle, unless `ORACLE_BROWSER_PROFILE_DIR` names another folder.
 
 ## Known limitations
 
