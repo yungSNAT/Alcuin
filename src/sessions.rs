@@ -332,6 +332,7 @@ impl SessionStore {
                 private_file(&dir.join("models").join(format!("{slug}.log")), true)?;
             }
             private_file(&dir.join("output.log"), true)?;
+            self.index_run(&id, &metadata["options"])?;
             guard.leaf(&dir.join("meta.json"))?;
             atomic_json(&dir.join("meta.json"), &metadata)?;
             guard.check()?;
@@ -705,6 +706,48 @@ impl SessionStore {
         output.sort_by(|a, b| b["createdAt"].as_str().cmp(&a["createdAt"].as_str()));
         Ok(output)
     }
+    /// Beside the store: `runs/<signature>/<session>` says the session was created with that
+    /// run signature (its trimmed prompt and browser follow-ups, which no later write changes);
+    /// `covered/<session>` says the session is indexed. Markers are only ever added.
+    fn run_index(&self) -> PathBuf {
+        self.home.join("sessions-run-index")
+    }
+    /// Written by `create` before the metadata, so a covered session is always indexed.
+    fn index_run(&self, id: &str, options: &Value) -> Result<()> {
+        let signature = crate::execution::run_signature(options);
+        let key = crate::artifacts::sha256(&serde_json::to_vec(&signature)?);
+        let directory = self.run_index().join("runs").join(key);
+        private_dir(&directory)?;
+        marker(&directory.join(id))?;
+        let covered = self.run_index().join("covered");
+        private_dir(&covered)?;
+        marker(&covered.join(id))
+    }
+    /// Every `list(true)` session that may share `options`'s run signature, unsorted: the
+    /// covered sessions the index names, and every uncovered one (created before the index or
+    /// by another writer), which is indexed as it is read, for a bounded time per call.
+    pub(crate) fn list_same_run(&self, options: &Value) -> Result<Vec<Value>> {
+        let signature = crate::execution::run_signature(options);
+        let key = crate::artifacts::sha256(&serde_json::to_vec(&signature)?);
+        let index = self.run_index();
+        let covered = names(&index.join("covered"))?;
+        let named = names(&index.join("runs").join(key))?;
+        let cover_until = Instant::now() + Duration::from_millis(250);
+        let mut output = vec![];
+        for id in names(&self.root())? {
+            if !valid_id(&id) || (covered.contains(&id) && !named.contains(&id)) {
+                continue;
+            }
+            let Some(meta) = self.read_raw(&id, true)? else {
+                continue;
+            };
+            if !covered.contains(&id) && Instant::now() < cover_until {
+                self.index_run(&id, &meta["options"])?;
+            }
+            output.push(meta);
+        }
+        Ok(output)
+    }
     /// Beside the store: `targets/<target>/<session>` says the session's metadata has named
     /// that `browser.runtime.chromeTargetId`; `covered/<session>` says every target the
     /// session has named is indexed. Markers are only ever added, so the index is a superset.
@@ -770,23 +813,12 @@ impl SessionStore {
         if !indexable(target) {
             return self.list(true);
         }
-        let names = |path: PathBuf| -> Result<std::collections::BTreeSet<String>> {
-            match fs::read_dir(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(Default::default())
-                }
-                Err(error) => Err(error.into()),
-                Ok(entries) => entries
-                    .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
-                    .collect(),
-            }
-        };
         let index = self.target_index();
-        let covered = names(index.join("covered"))?;
-        let named = names(index.join("targets").join(target))?;
+        let covered = names(&index.join("covered"))?;
+        let named = names(&index.join("targets").join(target))?;
         let cover_until = Instant::now() + Duration::from_millis(250);
         let mut output = vec![];
-        for id in names(self.root())? {
+        for id in names(&self.root())? {
             if !valid_id(&id) {
                 continue;
             }
@@ -807,7 +839,7 @@ impl SessionStore {
             .iter()
             .filter_map(|meta| meta["id"].as_str().map(str::to_owned))
             .collect();
-        for id in names(index.join("targets").join(target))? {
+        for id in names(&index.join("targets").join(target))? {
             if valid_id(&id)
                 && !named.contains(&id)
                 && !listed.contains(&id)
@@ -1081,6 +1113,16 @@ thread_local! {
     /// The sessions this thread has read whole, so a test can check what a scan reads.
     pub(crate) static READ_SESSIONS: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+/// The entry names in a directory, none if it does not exist.
+fn names(path: &Path) -> Result<std::collections::BTreeSet<String>> {
+    match fs::read_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(error) => Err(error.into()),
+        Ok(entries) => entries
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect(),
+    }
 }
 /// A target the index can name as one path component; others fall back to a full read.
 fn indexable(target: &str) -> bool {
@@ -1422,5 +1464,47 @@ mod deadline_tests {
                 .unwrap();
         })));
         assert!(found("PUBLIC-TARGET").contains(&late));
+    }
+}
+#[cfg(test)]
+mod run_index_tests {
+    use super::*;
+    #[test]
+    fn a_duplicate_check_reads_only_sessions_of_the_same_run_once_they_are_indexed() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let create = |prompt: &str, slug: &str| {
+            store
+                .create(json!({"prompt":prompt}), home.path(), Some(slug))
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let older = create("PUBLIC same run", "public-older-same-run");
+        let other = create("PUBLIC other run", "public-older-other-run");
+        // Sessions written before the index existed are read, and indexed, by the first scan.
+        fs::remove_dir_all(home.path().join("sessions-run-index")).unwrap();
+        let newer = create("PUBLIC same run", "public-newer-same-run");
+        let scan = |options: &Value| {
+            READ_SESSIONS.take();
+            let mut listed: Vec<String> = store
+                .list_same_run(options)
+                .unwrap()
+                .iter()
+                .map(|meta| meta["id"].as_str().unwrap().to_owned())
+                .collect();
+            listed.sort();
+            let mut read = READ_SESSIONS.take();
+            read.sort();
+            (listed, read)
+        };
+        let query = json!({"prompt":"  PUBLIC same run\n"});
+        let mut every = vec![older.clone(), other, newer.clone()];
+        every.sort();
+        assert_eq!(scan(&query), (every.clone(), every));
+        let mut same = vec![older, newer];
+        same.sort();
+        assert_eq!(scan(&query), (same.clone(), same));
     }
 }
