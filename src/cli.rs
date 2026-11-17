@@ -3258,6 +3258,18 @@ mod browser_options_tests {
 mod copy_tests {
     use super::*;
     #[test]
+    fn render_estimates_leave_out_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let env = Environment::new();
+        let estimate = |input: Value| {
+            render_tokens(&execution::resolve(&input, &json!({}), &env, root.path()).unwrap())
+        };
+        assert_eq!(
+            estimate(json!({"prompt":"PUBLIC","engine":"api","store":true})),
+            estimate(json!({"prompt":"PUBLIC","engine":"api"}))
+        );
+    }
+    #[test]
     fn copy_reports_follow_the_reference_summary_and_soft_failure() {
         let failed = copy_with(&[("PUBLIC-missing-clipboard-command", &[])], "PUBLIC");
         assert_eq!(
