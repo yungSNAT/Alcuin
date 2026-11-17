@@ -2357,6 +2357,7 @@ async fn api_run(extra: &[&str], usage: Value, detached: bool) -> String {
         socket.write_all(header.as_bytes()).await.unwrap();
         socket.write_all(response.as_bytes()).await.unwrap();
         socket.shutdown().await.unwrap();
+        request
     });
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
     command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
@@ -2404,7 +2405,11 @@ async fn api_run(extra: &[&str], usage: Value, detached: bool) -> String {
     );
     assert!(!stdout.contains("PUBLIC-synthetic-key"));
     if !detached {
-        server.await.unwrap();
+        let request = server.await.unwrap();
+        let end = request.windows(4).position(|b| b == b"\r\n\r\n").unwrap();
+        let body: Value = serde_json::from_slice(&request[end + 4..]).unwrap();
+        // OpenAI keeps a response whose request omits `store`, so it is always sent.
+        assert_eq!(body["store"], extra.contains(&"--store"), "{body}");
         // Reference combinedLog: the inline run's session log holds what stdout showed.
         let store = SessionStore::new(home.path().to_path_buf());
         let id = store.list(false).unwrap()[0]["id"]
@@ -2513,6 +2518,24 @@ fn finish_lines(stdout: &str) -> Vec<&str> {
         .unwrap_or_else(|| panic!("answer missing from {stdout}"))
         .1;
     tail.lines().collect()
+}
+#[tokio::test]
+async fn an_api_run_is_kept_at_openai_only_with_store() {
+    // `api_run` checks the request's `store` against the flag.
+    foreground_api_run(&["--store"], json!({})).await;
+    let home = tempfile::tempdir().unwrap();
+    let output = cli(
+        home.path(),
+        &["-p", "PUBLIC", "--engine", "browser", "--store", "--dry-run", "summary"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--store applies only to API runs (--engine api)."),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!home.path().join("sessions").exists());
 }
 #[tokio::test]
 async fn foreground_api_run_prints_the_reference_header_heartbeat_and_file_report() {

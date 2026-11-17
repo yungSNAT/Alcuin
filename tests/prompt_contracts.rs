@@ -523,6 +523,50 @@ fn api_request_and_model_defaults_preserve_current_admission() {
     );
 }
 #[test]
+fn api_runs_are_kept_at_openai_only_when_asked_or_continued() {
+    let request = |options: serde_json::Value| {
+        providers::build_request("gpt-6-astra", &options, "PUBLIC", prompts::DEFAULT_SYSTEM)
+            .unwrap()
+    };
+    // An omitted `store` means true to the Responses API, so a run that is not kept says false.
+    let background = request(json!({"reasoningMode":"pro"}));
+    assert_eq!(background["background"], true);
+    assert_eq!(background["store"], false);
+    assert_eq!(
+        request(json!({"reasoningMode":"pro","background":false}))["store"],
+        false
+    );
+    assert_eq!(
+        request(json!({"reasoningMode":"pro","store":true}))["store"],
+        true
+    );
+    assert_eq!(
+        request(json!({"reasoningMode":"pro","previousResponseId":"resp_public"}))["store"],
+        true
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let env = Environment::new();
+    let resolve = |input: serde_json::Value, config: serde_json::Value| {
+        execution::resolve(&input, &config, &env, root.path()).unwrap()
+    };
+    let api = json!({"prompt":"PUBLIC","engine":"api"});
+    assert_eq!(resolve(api.clone(), json!({})).options["store"], false);
+    // No config file can keep a run: only the run itself asks.
+    assert_eq!(
+        resolve(api.clone(), json!({"store":true})).options["store"],
+        false
+    );
+    let mut asked = api.clone();
+    asked["store"] = json!(true);
+    assert_eq!(resolve(asked, json!({})).options["store"], true);
+    let mut continued = api;
+    continued["previousResponseId"] = json!("resp_public");
+    assert_eq!(resolve(continued, json!({})).options["store"], true);
+    let browser = resolve(json!({"prompt":"PUBLIC","engine":"browser"}), json!({}));
+    assert!(browser.options.get("store").is_none());
+}
+#[test]
 fn project_sources_plan_counts_duplicates_and_batches_ten() {
     assert_eq!(
         project_sources::normalise_url("https://chatgpt.com/g/g-p-123/project?tab=chats&foo=bar")

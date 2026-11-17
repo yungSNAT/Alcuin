@@ -436,6 +436,46 @@ fn actual_stored_references_trim_preserve_lineage_and_use_only_the_last_log_id()
         "--followup requires a session id or response id."
     );
 }
+#[test]
+fn a_parent_openai_did_not_keep_is_refused_and_older_parents_still_resolve() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path().join(".oracle"));
+    let parent = |slug: &str, store_choice: Option<bool>| {
+        let mut options = json!({"prompt":"PUBLIC parent","model":"gpt-6-astra"});
+        if let Some(choice) = store_choice {
+            options["store"] = json!(choice);
+        }
+        let id = store.create(options, home.path(), Some(slug)).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        store
+            .update(&id, |_| {
+                Ok(Some(
+                    json!({"status":"completed","response":{"responseId":"resp_parent"}}),
+                ))
+            })
+            .unwrap();
+        id
+    };
+    let unkept = parent("public-unkept", Some(false));
+    let error = followup::resolve(&store, &unkept, None)
+        .err()
+        .expect("a parent OpenAI did not keep cannot be continued")
+        .to_string();
+    assert!(
+        error.contains(&format!("Session {unkept} was not stored at OpenAI"))
+            && error.contains("--store"),
+        "{error}"
+    );
+    for (slug, choice) in [("public-kept", Some(true)), ("public-older", None)] {
+        let id = parent(slug, choice);
+        match followup::resolve(&store, &id, None).unwrap() {
+            Followup::Api { response_id, .. } => assert_eq!(response_id, "resp_parent"),
+            _ => panic!("API parent was reclassified"),
+        }
+    }
+}
 #[tokio::test]
 async fn a_browser_followup_honours_the_end_marker_asked_for_on_this_run() {
     let home = tempfile::tempdir().unwrap();
