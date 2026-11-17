@@ -82,43 +82,6 @@
   })();
     const selector = ':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])';
     const canonical = value => String(value ?? '').normalize('NFC').replace(/\r\n?/g, '\n');
-    const markdownSourceText = value => {
-    const punctuation = /[!-\/:-@\[-\x60{-~]/;
-    const unescape = text => text.replace(/\\([!-\/:-@\[-\x60{-~])/g, '$1');
-    const link = /\[(https?:(?:\\\S|[^\\\[\]\s])*)\]\((https?:(?:\\\S|[^\\()\[\]\s])*)\)/y;
-    const autolinkEnd = index => {
-      while (index < value.length) {
-        if (/[\s)\]}"']/.test(value[index])) return true;
-        if (value[index] === '\\' && punctuation.test(value[index + 1] ?? '')) index++;
-        else if (/[.,;:!?]/.test(value[index])) index++;
-        else return false;
-      }
-      return true;
-    };
-    const completeLiteralLink = text => /(^|[^!])\[[^\[\]\r\n]+\]\([^()\s]+\)/.test(text);
-    const hasHost = text => { try { return /^https?:\/\//.test(text) && Boolean(new URL(text).host); } catch { return false; } };
-    let text = '';
-    let evidence = 0;
-    let escapedLinkOpener = false;
-    for (let index = 0; index < value.length;) {
-      link.lastIndex = index;
-      const match = value[index] === '[' ? link.exec(value) : null;
-      if (match && unescape(match[1]) === unescape(match[2]) &&
-          (index === 0 || /[\s([{\"']/.test(value[index - 1])) &&
-          autolinkEnd(link.lastIndex) && hasHost(unescape(match[2]))) {
-        text += unescape(match[2]);
-        evidence++;
-        index = link.lastIndex;
-      } else if (value[index] === '\\' && punctuation.test(value[index + 1] ?? '')) {
-        if (value[index + 1] === '(' && value[index - 1] === ']') escapedLinkOpener = true;
-        text += value[index + 1];
-        index += 2;
-      } else if (/[\x60*<]/.test(value[index]) || (value[index] === ']' && value[index + 1] === '(')) {
-        return null;
-      } else text += value[index++];
-    }
-    return evidence || (escapedLinkOpener && completeLiteralLink(text)) ? text : null;
-  };
     const expected = (previousIds === undefined ? null : canonical(expectedPrompt));
     const previous = new Set((previousIds ?? []));
     const stableId = value => typeof value === 'string' && value.length > 0 && value.length <= 256;

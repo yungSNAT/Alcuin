@@ -29,9 +29,13 @@
   // '<prompt>@Web search' when selected after the staged prompt, '@Web search <prompt>' when
   // the prompt follows an existing pill.
   const webSearch = cfg.webSearch === true;
+  // ChatGPT rewrites a prompt holding a web address as escaped Markdown, the address made a link.
+  // Accept exactly the form the stored-message check accepts (markdownSourceText, in scope from
+  // markdown-source.js), and only without the Web search pill, as that check does.
   const textMatches = part => {
     const text = canonical(part);
-    return webSearch ? text === expected + '@Web search' || text === '@Web search ' + expected : text === expected;
+    return webSearch ? text === expected + '@Web search' || text === '@Web search ' + expected :
+      text === expected || markdownSourceText(text) === expected;
   };
   const hinted = hints => Array.isArray(hints) && hints.length === 1 && hints[0] === 'search';
   const hintsMatch = (payload, message) => !webSearch || (hinted(payload?.system_hints) && hinted(message?.metadata?.system_hints));

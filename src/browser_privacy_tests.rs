@@ -2921,7 +2921,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         const record=window.__oracleStreamEnd;
         window.__oracleSubmissionWitness.cleanup();window.fetch=saved;
         return record&&record.witnessId==='PUBLIC-native-witness'?record.fetch:null;
-    }}"#, collector = include_str!("../browser-scripts/submission-witness.js")), &json!([{"id":MESSAGE}]), SHORT, &cancel).await?;
+    }}"#, collector = crate::browser_dom::WITNESS), &json!([{"id":MESSAGE}]), SHORT, &cancel).await?;
     anyhow::ensure!(
         looks == "native",
         "Untouched fetch did not read as native: {looks}"
@@ -3429,7 +3429,7 @@ async fn witness_closure_release_cases(page: &Cdp) -> Result<()> {
             ({collector})(cfg,{{admitted:true}},()=>{{}},()=>{{window.PUBLIC_privacyCalls++;if(window.PUBLIC_throwAtStop)throw Error('PUBLIC');return true;}});
             return true;
         }}"#,
-            collector = include_str!("../browser-scripts/submission-witness.js")
+            collector = crate::browser_dom::WITNESS
         );
         page.evaluate_with_arguments(&install, &json!([]), SHORT, &cancel)
             .await?;
