@@ -80,7 +80,7 @@ Options:
   --no-background                       Disable Responses API background mode.
   --store                               Keep the API response at OpenAI for at
                                         least 30 days so --followup can continue
-                                        it (API runs are not kept otherwise).
+                                        it (responses are not stored otherwise).
   --http-timeout <ms|s|m|h>             HTTP client timeout for API requests
                                         (default 20m).
   --zombie-timeout <ms|s|m|h>           Override stale-session cutoff used by
