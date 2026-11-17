@@ -687,23 +687,59 @@ impl SessionStore {
         Ok(())
     }
     pub fn list(&self, summary: bool) -> Result<Vec<Value>> {
+        self.list_created_since(summary, None)
+    }
+    /// `list`, skipping unread the sessions created more than `hours` before now when `hours` is
+    /// given. A session's metadata is written when it is created and only rewritten after, so one
+    /// whose metadata files were all last written before the cutoff was created before it. Some
+    /// older sessions are still returned; `filter_range` applies the window.
+    /// shortcut: trusts file times to within an hour of `createdAt`; a store copied with older
+    /// times hides its sessions here, and `status --all` still reads every one.
+    pub fn list_created_since(&self, summary: bool, hours: Option<f64>) -> Result<Vec<Value>> {
         let mut output = vec![];
-        match fs::read_dir(self.root()) {
+        let entries = match fs::read_dir(self.root()) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(output),
             Err(error) => return Err(error.into()),
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    let id = entry.file_name().to_string_lossy().into_owned();
-                    if valid_id(&id)
-                        && let Some(meta) = self.read_raw(&id, summary)?
-                    {
-                        output.push(meta);
-                    }
-                }
+            Ok(entries) => entries,
+        };
+        let cutoff = hours.map(|hours| {
+            chrono::Utc::now().timestamp_millis() as f64 - (hours + 1.0) * 3_600_000.0
+        });
+        for entry in entries.flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if !valid_id(&id) || cutoff.is_some_and(|cutoff| self.written_before(&id, cutoff)) {
+                continue;
+            }
+            if let Some(meta) = self.read_raw(&id, summary)? {
+                output.push(meta);
             }
         }
         output.sort_by(|a, b| b["createdAt"].as_str().cmp(&a["createdAt"].as_str()));
         Ok(output)
+    }
+    /// Whether every metadata file the session has was last written before `cutoff` (Unix
+    /// milliseconds). A file whose time cannot be read counts as recent.
+    fn written_before(&self, id: &str, cutoff: f64) -> bool {
+        let Ok(dir) = self.directory(id) else {
+            return false;
+        };
+        let mut found = false;
+        for name in ["meta.json", "session.json"] {
+            match fs::metadata(dir.join(name)).and_then(|file| file.modified()) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+                Ok(time) => {
+                    let millis = time
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0.0, |since| since.as_millis() as f64);
+                    if millis >= cutoff {
+                        return false;
+                    }
+                    found = true;
+                }
+            }
+        }
+        found
     }
     /// Beside the store: `targets/<target>/<session>` says the session's metadata has named
     /// that `browser.runtime.chromeTargetId`; `covered/<session>` says every target the
@@ -1422,5 +1458,49 @@ mod deadline_tests {
                 .unwrap();
         })));
         assert!(found("PUBLIC-TARGET").contains(&late));
+    }
+}
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    #[test]
+    fn a_status_window_skips_unread_the_sessions_written_before_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let create = |slug: &str| {
+            store
+                .create(json!({"prompt":"PUBLIC window"}), home.path(), Some(slug))
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (old, recent) = (create("public-old-window"), create("public-recent-window"));
+        let days_ago = chrono::Utc::now() - chrono::Duration::days(3);
+        store
+            .update(&old, |_| {
+                Ok(Some(json!({"createdAt":days_ago.to_rfc3339()})))
+            })
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(store.directory(&old).unwrap().join("meta.json"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::from(days_ago))
+            .unwrap();
+        let ids = |sessions: Vec<Value>| -> Vec<String> {
+            sessions
+                .iter()
+                .map(|meta| meta["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        READ_SESSIONS.take();
+        let listed = store.list_created_since(true, Some(24.0)).unwrap();
+        assert_eq!(ids(listed), [recent.clone()]);
+        assert_eq!(READ_SESSIONS.take(), [recent.clone()]);
+        assert_eq!(
+            ids(store.list_created_since(true, None).unwrap()),
+            [recent, old]
+        );
     }
 }
