@@ -1002,11 +1002,9 @@ impl SessionStore {
                 paths.push(dir.join(format!("models/{}.log", safe_model_slug(model))));
             }
         }
-        Ok(paths
-            .iter()
-            .filter_map(|path| fs::symlink_metadata(path).ok()?.modified().ok())
-            .max()
-            .and_then(|modified| jiff::Timestamp::try_from(modified).ok()))
+        Ok(latest(paths.iter().filter_map(|path| {
+            fs::symlink_metadata(path).ok()?.modified().ok()
+        })))
     }
     /// Capacity release records worker death without deleting dispatch or target evidence.
     pub fn release_dead_worker_capacity(&self, id: &str) -> Result<Value> {
@@ -1290,9 +1288,26 @@ pub fn merge_artifacts(current: &Value, additions: &Value, basis: &Value) -> Val
     }
 }
 
+/// The latest of `times` that jiff can hold.
+fn latest(times: impl Iterator<Item = std::time::SystemTime>) -> Option<jiff::Timestamp> {
+    times
+        .max()
+        .and_then(|modified| jiff::Timestamp::try_from(modified).ok())
+}
+
 #[cfg(test)]
 mod deadline_tests {
     use super::*;
+    #[test]
+    fn last_activity_skips_a_file_time_jiff_cannot_hold() {
+        let recent = std::time::SystemTime::now();
+        // About the year 11,500, past jiff's last instant in 9999.
+        let beyond = std::time::UNIX_EPOCH + Duration::from_secs(300_000_000_000);
+        assert_eq!(
+            latest([recent, beyond].into_iter()),
+            jiff::Timestamp::try_from(recent).ok()
+        );
+    }
     #[test]
     fn timestamps_are_utc_with_milliseconds() {
         let shape = regex::Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$").unwrap();

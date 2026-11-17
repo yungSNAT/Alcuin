@@ -731,8 +731,7 @@ fn status_listing_marks_unverifiable_zombies_and_leaves_live_workers() {
     assert_eq!(store.require(&live).unwrap()["status"], "running");
 }
 /// The session table shows `createdAt` in the zone `TZ` names, as an en-US date and 12-hour
-/// time, on both sides of Sydney's 2026 daylight-saving changes.
-#[cfg(unix)]
+/// time, on both sides of Sydney's 2026 daylight-saving changes. Windows reads `TZ` too.
 #[test]
 fn status_table_shows_creation_times_in_the_local_zone() {
     let home = tempfile::tempdir().unwrap();
@@ -783,6 +782,7 @@ fn status_table_shows_creation_times_in_the_local_zone() {
         .env_clear()
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env("ORACLE_HOME_DIR", home.path())
         .env("TZ", "Australia/Sydney")
         .current_dir(home.path())
