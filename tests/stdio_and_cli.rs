@@ -2526,7 +2526,15 @@ async fn an_api_run_is_kept_at_openai_only_with_store() {
     let home = tempfile::tempdir().unwrap();
     let output = cli(
         home.path(),
-        &["-p", "PUBLIC", "--engine", "browser", "--store", "--dry-run", "summary"],
+        &[
+            "-p",
+            "PUBLIC",
+            "--engine",
+            "browser",
+            "--store",
+            "--dry-run",
+            "summary",
+        ],
     );
     assert!(!output.status.success());
     assert!(
