@@ -1496,8 +1496,8 @@ mod window_tests {
         };
         READ_SESSIONS.take();
         let listed = store.list_created_since(true, Some(24.0)).unwrap();
-        assert_eq!(ids(listed), [recent.clone()]);
-        assert_eq!(READ_SESSIONS.take(), [recent.clone()]);
+        assert_eq!(ids(listed), std::slice::from_ref(&recent));
+        assert_eq!(READ_SESSIONS.take(), std::slice::from_ref(&recent));
         assert_eq!(
             ids(store.list_created_since(true, None).unwrap()),
             [recent, old]
