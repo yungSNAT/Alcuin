@@ -16,6 +16,7 @@ const SAVED_OPTIONS: &[&str] = &[
     "model",
     "models",
     "previousResponseId",
+    "store",
     "browserResumeConversationUrl",
     "effectiveModelId",
     "modelOverrides",
