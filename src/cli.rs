@@ -2835,6 +2835,7 @@ fn render_tokens(request: &execution::ResolvedRequest) -> usize {
     if let Some(options) = options.as_object_mut() {
         options.remove("previousResponseId");
         options.remove("reasoningEffort");
+        options.remove("store");
     }
     let system = request.options["system"]
         .as_str()

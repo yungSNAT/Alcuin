@@ -32,7 +32,7 @@ alcuin --followup is-total-right -p "Which line should change?"
 alcuin restart is-total-right
 ```
 
-`--followup <id>` sends a new prompt in the same conversation: an API run continues from the saved response, and a browser run continues in the saved ChatGPT conversation. The follow-up is a new session. `restart <id>` runs the original prompt and files again as a new session with the same options.
+`--followup <id>` sends a new prompt in the same conversation: an API run continues from the saved response, and a browser run continues in the saved ChatGPT conversation. OpenAI keeps an API run's response only when that run passed `--store` (a follow-up is kept too), so start an API run you may continue with `--store`; a follow-up of one without it is refused before anything is sent. The follow-up is a new session. `restart <id>` runs the original prompt and files again as a new session with the same options.
 
 ## Recover a browser answer
 
