@@ -544,6 +544,12 @@ fn api_runs_are_kept_at_openai_only_when_asked_or_continued() {
         request(json!({"reasoningMode":"pro","previousResponseId":"resp_public"}))["store"],
         true
     );
+    // An empty or null response id continues nothing, so it keeps nothing either.
+    for previous in [json!(null), json!("")] {
+        let body = request(json!({"reasoningMode":"pro","previousResponseId":previous}));
+        assert_eq!(body["store"], false, "{previous}");
+        assert!(body.get("previous_response_id").is_none(), "{previous}");
+    }
 
     let root = tempfile::tempdir().unwrap();
     let env = Environment::new();
@@ -560,9 +566,12 @@ fn api_runs_are_kept_at_openai_only_when_asked_or_continued() {
     let mut asked = api.clone();
     asked["store"] = json!(true);
     assert_eq!(resolve(asked, json!({})).options["store"], true);
-    let mut continued = api;
+    let mut continued = api.clone();
     continued["previousResponseId"] = json!("resp_public");
     assert_eq!(resolve(continued, json!({})).options["store"], true);
+    let mut empty = api;
+    empty["previousResponseId"] = json!("");
+    assert_eq!(resolve(empty, json!({})).options["store"], false);
     let browser = resolve(json!({"prompt":"PUBLIC","engine":"browser"}), json!({}));
     assert!(browser.options.get("store").is_none());
 }

@@ -476,6 +476,40 @@ fn a_parent_openai_did_not_keep_is_refused_and_older_parents_still_resolve() {
         }
     }
 }
+#[test]
+fn a_followup_of_a_kept_run_is_kept_and_can_be_continued_in_turn() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path().join(".oracle"));
+    let env = Environment::new();
+    let mut input =
+        json!({"prompt":"PUBLIC first","engine":"api","model":"gpt-6-astra","store":true});
+    for (generation, slug) in ["public-first", "public-second", "public-third"]
+        .into_iter()
+        .enumerate()
+    {
+        let options = alcuin::execution::resolve(&input, &json!({}), &env, home.path())
+            .unwrap()
+            .options;
+        assert_eq!(options["store"], true, "{slug}");
+        let id = store.create(options, home.path(), Some(slug)).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response = format!("resp_public_{generation}");
+        store
+            .update(&id, |_| {
+                Ok(Some(
+                    json!({"status":"completed","response":{"responseId":response}}),
+                ))
+            })
+            .unwrap();
+        match followup::resolve(&store, &id, None).unwrap() {
+            Followup::Api { response_id, .. } => assert_eq!(response_id, response, "{slug}"),
+            _ => panic!("API parent {slug} was reclassified"),
+        }
+        input = json!({"prompt":"PUBLIC next","engine":"api","model":"gpt-6-astra","previousResponseId":response,"followupSessionId":id});
+    }
+}
 #[tokio::test]
 async fn a_browser_followup_honours_the_end_marker_asked_for_on_this_run() {
     let home = tempfile::tempdir().unwrap();
