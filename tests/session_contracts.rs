@@ -729,6 +729,76 @@ fn status_listing_marks_unverifiable_zombies_and_leaves_live_workers() {
     assert_eq!(store.require(&stale).unwrap()["status"], "error");
     assert_eq!(store.require(&live).unwrap()["status"], "running");
 }
+/// The session table shows `createdAt` in the zone `TZ` names, as an en-US date and 12-hour
+/// time, on both sides of Sydney's 2026 daylight-saving changes.
+#[cfg(unix)]
+#[test]
+fn status_table_shows_creation_times_in_the_local_zone() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path());
+    let cases = [
+        (
+            "dst-ends-before",
+            "2026-04-04T15:30:00.000Z",
+            "04/05/2026   2:30\u{202f}AM",
+        ),
+        (
+            "dst-ends-after",
+            "2026-04-04T16:30:00.000Z",
+            "04/05/2026   2:30\u{202f}AM",
+        ),
+        (
+            "dst-starts-before",
+            "2026-10-03T15:59:00.000Z",
+            "10/04/2026   1:59\u{202f}AM",
+        ),
+        (
+            "dst-starts-after",
+            "2026-10-03T16:01:00.000Z",
+            "10/04/2026   3:01\u{202f}AM",
+        ),
+        (
+            "afternoon",
+            "2026-10-26T01:02:03.456Z",
+            "10/26/2026  12:02\u{202f}PM",
+        ),
+    ];
+    let mut ids = vec![];
+    for (slug, created, _) in cases {
+        let session = store
+            .create(
+                json!({"prompt":"PUBLIC local time","model":"gpt-6-astra"}),
+                store.home(),
+                Some(slug),
+            )
+            .unwrap();
+        let id = session["id"].as_str().unwrap().to_owned();
+        store
+            .update(&id, |_| Ok(Some(json!({"createdAt":created}))))
+            .unwrap();
+        ids.push(id);
+    }
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
+        .env_clear()
+        .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
+        .env("HOME", home.path())
+        .env("ORACLE_HOME_DIR", home.path())
+        .env("TZ", "Australia/Sydney")
+        .current_dir(home.path())
+        .args(["status", "--all"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for (id, (_, _, shown)) in ids.iter().zip(cases) {
+        let row = stdout.lines().find(|line| line.ends_with(id.as_str()));
+        assert!(row.is_some_and(|row| row.contains(shown)), "{id}: {stdout}");
+    }
+}
 #[tokio::test]
 async fn internal_provider_attempts_are_addressable_but_do_not_clog_public_session_lists() {
     let home = tempfile::tempdir().unwrap();

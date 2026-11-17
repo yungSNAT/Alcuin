@@ -1293,6 +1293,12 @@ pub fn merge_artifacts(current: &Value, additions: &Value, basis: &Value) -> Val
 mod deadline_tests {
     use super::*;
     #[test]
+    fn timestamps_are_utc_with_milliseconds() {
+        let shape = regex::Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$").unwrap();
+        let text = timestamp();
+        assert!(shape.is_match(&text), "{text}");
+    }
+    #[test]
     fn a_contended_cleanup_update_respects_its_remaining_deadline_without_mutation() {
         let home = tempfile::tempdir().unwrap();
         let store = SessionStore::new(home.path());

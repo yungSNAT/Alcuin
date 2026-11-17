@@ -1587,6 +1587,27 @@ fn prune(registry: &mut Value, now: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn record_dates_are_rfc_3339_instants_in_milliseconds() {
+        // 2026-10-26T01:02:03.456Z.
+        let at = Some(1_792_976_523_456);
+        assert_eq!(date(&json!("2026-10-26T01:02:03.456Z")), at);
+        assert_eq!(date(&json!("2026-10-26T12:02:03.456+11:00")), at);
+        assert_eq!(date(&json!("2026-10-25T21:02:03.456789-04:00")), at);
+        assert_eq!(
+            date(&json!("2026-10-26T01:02:03Z")),
+            Some(1_792_976_523_000)
+        );
+        for refused in [
+            json!("2026-10-26T01:02:03"),
+            json!("2026-10-26"),
+            json!("not a date"),
+            json!(""),
+            json!(1_792_976_523_456_i64),
+        ] {
+            assert_eq!(date(&refused), None, "{refused}");
+        }
+    }
     #[tokio::test]
     async fn borrowed_attachment_refuses_idle_disposal_until_its_own_release() {
         let home = tempfile::tempdir().unwrap();
