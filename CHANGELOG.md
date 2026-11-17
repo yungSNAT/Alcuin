@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The README and the guides no longer say that `ORACLE_HOME_DIR` moves the ChatGPT browser profile. It moves the sessions and settings; the profile stays in `~/.oracle/browser-profile`, as in Oracle, unless `ORACLE_BROWSER_PROFILE_DIR` names another folder. They also say that the one-command install on macOS works from the first release after v0.1.0, which has no macOS build.
 - When ChatGPT shows 'No response from ChatGPT. Check your connection.' before any answer appears, the run now fails at once with 'ChatGPT displayed a temporary-unavailable warning while waiting for the assistant: ...', rather than waiting out the answer timeout. Alcuin neither presses that notice's Retry nor sends the prompt again, and a later harvest no longer saves the notice as the answer when it fills the turn beside a Retry.
 - When a completed ChatGPT run's cleanup is retried after its tab was closed outside Alcuin, it now deletes the session's staged copies of the attached files and clears the session's `cleanupWarning`, as cleanup does when Alcuin closes the tab itself. It marked the cleanup done but kept the copies.
 - Linux on aarch64 (64-bit Arm): each release now carries `alcuin-aarch64-unknown-linux-gnu.tar.gz`, built and smoke-tested on an Arm runner, and `install.sh` installs it on a machine whose `uname -m` is `aarch64` or `arm64`. CI runs the test suite on Arm Linux too.
