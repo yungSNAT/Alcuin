@@ -29,9 +29,10 @@
   // '<prompt>@Web search' when selected after the staged prompt, '@Web search <prompt>' when
   // the prompt follows an existing pill.
   const webSearch = cfg.webSearch === true;
-  // ChatGPT rewrites a prompt holding a web address as escaped Markdown, the address made a link.
-  // Accept exactly the form the stored-message check accepts (markdownSourceText, in scope from
-  // markdown-source.js), and only without the Web search pill, as that check does.
+  // ChatGPT stores a prompt holding a web address as escaped Markdown, the address made a link,
+  // and the exact check refused every such send. Accept that form by the stored-message check's
+  // rule (markdownSourceText, in scope from markdown-source.js). Not with the Web search pill:
+  // decoding keeps the pill's token, so it could not give the prompt there either.
   const textMatches = part => {
     const text = canonical(part);
     return webSearch ? text === expected + '@Web search' || text === '@Web search ' + expected :

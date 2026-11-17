@@ -2967,13 +2967,15 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         "autolink-mislabelled",
         "autolink-extra",
         "escaped-unlinked",
+        "literal-link",
+        "literal-link-incomplete",
     ] {
         let checked: Result<()> = async {
         mount(page, ACTIVE, "/", "").await?;
-        // ChatGPT sends a prompt holding a web address as escaped Markdown, the address made a
-        // link (the stored form browser_commit.rs records). Only that rewriting of this prompt is
-        // the prompt; another address, a link whose label differs, added text, or escapes with no
-        // link are not.
+        // ChatGPT stores a prompt holding a web address or link syntax as escaped Markdown, the
+        // address made a link (browser_commit.rs). The witness takes only that rewriting of this
+        // prompt as the prompt; another address, a link whose label differs, added text, escapes
+        // with no link, or link syntax left incomplete are not.
         let (prompt, sent) = match case {
             "unicode" => ("PUBLIC e\u{301} prompt", None),
             "autolink" => (
@@ -2993,6 +2995,11 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\. More"),
             ),
             "escaped-unlinked" => ("PUBLIC witness prompt.", Some(r"PUBLIC witness prompt\.")),
+            "literal-link" => (
+                "PUBLIC type [label](target).",
+                Some(r"PUBLIC type \[label\]\(target\)\."),
+            ),
+            "literal-link-incomplete" => ("PUBLIC type [label]( now", Some(r"PUBLIC type [label]\( now")),
             _ => ("PUBLIC witness prompt", None),
         };
         page.evaluate_with_arguments(r#"(cfg)=>{
@@ -3130,6 +3137,7 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
                 | "search-inline"
                 | "search-suffix"
                 | "autolink"
+                | "literal-link"
         );
         if case == "privacy" || case == "privacy-view" {
             assert_eq!(
