@@ -212,7 +212,7 @@ pub(super) fn read_database(
         let mut seen = BTreeSet::new();
         let mut examined = 0usize;
         let mut bytes = 2usize;
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         while let Some(row) = rows.next()? {
             check(deadline, cancel)?;
             examined += 1;

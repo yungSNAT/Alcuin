@@ -4,6 +4,7 @@ use alcuin::{
     sessions::{self, SessionStore, merge_artifacts, merge_browser},
     storage::{self, DirectoryLock},
 };
+use jiff::SignedDuration;
 use serde_json::{Value, json};
 use std::{fs, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -573,7 +574,7 @@ fn native_lock_survives_owner_crash_and_is_recovered() {
         .unwrap();
     assert!(!path.exists());
 }
-fn running(store: &SessionStore, slug: &str, age: chrono::Duration, extra: Value) -> String {
+fn running(store: &SessionStore, slug: &str, age: SignedDuration, extra: Value) -> String {
     let created = store
         .create(
             json!({"prompt":"PUBLIC zombie contract","model":"gpt-6-astra"}),
@@ -582,7 +583,7 @@ fn running(store: &SessionStore, slug: &str, age: chrono::Duration, extra: Value
         )
         .unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
-    let started = (chrono::Utc::now() - age).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let started = format!("{:.3}", jiff::Timestamp::now() - age);
     store
         .update(&id, |current| {
             let mut patch = json!({"status":"running","startedAt":started,"mode":"api"});
@@ -597,7 +598,7 @@ fn running(store: &SessionStore, slug: &str, age: chrono::Duration, extra: Value
 fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path());
-    let hours = chrono::Duration::hours;
+    let hours = SignedDuration::from_hours;
     let current = ProcessIdentity::current().unwrap();
     let zombie = |id: &str| store.reconcile_unverified_zombie(id).unwrap();
     // Unverifiable workers past the default hour are marked; dispatch evidence keeps recovery.
@@ -631,10 +632,10 @@ fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
             hours(3),
             json!({"lifecycle":{"workerPid":current.pid}}),
         ),
-        ("young", chrono::Duration::minutes(10), json!({})),
+        ("young", SignedDuration::from_mins(10), json!({})),
         (
             "long-timeout",
-            chrono::Duration::minutes(90),
+            SignedDuration::from_mins(90),
             json!({"options":{"timeoutSeconds":7200}}),
         ),
         (
@@ -652,7 +653,7 @@ fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
     let explicit = running(
         &store,
         "explicit",
-        chrono::Duration::seconds(3),
+        SignedDuration::from_secs(3),
         json!({"options":{"zombieTimeoutMs":1000}}),
     );
     assert_eq!(
@@ -694,11 +695,11 @@ fn zombie_rule_applies_only_when_the_worker_cannot_be_verified() {
 fn status_listing_marks_unverifiable_zombies_and_leaves_live_workers() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path());
-    let stale = running(&store, "stale", chrono::Duration::hours(2), json!({}));
+    let stale = running(&store, "stale", SignedDuration::from_hours(2), json!({}));
     let live = running(
         &store,
         "live",
-        chrono::Duration::hours(2),
+        SignedDuration::from_hours(2),
         json!({"lifecycle":{"processIdentity":ProcessIdentity::current().unwrap()}}),
     );
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
@@ -728,6 +729,76 @@ fn status_listing_marks_unverifiable_zombies_and_leaves_live_workers() {
     assert!(row(&live).starts_with("running"), "{stdout}");
     assert_eq!(store.require(&stale).unwrap()["status"], "error");
     assert_eq!(store.require(&live).unwrap()["status"], "running");
+}
+/// The session table shows `createdAt` in the zone `TZ` names, as an en-US date and 12-hour
+/// time, on both sides of Sydney's 2026 daylight-saving changes. Windows reads `TZ` too.
+#[test]
+fn status_table_shows_creation_times_in_the_local_zone() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path());
+    let cases = [
+        (
+            "dst-ends-before",
+            "2026-04-04T15:30:00.000Z",
+            "04/05/2026   2:30\u{202f}AM",
+        ),
+        (
+            "dst-ends-after",
+            "2026-04-04T16:30:00.000Z",
+            "04/05/2026   2:30\u{202f}AM",
+        ),
+        (
+            "dst-starts-before",
+            "2026-10-03T15:59:00.000Z",
+            "10/04/2026   1:59\u{202f}AM",
+        ),
+        (
+            "dst-starts-after",
+            "2026-10-03T16:01:00.000Z",
+            "10/04/2026   3:01\u{202f}AM",
+        ),
+        (
+            "afternoon",
+            "2026-10-26T01:02:03.456Z",
+            "10/26/2026  12:02\u{202f}PM",
+        ),
+    ];
+    let mut ids = vec![];
+    for (slug, created, _) in cases {
+        let session = store
+            .create(
+                json!({"prompt":"PUBLIC local time","model":"gpt-6-astra"}),
+                store.home(),
+                Some(slug),
+            )
+            .unwrap();
+        let id = session["id"].as_str().unwrap().to_owned();
+        store
+            .update(&id, |_| Ok(Some(json!({"createdAt":created}))))
+            .unwrap();
+        ids.push(id);
+    }
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
+        .env_clear()
+        .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("ORACLE_HOME_DIR", home.path())
+        .env("TZ", "Australia/Sydney")
+        .current_dir(home.path())
+        .args(["status", "--all"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for (id, (_, _, shown)) in ids.iter().zip(cases) {
+        let row = stdout.lines().find(|line| line.ends_with(id.as_str()));
+        assert!(row.is_some_and(|row| row.contains(shown)), "{id}: {stdout}");
+    }
 }
 #[tokio::test]
 async fn internal_provider_attempts_are_addressable_but_do_not_clog_public_session_lists() {

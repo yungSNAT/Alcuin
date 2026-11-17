@@ -98,19 +98,12 @@ pub(crate) fn priced_cost(meta: &Value) -> Option<f64> {
 }
 /// Reference formatTimestampAligned: en-US local date and 12-hour time.
 pub(crate) fn aligned_timestamp(iso: &str) -> String {
-    let Ok(time) = chrono::DateTime::parse_from_rfc3339(iso) else {
+    let Ok(time) = iso.parse::<jiff::Timestamp>() else {
         return "Invalid Date".into();
     };
-    let local = time.with_timezone(&chrono::Local);
-    let hour = local.format("%-I").to_string();
-    format!(
-        "{}  {}{}:{}\u{202f}{}",
-        local.format("%m/%d/%Y"),
-        if hour.len() == 1 { " " } else { "" },
-        hour,
-        local.format("%M"),
-        local.format("%p")
-    )
+    time.to_zoned_datetime(jiff::tz::TimeZone::system())
+        .strftime("%m/%d/%Y  %l:%M\u{202f}%p")
+        .to_string()
 }
 pub(crate) fn table_header() -> String {
     format!(
@@ -404,8 +397,8 @@ pub(crate) fn status_listing(
 }
 /// Reference formatRelativeDuration.
 fn relative_duration(iso: &str) -> Option<String> {
-    let time = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
-    let diff = chrono::Utc::now().timestamp_millis() - time.timestamp_millis();
+    let time = iso.parse::<jiff::Timestamp>().ok()?;
+    let diff = jiff::Timestamp::now().as_millisecond() - time.as_millisecond();
     if diff < 0 {
         return None;
     }
@@ -844,12 +837,13 @@ mod tests {
     }
     #[test]
     fn timestamps_use_en_us_twelve_hour_alignment() {
-        let local = chrono::DateTime::parse_from_rfc3339("2026-10-26T01:02:03.000Z")
+        let local = "2026-10-26T01:02:03.000Z"
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .with_timezone(&chrono::Local);
+            .to_zoned_datetime(jiff::tz::TimeZone::system());
         let text = aligned_timestamp("2026-10-26T01:02:03.000Z");
         assert!(
-            text.starts_with(&local.format("%m/%d/%Y  ").to_string()),
+            text.starts_with(&local.strftime("%m/%d/%Y  ").to_string()),
             "{text}"
         );
         assert_eq!(text.chars().count(), 20, "{text}");
