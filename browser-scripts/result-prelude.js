@@ -258,3 +258,29 @@ const readThinkingActivity = () => {
     }
     return {active:false,strong:false};
   };
+// ChatGPT's failed reply: its error line and a Retry, after the turn's user message. The banner can
+// sit outside the assistant's turn or come before any assistant message, so the page after the
+// message is read. Answer text never counts, and an assistant message with no marked answer root
+// counts whole as answer. The Retry only confirms the state; nothing ties it to the failure.
+const readStreamFailure = turn => {
+  const user = ':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])';
+  const reply = ':is([data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"])';
+  const answer = '[data-markdown-text-style="assistant-message"], .markdown, [data-message-content], .prose, [class*="MarkdownRoot"]';
+  const message = [turn, ...turn.querySelectorAll(user)].filter(node => node.matches(user)).at(-1) || turn;
+  const shown = node => { const rect = node.getBoundingClientRect(), style = window.getComputedStyle(node); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'; };
+  const outside = node => { const owner = node.closest(reply); return (message.compareDocumentPosition(node) & 4) && !node.closest(user) && !node.closest(answer) && !(owner && !owner.querySelector(answer)); };
+  const retry = Array.from(document.querySelectorAll('button, [role="button"]')).some(node => shown(node) && outside(node) &&
+    (node.innerText || node.textContent || node.getAttribute('aria-label') || '').trim().toLowerCase() === 'retry');
+  if (!retry) return null;
+  const words = node => (node.textContent || '').replace(/\s+/g, ' ').trim();
+  const pattern = /^(?:error in message stream|message delivery timed out\b.{0,120})$/i;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    if (!/error|message/i.test(text.data)) continue;
+    // The line can be split across inline elements, so the nearest element whose whole text matches holds it.
+    let line = text.parentElement;
+    for (let depth = 0; line && depth < 3 && !pattern.test(words(line)); depth++) line = line.parentElement;
+    if (line && pattern.test(words(line)) && shown(line) && outside(line)) return words(line);
+  }
+  return null;
+};

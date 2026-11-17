@@ -1919,6 +1919,166 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
     .await?;
     let generating = retry(&waiting).await?;
     anyhow::ensure!(generating["started"] == true, "Stop control: {generating}");
+    // ChatGPT's failed reply: its error line and a Retry, outside the assistant's turn, before any
+    // assistant message or beside a turn still marked as thinking. Answer text, an earlier turn's
+    // failure and the line without a Retry are not the submitted turn's failure. No Retry is offered
+    // for pressing: nothing in the page ties one to the failure, so the run ends instead.
+    let shimmer = "<span class='loading-shimmer'>PUBLIC</span>";
+    let banner =
+        |line: &str| format!("<div role='alert'><div>{line}</div><button>Retry</button></div>");
+    let partial = assistant("PUBLIC partial", shimmer);
+    let earlier = "<article data-turn-key='PUBLIC-earlier-turn'><div data-message-author-role='user' data-message-id='PUBLIC-earlier'>PUBLIC earlier</div></article>";
+    let alternate = |text: &str| {
+        format!(
+            "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-chatgpt-selection-message-id='PUBLIC-alt'><div class='markdown'>{text}</div></div></article>"
+        )
+    };
+    let unmarked = "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><p>Error in message stream</p></div></article>";
+    for (case, turns, line, message) in [
+        (
+            "split across elements",
+            format!("{user}{}", banner("Error in <span>message</span> stream")),
+            Some("Error in message stream"),
+            Value::Null,
+        ),
+        (
+            "banner without its own Retry",
+            format!(
+                "{user}<div><div role='alert'>Error in message stream</div><div><button>Retry</button></div></div>"
+            ),
+            Some("Error in message stream"),
+            Value::Null,
+        ),
+        (
+            "unrelated Retry after the banner",
+            format!(
+                "{user}{}<div><button>Retry</button></div>",
+                banner("Error in message stream")
+            ),
+            Some("Error in message stream"),
+            Value::Null,
+        ),
+        (
+            "two Retry controls in the banner",
+            format!(
+                "{user}<div role='alert'><div>Error in message stream</div><button>Retry</button><button>Retry</button></div>"
+            ),
+            Some("Error in message stream"),
+            Value::Null,
+        ),
+        (
+            "alternate assistant identity",
+            format!(
+                "{user}{}{}",
+                alternate("PUBLIC partial"),
+                banner("Error in message stream")
+            ),
+            Some("Error in message stream"),
+            json!("PUBLIC-alt"),
+        ),
+        (
+            "unmarked answer text",
+            format!("{user}{unmarked}<div><button>Retry</button></div>"),
+            None,
+            Value::Null,
+        ),
+        (
+            "no assistant message",
+            format!("{user}{}", banner("Error in message stream")),
+            Some("Error in message stream"),
+            Value::Null,
+        ),
+        (
+            "beside a finished turn's Regenerate menu",
+            format!(
+                "{user}{}{}",
+                assistant("PUBLIC partial", regenerate),
+                banner("Error in message stream")
+            ),
+            Some("Error in message stream"),
+            json!("PUBLIC-assistant"),
+        ),
+        (
+            "beside a thinking turn",
+            format!("{user}{partial}{}", banner("Error in message stream")),
+            Some("Error in message stream"),
+            json!("PUBLIC-assistant"),
+        ),
+        (
+            "delivery timeout",
+            format!(
+                "{user}{}",
+                banner("Message delivery timed out. Please try again.")
+            ),
+            Some("Message delivery timed out. Please try again."),
+            Value::Null,
+        ),
+        (
+            "still generating",
+            format!(
+                "{user}{}<button data-testid='stop-button'>Stop</button>",
+                banner("Error in message stream")
+            ),
+            Some("Error in message stream"),
+            Value::Null,
+        ),
+        (
+            "without Retry",
+            format!("{user}<div role='alert'>Error in message stream</div>"),
+            None,
+            Value::Null,
+        ),
+        (
+            "earlier turn",
+            format!("{earlier}{}{user}", banner("Error in message stream")),
+            None,
+            Value::Null,
+        ),
+        (
+            "quoted in the answer",
+            format!(
+                "{user}{}<div><button>Retry</button></div>",
+                assistant("<p>Error in message stream</p>", "")
+            ),
+            None,
+            Value::Null,
+        ),
+    ] {
+        open(&turns).await?;
+        let reported = live(&reporting).await?;
+        match line {
+            Some(line) => anyhow::ensure!(
+                reported["uiError"] == "temporary_unavailable"
+                    && reported["uiErrorText"] == line
+                    && reported["lastAssistantMessageId"] == message,
+                "Stream failure, {case}: {reported}"
+            ),
+            None => anyhow::ensure!(
+                reported.get("uiError").is_none() && reported.get("uiErrorText").is_none(),
+                "Not a stream failure, {case}: {reported}"
+            ),
+        }
+        anyhow::ensure!(
+            live(&refusing).await.is_err() == line.is_some(),
+            "Stream failure without uiErrors, {case}"
+        );
+        if line.is_some() {
+            let found = retry(&reporting).await?;
+            anyhow::ensure!(
+                found["ok"] == false && found["failed"] == true,
+                "Stream failure offered a Retry, {case}: {found}"
+            );
+        }
+    }
+    // Once the banner is gone, the unchanged assistant is not a restarted turn.
+    open(&format!("{user}{}", alternate("PUBLIC partial"))).await?;
+    let mut waiting = reporting.clone();
+    waiting["before"] = json!("PUBLIC-alt");
+    let same = retry(&waiting).await?;
+    anyhow::ensure!(
+        same["failed"] == false && same["started"] == false,
+        "Banner gone, same alternate-identity assistant: {same}"
+    );
     page.evaluate_with_arguments(
         "()=>{sessionStorage.removeItem('oracle:target-claim');return true;}",
         &json!([]),

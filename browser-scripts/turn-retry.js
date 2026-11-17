@@ -6,6 +6,9 @@ const failed = observed.uiError === 'temporary_unavailable' || observed.unloaded
 // evidence, since a page that merely dropped its Retry can still show the old partial text.
 if (!failed) return { ok:false, failed:false, started:observed.pending === true || observed.stopExists === true ||
   observed.strongThinkingActive === true || (observed.lastAssistantMessageId ?? null) !== (cfg.before ?? null) };
+// ChatGPT's failed reply offers a Retry, but nothing in the page ties it to the failure, so it is
+// never pressed and the failure stands.
+if (observed.uiErrorText) return { ok:false, failed:true };
 if (observed.stopExists !== false || observed.strongThinkingActive !== false) return { ok:false, failed:true };
 const visible = node => {
   const rect = node.getBoundingClientRect(), style = window.getComputedStyle(node);
