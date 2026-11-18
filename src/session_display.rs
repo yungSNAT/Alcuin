@@ -882,6 +882,16 @@ mod tests {
         assert_eq!(execution_label(&json!({"mode":"browser"})), "browser");
     }
     #[test]
+    fn a_parent_named_only_by_a_response_no_session_read_owns_is_unresolved() {
+        let parent = json!({"id":"public-parent","response":{"responseId":"resp_PUBLIC_parent_response_1234"}});
+        let child = json!({"id":"public-child","options":{"previousResponseId":"resp_PUBLIC_parent_response_1234"}});
+        let named = json!({"id":"public-named","options":{"followupSessionId":"public-gone","previousResponseId":"resp_PUBLIC_gone_response_99999"}});
+        let root = json!({"id":"public-root"});
+        assert!(unresolved_parent(std::slice::from_ref(&child), &[]));
+        assert!(!unresolved_parent(std::slice::from_ref(&child), &[parent]));
+        assert!(!unresolved_parent(&[named, root], &[]));
+    }
+    #[test]
     fn attach_metadata_and_summary_follow_the_reference_lines() {
         let meta = json!({"id":"public-attach","status":"completed","createdAt":"2026-10-26T01:00:00.000Z","model":"gpt-6-astra","mode":"api","elapsedMs":1500,
             "lifecycle":{"engine":"api","execution":"background","attached":false,"reattachCommand":"alcuin session public-attach"},
