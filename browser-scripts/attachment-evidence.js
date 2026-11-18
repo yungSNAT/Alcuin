@@ -60,9 +60,10 @@ return (() => {
     const valid = receipt => receipt.composer === composer && receipt.control?.isConnected && currentControls.includes(receipt.control) && receipt.control.getAttribute('aria-label') === receipt.label;
     for (const [receiptId, receipt] of receipts) {
       // ChatGPT remounts a removal control, label unchanged, once its upload finishes processing
-      // (17 November 2026). Adopt the replacement only when the original left the document and
-      // exactly one unclaimed control carries the label confirmed for this file.
-      if (receipt.composer === composer && receipt.control && !receipt.control.isConnected) {
+      // (17 November 2026). Adopt the replacement only when the original left the document, its
+      // label is 'Remove <this file's name>' and exactly one unclaimed control carries that label.
+      const namesFile = (receipt.label ?? '').toLowerCase().replace(/\s+/g, ' ').trim() === 'remove ' + receipt.name;
+      if (receipt.composer === composer && receipt.control && !receipt.control.isConnected && namesFile) {
         const claimed = new Set(Array.from(receipts.values()).map(entry => entry.control));
         const replacements = currentControls.filter(control => !claimed.has(control) && control.getAttribute('aria-label') === receipt.label);
         if (replacements.length === 1) receipt.control = replacements[0];
