@@ -38,7 +38,7 @@ pub fn token(explicit: Option<&str>, respawn: bool, path: &Path) -> String {
     crate::remote_service::access_token()
 }
 fn write_connection(path: &Path, mut value: Value) -> Result<Value> {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let now = crate::sessions::timestamp();
     let previous = std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());

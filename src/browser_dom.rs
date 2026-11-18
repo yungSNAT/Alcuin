@@ -561,17 +561,27 @@ impl PreparedPrompt {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             }
         }
+        if attachments {
+            refresh_receipts(reservation, call(deadline), cancel).await?;
+        }
         let armed = reservation
             .evaluate_mutation(SEND_PREPARE, self.cfg.clone(), call(deadline), cancel)
             .await?;
+        let failed = [
+            "guardInstalled",
+            "focused",
+            "attachmentsReady",
+            "promptReady",
+            "preparationReady",
+            "contextMatches",
+        ]
+        .into_iter()
+        .filter(|flag| armed[*flag] != true)
+        .collect::<Vec<_>>();
         anyhow::ensure!(
-            armed["guardInstalled"] == true
-                && armed["focused"] == true
-                && armed["attachmentsReady"] == true
-                && armed["promptReady"] == true
-                && armed["preparationReady"] == true
-                && armed["contextMatches"] == true,
-            "Original prompt, upload readiness or send ownership changed"
+            failed.is_empty(),
+            "Original prompt, upload readiness or send ownership changed (not true: {})",
+            failed.join(", ")
         );
         Ok(())
     }
@@ -1092,6 +1102,24 @@ pub async fn upload(
     reservation.finish_upload_work(false);
     result
 }
+/// Has each upload receipt follow its removal control if the page remounted it; a receipt
+/// whose control cannot be identified is dropped. Send and reset then judge the receipts.
+async fn refresh_receipts(
+    reservation: &mut RendererReservation,
+    timeout: Duration,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    reservation
+        .evaluate_mutation(
+            EVIDENCE,
+            json!({"names":[],"action":"refresh"}),
+            timeout,
+            cancel,
+        )
+        .await
+        .context("Refresh upload receipts")?;
+    Ok(())
+}
 pub async fn reset_uploads(
     reservation: &mut RendererReservation,
     uploads: &[Value],
@@ -1106,6 +1134,7 @@ pub async fn reset_uploads(
     );
     let (_, current) = capture_navigation(reservation, timeout, cancel).await?;
     anyhow::ensure!(current == *nav, "Upload reset navigation changed");
+    refresh_receipts(reservation, timeout, cancel).await?;
     let id = Uuid::new_v4().to_string();
     let mut cfg = json!({"id":id,"action":"begin","uploads":uploads,"navigation":nav});
     let deadline = Instant::now() + timeout;

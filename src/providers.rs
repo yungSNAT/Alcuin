@@ -575,8 +575,8 @@ fn status_message(status: u16, bytes: &[u8]) -> String {
     }
 }
 /// The OpenAI SDK retry delay: `retry-after-ms`, then `retry-after` seconds or date, when
-/// under a minute.
-fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+/// under a minute. A date counts from `now_ms`, milliseconds since the Unix epoch.
+fn retry_after(headers: &reqwest::header::HeaderMap, now_ms: i64) -> Option<Duration> {
     let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
     let millis = header("retry-after-ms")
         .and_then(|value| value.trim().parse::<f64>().ok())
@@ -587,11 +587,9 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
                 .map(|seconds| seconds * 1000.0)
                 .ok()
                 .or_else(|| {
-                    chrono::DateTime::parse_from_rfc2822(value)
+                    jiff::fmt::rfc2822::parse(value)
                         .ok()
-                        .map(|date| {
-                            (date.timestamp_millis() - chrono::Utc::now().timestamp_millis()) as f64
-                        })
+                        .map(|date| (date.timestamp().as_millisecond() - now_ms) as f64)
                 })
         })?;
     (millis.is_finite() && (0.0..60_000.0).contains(&millis))
@@ -768,7 +766,9 @@ impl HttpProvider {
             let delay = sent
                 .as_ref()
                 .ok()
-                .and_then(|response| retry_after(response.headers()))
+                .and_then(|response| {
+                    retry_after(response.headers(), jiff::Timestamp::now().as_millisecond())
+                })
                 .unwrap_or_else(|| Duration::from_millis((500u64 << attempt).min(8000)));
             attempt += 1;
             tokio::select! {biased; _ = cancel.cancelled()=>return Err(abort()),_=tokio::time::sleep(delay)=>{}}
@@ -867,7 +867,7 @@ impl HttpProvider {
                     if chat.get("id").is_none() {
                         chat["id"] = json!(format!(
                             "openrouter-{}",
-                            chrono::Utc::now().timestamp_millis()
+                            jiff::Timestamp::now().as_millisecond()
                         ));
                     }
                     observer.response(&chat)?;
@@ -1029,7 +1029,7 @@ pub fn chat_response(response: &Value) -> Value {
     let text = response["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("");
-    json!({"id":response["id"].as_str().map(str::to_owned).unwrap_or_else(||format!("openrouter-{}",chrono::Utc::now().timestamp_millis())),"status":"completed","output_text":[text],"output":[{"type":"text","text":text}],"usage":chat_usage(&response["usage"])})
+    json!({"id":response["id"].as_str().map(str::to_owned).unwrap_or_else(||format!("openrouter-{}",jiff::Timestamp::now().as_millisecond())),"status":"completed","output_text":[text],"output":[{"type":"text","text":text}],"usage":chat_usage(&response["usage"])})
 }
 pub fn text_output(response: &Value) -> String {
     if let Some(parts) = response["output_text"]
@@ -1062,6 +1062,40 @@ pub fn text_output(response: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_reads_milliseconds_seconds_and_dates_under_a_minute() {
+        // 2026-10-26T01:02:03Z, a Monday.
+        let now_ms = 1_792_976_523_000;
+        let delay = |name: &str, value: &str| {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+            retry_after(&headers, now_ms)
+        };
+        let ms = |millis: u64| Some(Duration::from_millis(millis));
+        assert_eq!(delay("retry-after-ms", "1500"), ms(1500));
+        assert_eq!(delay("retry-after", " 2.5 "), ms(2500));
+        assert_eq!(delay("retry-after", "60"), None);
+        assert_eq!(
+            delay("retry-after", "Mon, 26 Oct 2026 01:02:33 GMT"),
+            ms(30_000)
+        );
+        assert_eq!(
+            delay("retry-after", "Mon, 26 Oct 2026 01:02:33 +0000"),
+            ms(30_000)
+        );
+        assert_eq!(
+            delay("retry-after", "Mon, 26 Oct 2026 12:02:33 +1100"),
+            ms(30_000)
+        );
+        assert_eq!(delay("retry-after", "Mon, 26 Oct 2026 01:03:03 GMT"), None);
+        assert_eq!(delay("retry-after", "Mon, 26 Oct 2026 01:02:02 GMT"), None);
+        assert_eq!(delay("retry-after", "Tue, 26 Oct 2026 01:02:33 GMT"), None);
+        assert_eq!(delay("retry-after", "soon"), None);
+    }
 
     /// GPT-6 Astra's standard rates per 1M tokens on https://platform.openai.com/docs/pricing,
     /// read 15 November 2026: $10.00 input, $1.00 cached input, $12.50 for a 30-minute cache write
