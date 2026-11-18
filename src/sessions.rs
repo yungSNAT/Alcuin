@@ -1532,4 +1532,91 @@ mod run_index_tests {
         same.sort();
         assert_eq!(scan(&query), (same.clone(), same));
     }
+    fn ids(sessions: Vec<Value>) -> Vec<String> {
+        sessions
+            .iter()
+            .map(|meta| meta["id"].as_str().unwrap().to_owned())
+            .collect()
+    }
+    #[test]
+    fn a_duplicate_check_lists_the_newest_matching_session_first() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let mut created = vec![];
+        for (slug, at) in [
+            ("public-z-newest", "2026-11-18T02:00:00.000Z"),
+            ("public-a-oldest", "2026-11-18T01:00:00.000Z"),
+        ] {
+            let id = store
+                .create(json!({"prompt":"PUBLIC order"}), home.path(), Some(slug))
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            store
+                .update(&id, |_| Ok(Some(json!({"createdAt":at}))))
+                .unwrap();
+            created.push(id);
+        }
+        assert_eq!(
+            ids(store
+                .list_same_run(&json!({"prompt":"PUBLIC order"}))
+                .unwrap()),
+            created
+        );
+    }
+    #[test]
+    fn a_broken_run_index_falls_back_to_reading_every_session() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let create = |slug: &str| {
+            store
+                .create(
+                    json!({"prompt":"PUBLIC broken index"}),
+                    home.path(),
+                    Some(slug),
+                )
+                .map(|meta| meta["id"].as_str().unwrap().to_owned())
+        };
+        let first = create("public-before-break").unwrap();
+        let index = home.path().join("sessions-run-index");
+        fs::remove_dir_all(&index).unwrap();
+        fs::write(&index, "PUBLIC not a directory").unwrap();
+        let second = create("public-after-break").expect("an index failure refused a session");
+        let mut listed = ids(store
+            .list_same_run(&json!({"prompt":"PUBLIC broken index"}))
+            .expect("an index failure refused the duplicate check"));
+        listed.sort();
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(listed, expected);
+    }
+    #[test]
+    fn a_session_whose_prompt_changes_is_found_under_its_new_run() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let id = store
+            .create(
+                json!({"prompt":"PUBLIC before"}),
+                home.path(),
+                Some("public-changed"),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        store
+            .update(&id, |current| {
+                let mut options = current["options"].clone();
+                options["prompt"] = json!("PUBLIC after");
+                Ok(Some(json!({"options":options})))
+            })
+            .unwrap();
+        assert_eq!(
+            ids(store
+                .list_same_run(&json!({"prompt":"PUBLIC after"}))
+                .unwrap()),
+            [id]
+        );
+    }
 }
