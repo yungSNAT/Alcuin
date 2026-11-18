@@ -1190,6 +1190,46 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_child_that_never_started_its_send_needs_no_recovery_despite_its_tab() {
+        let (_root, store, identity) = parent();
+        let id = id(&store);
+        let cancel = CancellationToken::new();
+        let mut coordinator = Parent::begin(&store, &id, &identity, &cancel).unwrap();
+        let link = coordinator.reserve_first(&cancel).unwrap();
+        let parent = store.require(&id).unwrap();
+        let child = store.require(&link.child_id).unwrap();
+        let owned = json!({"browser":{"runtime":{"chromeTargetId":"PUBLIC-owned",
+            "freshProfileOwner":{"sessionId":link.child_id}}}});
+        // A login refusal after the tab opened: the child's own failure write records no send.
+        let cases = [
+            ("error", json!({"state":"not-started"}), false),
+            ("cancelled", Value::Null, false),
+            ("running", json!({"state":"not-started"}), true),
+            ("error", json!({"state":"uncertain"}), true),
+            ("error", json!({"state":"started"}), true),
+        ];
+        for (status, dispatch, expected) in cases {
+            let mut patch = merge_object(&owned, &json!({"status":status}));
+            if !dispatch.is_null() {
+                patch["dispatch"] = dispatch.clone();
+            }
+            store
+                .update(&link.child_id, |_| Ok(Some(merge_object(&child, &patch))))
+                .unwrap();
+            assert_eq!(
+                needs_recovery(&store, &parent),
+                expected,
+                "{status} {dispatch}"
+            );
+            atomic_json(
+                &store.directory(&link.child_id).unwrap().join("meta.json"),
+                &child,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
     fn derived_request_needs_both_commitments_and_rejects_changed_payload_or_cancellation() {
         for mutation in [
             "reserved",
