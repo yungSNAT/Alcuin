@@ -1532,4 +1532,28 @@ mod window_tests {
             [recent, old]
         );
     }
+    #[test]
+    fn a_session_created_inside_the_window_is_listed_whatever_its_file_times() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let id = store
+            .create(json!({"prompt":"PUBLIC restored"}), home.path(), Some("public-restored"))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // A restore that keeps old file times, or a time set back by hand.
+        let days_ago = jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_hours(72))
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(store.directory(&id).unwrap().join("meta.json"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::try_from(days_ago).unwrap())
+            .unwrap();
+        let listed = store.list_created_since(true, Some(24.0)).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["id"], id);
+    }
 }
