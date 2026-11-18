@@ -91,7 +91,9 @@ pub(crate) async fn require(
             Err(error)
                 if unknown.is_some()
                     && tokio::time::Instant::now() >= deadline
-                    && error.downcast_ref::<crate::cdp::PageReadStalled>().is_some() =>
+                    && error
+                        .downcast_ref::<crate::cdp::PageReadStalled>()
+                        .is_some() =>
             {
                 anyhow::bail!(unverified(unknown.as_deref(), timeout))
             }
