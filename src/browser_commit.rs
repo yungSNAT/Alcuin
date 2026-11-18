@@ -86,7 +86,7 @@ const WITNESS_READ: &str = r#"(cfg, privacy) => {
     const record=window.__oracleSubmissionWitness;
     if(!record || record.witnessId!==cfg.intent.witnessId || record.dispatchGuardId!==cfg.intent.dispatchGuardId ||
         record.owner.claimId!==cfg.owner.claimId || record.owner.reservationId!==cfg.owner.reservationId) return {state:'unavailable'};
-    if(typeof record.read==='function') return record.read();
+    if(typeof record.read==='function') return record.read(privacy);
     const current=location.pathname.match(/^\/c\/([a-zA-Z0-9-]+)$/)?.[1] ?? null;
     if(record.document!==document || window!==window.top || location.origin!=='https://chatgpt.com' ||
         record.conversationId && current!==record.conversationId) return {state:'invalid'};

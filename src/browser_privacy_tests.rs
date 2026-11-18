@@ -259,6 +259,9 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
     receipt_privacy_read_cases(page)
         .await
         .context("Receipt privacy read regression")?;
+    live_receipt_privacy_read_cases(page)
+        .await
+        .context("Live receipt privacy read regression")?;
     witness_closure_release_cases(page)
         .await
         .context("Witness closure regression")?;
@@ -3537,6 +3540,41 @@ async fn receipt_privacy_read_cases(page: &Cdp) -> Result<()> {
         "Retained witness was not read: {receipt}"
     );
     assert_eq!(walks, 2, "Receipt probe walked main {walks} times");
+    Ok(())
+}
+
+/// A receipt read of a live witness hands it the Temporary Chat state the read already checked,
+/// so the witness runs no predicate of its own. The witness's stub predicate says false, so had
+/// it run, the witness would refuse the Temporary Chat view the read verified.
+async fn live_receipt_privacy_read_cases(page: &Cdp) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let view = "()=>{const root={return:null,stateNode:{}};root.stateNode.current=root;document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:{scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}};}";
+    mount(page, ACTIVE, "/c/PUBLIC-id", view).await?;
+    let owner = json!({"claimId":"PUBLIC-claim","reservationId":"PUBLIC-reservation"});
+    let intent = json!({"witnessId":"PUBLIC-witness","dispatchGuardId":"PUBLIC-guard","promptSha256":"PUBLIC-sha"});
+    let install = format!(
+        r#"(cfg)=>{{
+        sessionStorage.setItem('oracle:target-claim',JSON.stringify({{id:cfg.owner.claimId,retiring:false,
+            submission:{{id:cfg.owner.reservationId,state:'quarantined',dispatch:'acknowledged'}}}}));
+        window.PUBLIC_witnessReads=0;
+        ({collector})({{owner:cfg.owner,prompt:'PUBLIC prompt',witnessId:cfg.intent.witnessId,dispatchGuardId:cfg.intent.dispatchGuardId,
+            promptSha256:cfg.intent.promptSha256,expectations:[]}},{{admitted:true}},()=>{{}},()=>{{window.PUBLIC_witnessReads++;return false;}});
+        return true;
+    }}"#,
+        collector = crate::browser_dom::WITNESS
+    );
+    page.evaluate_with_arguments(
+        &install,
+        &json!([{"owner":owner,"intent":intent}]),
+        SHORT,
+        &cancel,
+    )
+    .await?;
+    let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+        &json!([{"owner":owner,"ids":[],"prompt":"PUBLIC prompt","intent":intent,"saved":null}]),SHORT,&cancel).await?;
+    let reads=page.evaluate_with_arguments("()=>{const reads=window.PUBLIC_witnessReads;window.__oracleSubmissionWitness.cleanup();delete window.PUBLIC_witnessReads;sessionStorage.removeItem('oracle:target-claim');return reads;}",&json!([]),SHORT,&cancel).await?;
+    assert_eq!(reads, 0, "The live witness ran its own predicate {reads} times");
+    assert_eq!(receipt["submission"]["state"], "pending", "{receipt}");
     Ok(())
 }
 
