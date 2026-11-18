@@ -405,6 +405,25 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
             format!("Accepted or misnamed conflicting or stale React view: {change}")
         })?;
     }
+    // A slow renderer can make the deadline cut the last re-read short. The view stays unbound,
+    // and from 200 ms each read of it holds the renderer until 1.5 s, past require's 600 ms.
+    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
+    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),fiber=node.__reactFiber$PUBLIC,start=Date.now();fiber.memoizedProps.scrollStateConversationId='PUBLIC-other';delete node.__reactFiber$PUBLIC;Object.defineProperty(node,'__reactFiber$PUBLIC',{configurable:true,enumerable:true,get(){if(Date.now()-start>200)while(Date.now()<start+1500){}return fiber;}});return true;}",&json!([{}]),SHORT,&cancel).await?;
+    // It stays a stalled read, which the answer wait rides out.
+    let stalled = require(page, Duration::from_millis(600), &cancel)
+        .await
+        .unwrap_err();
+    anyhow::ensure!(
+        stalled
+            .downcast_ref::<crate::cdp::PageReadStalled>()
+            .is_some(),
+        "A deadline-cut re-read is no longer a stalled read: {stalled:#}"
+    );
+    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
+    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),fiber=node.__reactFiber$PUBLIC,start=Date.now();fiber.memoizedProps.scrollStateConversationId='PUBLIC-other';delete node.__reactFiber$PUBLIC;Object.defineProperty(node,'__reactFiber$PUBLIC',{configurable:true,enumerable:true,get(){if(Date.now()-start>200)while(Date.now()<start+1500){}return fiber;}});return true;}",&json!([{}]),SHORT,&cancel).await?;
+    refuses(page, Duration::from_millis(600), unbound)
+        .await
+        .context("Misnamed an unknown view whose last re-read the deadline cut short")?;
     // From 10 November 2026 ChatGPT keys the view by its local client ID and names the server
     // ID only in its history; scrollStateConversationId is gone.
     let history_view = current_view.replace(
