@@ -176,18 +176,19 @@ pub(crate) fn needs_recovery(store: &SessionStore, parent: &Value) -> bool {
     }
     let runtime = &child["browser"]["runtime"];
     // A failed child whose dispatch never started cannot send: the started record precedes the
-    // single physical Send and needs a running session. Its tab closes with the consultation.
+    // single physical Send and needs a running session. Its own `recoveryRequired` then marks
+    // only a tab not yet retired, which closes with the consultation.
     let unsent = matches!(child["status"].as_str(), Some("error" | "cancelled"))
         && (child.get("dispatch").is_none() || child["dispatch"]["state"] == "not-started");
-    child["recoveryRequired"] == true
-        || !unsent
-            && (child.get("dispatch").is_some()
-                || runtime["chromeTargetId"].is_string()
-                || runtime["freshProfileOwner"].is_object()
-                    && !matches!(
-                        runtime["freshProfileDisposal"]["disposition"].as_str(),
-                        Some("removed" | "kept")
-                    ))
+    !unsent
+        && (child["recoveryRequired"] == true
+            || child.get("dispatch").is_some()
+            || runtime["chromeTargetId"].is_string()
+            || runtime["freshProfileOwner"].is_object()
+                && !matches!(
+                    runtime["freshProfileDisposal"]["disposition"].as_str(),
+                    Some("removed" | "kept")
+                ))
 }
 
 /// Resolve endpoint evidence through reciprocal seals, without transferring target authority.
