@@ -5,13 +5,6 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const TOKEN: &str = "PUBLIC-serve-token";
-fn unused_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
 enum Token {
     Flag,
     File(&'static str),
@@ -40,7 +33,9 @@ async fn serve_with(
         }
         Token::Generated => vec![],
     };
-    let port = unused_port().to_string();
+    // serve binds port 0 itself and prints the port: a port picked here could be taken before
+    // serve binds it.
+    let stderr = std::fs::File::create(home.path().join("serve.stderr")).unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
@@ -52,10 +47,10 @@ async fn serve_with(
         .current_dir(home.path())
         .kill_on_drop(true)
         .args(["serve", "--browser-attach-running", "--host", "127.0.0.1"])
-        .args(["--port", &port, "--max-concurrent-runs", "3"])
+        .args(["--port", "0", "--max-concurrent-runs", "3"])
         .args(token_args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(stderr)
         .spawn()
         .unwrap();
     let mut reader = BufReader::new(child.stdout.take().unwrap()).lines();
@@ -76,9 +71,14 @@ async fn serve_with(
             && lines
                 .last()
                 .is_some_and(|line| line.starts_with("Access token:")),
-        "{lines:?} {:?}",
-        child.try_wait()
+        "{lines:?} {:?} {}",
+        child.try_wait(),
+        std::fs::read_to_string(home.path().join("serve.stderr")).unwrap_or_default()
     );
+    let address = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("Listening at "))
+        .unwrap();
     let bearer = match token {
         Token::Generated => lines.last().unwrap()["Access token: ".len()..].to_owned(),
         _ => TOKEN.to_owned(),
@@ -87,7 +87,7 @@ async fn serve_with(
         .no_proxy()
         .build()
         .unwrap()
-        .get(format!("http://127.0.0.1:{port}/health"))
+        .get(format!("http://{address}/health"))
         .bearer_auth(bearer)
         .send()
         .await

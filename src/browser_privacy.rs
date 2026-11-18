@@ -77,7 +77,7 @@ pub(crate) async fn require(
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         anyhow::ensure!(!left.is_zero(), unverified(unknown.as_deref(), timeout));
-        let verdict = page
+        let verdict = match page
             .evaluate_with_arguments(
                 &format!("(cfg) => {{ /* alcuin-dom:temporary-chat */ return (\n{PROBE}\n); }}"),
                 &json!([{}]),
@@ -85,10 +85,21 @@ pub(crate) async fn require(
                 cancel,
             )
             .await
-            .map_err(|error| {
+        {
+            Ok(verdict) => verdict,
+            // A re-read that the deadline cut short leaves the state unknown at the deadline.
+            Err(error)
+                if unknown.is_some()
+                    && tokio::time::Instant::now() >= deadline
+                    && error.downcast_ref::<crate::cdp::PageReadStalled>().is_some() =>
+            {
+                anyhow::bail!(unverified(unknown.as_deref(), timeout))
+            }
+            Err(error) => {
                 let message = format!("{REFUSAL}: {error}");
-                error.context(message)
-            })?;
+                return Err(error.context(message));
+            }
+        };
         let reason = crate::cdp::page_text(
             verdict["reason"]
                 .as_str()
