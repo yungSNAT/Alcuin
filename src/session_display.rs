@@ -177,6 +177,15 @@ pub(crate) fn response_owners(sessions: &[Value]) -> BTreeMap<String, String> {
     }
     owners
 }
+/// Whether an entry follows a previous response that no session in `sessions` owns, so a row
+/// could only name its parent from sessions outside them.
+pub(crate) fn unresolved_parent(entries: &[Value], sessions: &[Value]) -> bool {
+    let owners = response_owners(sessions);
+    entries.iter().any(|entry| {
+        lineage(entry, Some(&owners))
+            .is_some_and(|lineage| lineage.session.is_none() && lineage.response.is_some())
+    })
+}
 struct Lineage {
     response: Option<String>,
     session: Option<String>,

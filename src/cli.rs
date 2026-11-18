@@ -2501,6 +2501,13 @@ async fn session_command(
     // Reference usesDefaultStatusFilters; the root --status alias always shows the examples.
     let examples = !["hours", "limit", "all"].iter().any(|id| specified(m, id));
     let (entries, total, truncated) = sessions::filter_range(entries, hours, flag(m, "all"), limit);
+    // A follow-up's row names the session that owns its previous response, which may predate
+    // the window: read every session then.
+    let all = if !flag(m, "all") && crate::session_display::unresolved_parent(&entries, &all) {
+        store.list(true)?
+    } else {
+        all
+    };
     for line in crate::session_display::status_listing(&entries, &all, total, truncated, examples) {
         println!("{line}");
     }
