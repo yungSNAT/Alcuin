@@ -417,13 +417,13 @@ impl SessionStore {
         let guard = self.write_directory(id)?;
         let mut current = self.stored_for_update(id)?;
         if let Some(patch) = decide(&current)? {
-            let run = run_key(&current["options"])?;
+            let signature = run_key(&current["options"])?;
             apply_patch(&mut current, &patch)?;
             if current["id"] != id {
                 bail!("Invalid stored metadata for session {id}.");
             }
             self.index_target(id, &current)?;
-            self.reindex_run(id, &run, &current["options"])?;
+            self.reindex_run(id, &signature, &current["options"])?;
             guard.leaf(&dir.join("meta.json"))?;
             match deadline {
                 Some(deadline) => atomic_json_until(&dir.join("meta.json"), &current, deadline)?,
@@ -490,13 +490,13 @@ impl SessionStore {
                 }
                 current["models"] = json!(runs);
             }
-            let run = run_key(&current["options"])?;
+            let signature = run_key(&current["options"])?;
             apply_patch(&mut current, &patch)?;
             if current["id"] != id {
                 bail!("Invalid stored metadata for session {id}.");
             }
             self.index_target(id, &current)?;
-            self.reindex_run(id, &run, &current["options"])?;
+            self.reindex_run(id, &signature, &current["options"])?;
             if model_patch.is_some() {
                 let models = guard.models()?;
                 let path = self.model_path(id, model)?;
