@@ -1203,8 +1203,6 @@ mod tests {
         let link = coordinator.reserve_first(&cancel).unwrap();
         let parent = store.require(&id).unwrap();
         let child = store.require(&link.child_id).unwrap();
-        let owned = json!({"browser":{"runtime":{"chromeTargetId":"PUBLIC-owned",
-            "freshProfileOwner":{"sessionId":link.child_id}}}});
         // A login refusal after the tab opened: the child's own failure write records no send.
         let cases = [
             ("error", json!({"state":"not-started"}), false),
@@ -1214,12 +1212,15 @@ mod tests {
             ("error", json!({"state":"started"}), true),
         ];
         for (status, dispatch, expected) in cases {
-            let mut patch = merge_object(&owned, &json!({"status":status}));
+            let mut meta = child.clone();
+            meta["status"] = json!(status);
+            meta["browser"]["runtime"]["chromeTargetId"] = json!("PUBLIC-owned");
+            meta["browser"]["runtime"]["freshProfileOwner"] = json!({"sessionId":link.child_id});
             if !dispatch.is_null() {
-                patch["dispatch"] = dispatch.clone();
+                meta["dispatch"] = dispatch.clone();
             }
             store
-                .update(&link.child_id, |_| Ok(Some(merge_object(&child, &patch))))
+                .update(&link.child_id, |_| Ok(Some(meta.clone())))
                 .unwrap();
             assert_eq!(
                 needs_recovery(&store, &parent),
