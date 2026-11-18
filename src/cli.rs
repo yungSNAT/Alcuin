@@ -2481,7 +2481,11 @@ async fn session_command(
         }
         return attach(store, id, &attach_view(root, m), env).await;
     }
-    let all = store.list(true)?;
+    let hours = text(m, "hours")
+        .unwrap_or("24")
+        .parse::<f64>()
+        .context("Value must be a number.")?;
+    let all = store.list_created_since(true, (!flag(m, "all")).then_some(hours))?;
     let mut entries = all.clone();
     entries.retain(|entry| !crate::browser_attempt::internal(entry));
     for entry in &mut entries {
@@ -2490,10 +2494,6 @@ async fn session_command(
     if let Some(model) = text(view_scope(root, m, "model"), "model") {
         entries.retain(|entry| crate::session_display::matches_model(entry, model));
     }
-    let hours = text(m, "hours")
-        .unwrap_or("24")
-        .parse::<f64>()
-        .context("Value must be a number.")?;
     let limit = text(m, "limit")
         .unwrap_or("100")
         .parse::<usize>()
@@ -2501,6 +2501,13 @@ async fn session_command(
     // Reference usesDefaultStatusFilters; the root --status alias always shows the examples.
     let examples = !["hours", "limit", "all"].iter().any(|id| specified(m, id));
     let (entries, total, truncated) = sessions::filter_range(entries, hours, flag(m, "all"), limit);
+    // A follow-up's row names the session that owns its previous response, which may predate
+    // the window: read every session then.
+    let all = if !flag(m, "all") && crate::session_display::unresolved_parent(&entries, &all) {
+        store.list(true)?
+    } else {
+        all
+    };
     for line in crate::session_display::status_listing(&entries, &all, total, truncated, examples) {
         println!("{line}");
     }
