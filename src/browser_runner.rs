@@ -281,7 +281,7 @@ fn prepare_with_base(
         // A run whose worker and controller are verifiably dead no longer counts as running.
         // Summaries skip finished sessions' model runs, which status and options do not need.
         let signature = crate::execution::run_signature(&request.options);
-        for current in store.list(true)? {
+        for current in store.list_same_run(&request.options)? {
             if matches!(current["status"].as_str(), Some("pending" | "running"))
                 && crate::execution::run_signature(&current["options"]) == signature
                 && !store.verified_dead_run(&current)
