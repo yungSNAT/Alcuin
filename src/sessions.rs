@@ -691,13 +691,15 @@ impl SessionStore {
         self.list_created_since(summary, None)
     }
     /// `list`, skipping unread the sessions created more than `hours` before now when `hours` is
-    /// given. A session's metadata is written when it is created and only rewritten after, so one
-    /// whose metadata files were all last written before the cutoff was created before it. Some
-    /// older sessions are still returned; `filter_range` applies the window.
-    /// shortcut: trusts each metadata file's time to be no more than an hour before the session's
-    /// `createdAt`, which holds unless the file system's clock trails Alcuin's by more than that
-    /// or a time is set back by hand; such a session is missing from the window but `status --all`
-    /// still reads every one. An index of creation times, like the run index, would lift this.
+    /// given. A session's folder is created with it and never replaced, and a copy or restore
+    /// creates a new folder, so one whose folder was created before the cutoff was created before
+    /// it, whatever its files' times. Some older sessions are still returned; `filter_range`
+    /// applies the window. Where a folder's creation time cannot be read, the session is read.
+    /// shortcut: trusts the folder's creation time to be no more than an hour before the
+    /// session's `createdAt`, which holds unless the file system's clock trails Alcuin's by more
+    /// than that or the creation time is set back by hand; such a session is missing from the
+    /// window but `status --all` still reads every one. An index of creation times, like the run
+    /// index, would lift this.
     pub fn list_created_since(&self, summary: bool, hours: Option<f64>) -> Result<Vec<Value>> {
         let mut output = vec![];
         let entries = match fs::read_dir(self.root()) {
@@ -710,7 +712,7 @@ impl SessionStore {
         });
         for entry in entries.flatten() {
             let id = entry.file_name().to_string_lossy().into_owned();
-            if !valid_id(&id) || cutoff.is_some_and(|cutoff| self.written_before(&id, cutoff)) {
+            if !valid_id(&id) || cutoff.is_some_and(|cutoff| self.created_before(&id, cutoff)) {
                 continue;
             }
             if let Some(meta) = self.read_raw(&id, summary)? {
@@ -720,29 +722,14 @@ impl SessionStore {
         output.sort_by(|a, b| b["createdAt"].as_str().cmp(&a["createdAt"].as_str()));
         Ok(output)
     }
-    /// Whether every metadata file the session has was last written before `cutoff` (Unix
-    /// milliseconds). A file whose time cannot be read counts as recent.
-    fn written_before(&self, id: &str, cutoff: f64) -> bool {
-        let Ok(dir) = self.directory(id) else {
-            return false;
-        };
-        let mut found = false;
-        for name in ["meta.json", "session.json"] {
-            match fs::metadata(dir.join(name)).and_then(|file| file.modified()) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return false,
-                Ok(time) => {
-                    let millis = time
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0.0, |since| since.as_millis() as f64);
-                    if millis >= cutoff {
-                        return false;
-                    }
-                    found = true;
-                }
-            }
-        }
-        found
+    /// Whether the session's folder was created before `cutoff` (Unix milliseconds). A folder
+    /// whose creation time cannot be read counts as recent.
+    fn created_before(&self, id: &str, cutoff: f64) -> bool {
+        self.directory(id)
+            .and_then(|dir| Ok(fs::metadata(dir)?.created()?))
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_some_and(|since| (since.as_millis() as f64) < cutoff)
     }
     /// Beside the store: `targets/<target>/<session>` says the session's metadata has named
     /// that `browser.runtime.chromeTargetId`; `covered/<session>` says every target the
@@ -1491,46 +1478,31 @@ mod deadline_tests {
 mod window_tests {
     use super::*;
     #[test]
-    fn a_status_window_skips_unread_the_sessions_written_before_it() {
+    fn a_status_window_skips_unread_the_sessions_whose_folders_predate_it() {
         let home = tempfile::tempdir().unwrap();
         let store = SessionStore::new(home.path());
-        let create = |slug: &str| {
-            store
-                .create(json!({"prompt":"PUBLIC window"}), home.path(), Some(slug))
-                .unwrap()["id"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        };
-        let (old, recent) = (create("public-old-window"), create("public-recent-window"));
-        let days_ago = jiff::Timestamp::now()
-            .checked_sub(jiff::SignedDuration::from_hours(72))
-            .unwrap();
-        store
-            .update(&old, |_| {
-                Ok(Some(json!({"createdAt":days_ago.to_string()})))
-            })
-            .unwrap();
-        fs::File::options()
-            .write(true)
-            .open(store.directory(&old).unwrap().join("meta.json"))
+        let id = store
+            .create(json!({"prompt":"PUBLIC window"}), home.path(), Some("public-window"))
+            .unwrap()["id"]
+            .as_str()
             .unwrap()
-            .set_modified(std::time::SystemTime::try_from(days_ago).unwrap())
-            .unwrap();
-        let ids = |sessions: Vec<Value>| -> Vec<String> {
-            sessions
-                .iter()
-                .map(|meta| meta["id"].as_str().unwrap().to_owned())
-                .collect()
-        };
+            .to_owned();
+        let created = fs::metadata(store.directory(&id).unwrap())
+            .unwrap()
+            .created();
         READ_SESSIONS.take();
-        let listed = store.list_created_since(true, Some(24.0)).unwrap();
-        assert_eq!(ids(listed), std::slice::from_ref(&recent));
-        assert_eq!(READ_SESSIONS.take(), std::slice::from_ref(&recent));
-        assert_eq!(
-            ids(store.list_created_since(true, None).unwrap()),
-            [recent, old]
-        );
+        // A window that ends 2 hours from now starts after the folder was created.
+        let listed = store.list_created_since(true, Some(-3.0)).unwrap();
+        if created.is_ok() {
+            assert!(listed.is_empty());
+            assert!(READ_SESSIONS.take().is_empty());
+        } else {
+            // Without folder creation times every session is read.
+            assert_eq!(READ_SESSIONS.take(), std::slice::from_ref(&id));
+        }
+        let all = store.list_created_since(true, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["id"], id);
     }
     #[test]
     fn a_session_created_inside_the_window_is_listed_whatever_its_file_times() {
