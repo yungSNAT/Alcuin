@@ -1643,8 +1643,9 @@ pub(crate) async fn run_native_with_capture(
     ))
     .await
 }
-/// What a failed first attempt leaves behind. Recovery-free attempts (no dispatch record, no tab,
-/// no fresh profile) cannot have sent, so the consult wrapper may send the packet by another route.
+/// What a failed first attempt leaves behind. Recovery-free attempts (failed before their dispatch
+/// started, or with no dispatch record, tab or fresh profile) cannot have sent, so the consult
+/// wrapper may send the packet by another route.
 fn attempt_failure(store: &SessionStore, parent: &str, child: &str) -> String {
     // Only proof about this child counts: needs_recovery is also false with no active attempt.
     let unsent = store.require(parent).is_ok_and(|parent| {
