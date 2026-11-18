@@ -3573,7 +3573,10 @@ async fn live_receipt_privacy_read_cases(page: &Cdp) -> Result<()> {
     let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
         &json!([{"owner":owner,"ids":[],"prompt":"PUBLIC prompt","intent":intent,"saved":null}]),SHORT,&cancel).await?;
     let reads=page.evaluate_with_arguments("()=>{const reads=window.PUBLIC_witnessReads;window.__oracleSubmissionWitness.cleanup();delete window.PUBLIC_witnessReads;sessionStorage.removeItem('oracle:target-claim');return reads;}",&json!([]),SHORT,&cancel).await?;
-    assert_eq!(reads, 0, "The live witness ran its own predicate {reads} times");
+    assert_eq!(
+        reads, 0,
+        "The live witness ran its own predicate {reads} times"
+    );
     assert_eq!(receipt["submission"]["state"], "pending", "{receipt}");
     Ok(())
 }
