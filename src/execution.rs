@@ -971,7 +971,7 @@ fn prepare_with_base(
     if source.is_none() && request.options["force"] != true {
         let signature = run_signature(&request.options);
         // Summaries skip finished sessions' model runs, which status and options do not need.
-        for meta in store.list(true)? {
+        for meta in store.list_same_run(&request.options)? {
             // Pending sessions also block: they hold an admitted dispatch that has not started.
             // A run whose worker is verifiably dead no longer counts as running.
             if matches!(meta["status"].as_str(), Some("pending" | "running"))
