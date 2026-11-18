@@ -563,7 +563,7 @@ fn current_files(
 ) -> Result<(Vec<SentFile>, [Vec<String>; 2])> {
     let created = meta["createdAt"]
         .as_str()
-        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .and_then(|at| at.parse::<jiff::Timestamp>().ok())
         .with_context(|| format!("Session \"{id}\" has no valid creation time."))?;
     let options = &meta["options"];
     let inputs: Vec<String> = options["file"]
@@ -585,10 +585,7 @@ fn current_files(
         let modified = fs::metadata(&file.path)
             .and_then(|metadata| metadata.modified())
             .with_context(|| format!("Cannot read {}", file.display_path))?;
-        // createdAt has millisecond precision.
-        if chrono::DateTime::<chrono::Utc>::from(modified).timestamp_millis()
-            > created.timestamp_millis()
-        {
+        if changed_after(modified, created) {
             changed.push(file.display_path.clone());
         }
         match crate::prompts::read_text(&file.path)
@@ -712,8 +709,38 @@ pub fn format_report(report: &Report) -> String {
     lines.join("\n")
 }
 
+/// Whether a file was modified after the session's creation, to the millisecond, as `createdAt`
+/// has millisecond precision. Milliseconds are floored, so a time before 1970 falls in the right
+/// one. A time jiff cannot hold counts as changed.
+fn changed_after(modified: std::time::SystemTime, created: jiff::Timestamp) -> bool {
+    let millis = |at: jiff::Timestamp| at.as_nanosecond().div_euclid(1_000_000);
+    jiff::Timestamp::try_from(modified)
+        .ok()
+        .is_none_or(|modified| millis(modified) > millis(created))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_written_within_the_creation_millisecond_is_not_changed() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let created = "1969-12-31T23:59:59.999Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap();
+        // Half a millisecond into the creation millisecond, before the Unix epoch.
+        let within = UNIX_EPOCH - Duration::from_micros(500);
+        assert!(!super::changed_after(within, created));
+        assert!(super::changed_after(UNIX_EPOCH, created));
+        let created = "2026-10-26T01:02:03.456Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap();
+        let at = UNIX_EPOCH + Duration::from_nanos(1_792_976_523_456_900_000);
+        assert!(!super::changed_after(at, created));
+        assert!(super::changed_after(
+            at + Duration::from_micros(100),
+            created
+        ));
+    }
     use super::*;
     fn engine() -> SentFile {
         SentFile {

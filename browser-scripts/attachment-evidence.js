@@ -59,8 +59,21 @@ return (() => {
     const currentControls = controls();
     const valid = receipt => receipt.composer === composer && receipt.control?.isConnected && currentControls.includes(receipt.control) && receipt.control.getAttribute('aria-label') === receipt.label;
     for (const [receiptId, receipt] of receipts) {
+      // ChatGPT remounts a removal control, label unchanged, once its upload finishes processing
+      // (17 November 2026). Adopt the replacement only when the original left the document, its
+      // label is 'Remove <this file's name>' and exactly one unclaimed control carries that label.
+      // Other label forms, generic ones included, cannot show which file replaced the original, so
+      // a page that labels its controls 'Remove file <name>' refuses Send after a remount.
+      const named = (receipt.label ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const namesFile = named === 'remove ' + receipt.name && !/^remove (?:file|attachment|image|photo)(?: |$)/.test(named);
+      if (receipt.composer === composer && receipt.control && !receipt.control.isConnected && namesFile) {
+        const claimed = new Set(Array.from(receipts.values()).map(entry => entry.control));
+        const replacements = currentControls.filter(control => !claimed.has(control) && control.getAttribute('aria-label') === receipt.label);
+        if (replacements.length === 1) receipt.control = replacements[0];
+      }
       if (receipt.composer !== composer || (receipt.control && !valid(receipt))) receipts.delete(receiptId);
     }
+    if (action === 'refresh') return true;
     if (action === 'begin') {
       if (receipts.has(id)) return false;
       receipts.set(id, { name: names[0], composer, document, owner:cfg.owner, before: new Set(currentControls) });

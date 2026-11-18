@@ -137,7 +137,7 @@ async fn reconcile_with_disposal(
 /// Recovery reads this when a failed run's original tab was closed.
 pub(crate) const FAILED_RUN_TARGET_CLOSED: &str = "failed-run-target-closed";
 // One sent run took 38 minutes to finish (30 October 2026).
-const SENT_TAB_RETENTION: chrono::Duration = chrono::Duration::minutes(60);
+const SENT_TAB_RETENTION: jiff::SignedDuration = jiff::SignedDuration::from_mins(60);
 const FAILED_SWEEP_BUDGET: Duration = Duration::from_secs(5);
 const FAILED_TARGET_BUDGET: Duration = Duration::from_secs(2);
 const FAILED_ENDPOINT_BUDGET: Duration = Duration::from_secs(2);
@@ -265,7 +265,7 @@ fn failed_owner(store: &SessionStore, record: &Value, consultation: Option<&str>
             return Ok(false);
         }
     }
-    if !answered && kept_for_recovery(&session, chrono::Utc::now()) {
+    if !answered && kept_for_recovery(&session, jiff::Timestamp::now()) {
         return Ok(false);
     }
     Ok(consultation.is_none_or(|scope| scope == id || child && parent == Some(scope)))
@@ -274,16 +274,16 @@ fn failed_owner(store: &SessionStore, record: &Value, consultation: Option<&str>
 /// A prompt that may have been sent can only be recovered from its live tab, since a closed
 /// Temporary Chat cannot be reopened. So the tab outlasts the failure for a while, and a later
 /// run's sweep closes it. An unreadable or future date keeps nothing open.
-fn kept_for_recovery(session: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
+fn kept_for_recovery(session: &Value, now: jiff::Timestamp) -> bool {
     matches!(
         session["dispatch"]["state"].as_str(),
         Some("uncertain" | "acknowledged")
     ) && session["completedAt"]
         .as_str()
-        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .and_then(|at| at.parse::<jiff::Timestamp>().ok())
         .is_some_and(|failed| {
-            let age = now.signed_duration_since(failed);
-            age >= chrono::Duration::zero() && age < SENT_TAB_RETENTION
+            let age = now.duration_since(failed);
+            age >= jiff::SignedDuration::ZERO && age < SENT_TAB_RETENTION
         })
 }
 
@@ -2430,10 +2430,10 @@ mod tests {
     }
     #[test]
     fn only_a_recent_sent_prompt_keeps_its_tab() {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let failed = |state: &str, minutes: i64| {
-            let at = now - chrono::Duration::minutes(minutes);
-            json!({"dispatch":{"state":state},"completedAt":at.to_rfc3339()})
+            let at = now - jiff::SignedDuration::from_mins(minutes);
+            json!({"dispatch":{"state":state},"completedAt":at.to_string()})
         };
         assert!(kept_for_recovery(&failed("uncertain", 59), now));
         assert!(!kept_for_recovery(&failed("uncertain", 60), now));
@@ -2659,11 +2659,11 @@ mod tests {
             } else {
                 1
             };
-            let at = chrono::Utc::now() - chrono::Duration::minutes(minutes);
+            let at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(minutes);
             store
                 .update(&child, |_| {
                     Ok(Some(
-                        json!({"dispatch":{"state":"uncertain"},"completedAt":at.to_rfc3339()}),
+                        json!({"dispatch":{"state":"uncertain"},"completedAt":at.to_string()}),
                     ))
                 })
                 .unwrap();

@@ -1,7 +1,7 @@
-# Advisories reviewed and accepted (1 November 2026). All 3 are "unmaintained" notices with no
-# vulnerability and no patched version: the zvariant crates were merged into zbus 6.0.0, and the
-# newest secret-service (5.2.0) still depends on zbus 5. Review on every secret-service upgrade,
-# and remove the ignores once `cargo audit --deny warnings` passes without them.
+# Advisories reviewed and accepted. All 4 are "unmaintained" notices with no vulnerability and no
+# patched version. The zvariant crates (1 November 2026) were merged into zbus 6.0.0, and the
+# newest secret-service (5.2.0) still depends on zbus 5: review on every secret-service upgrade.
+# Remove each ignore once `cargo audit --deny warnings` passes without it.
 [advisories]
 ignore = [
     # zvariant 5.15.1, zvariant_derive 5.15.1 and zbus_names 4.3.5. Path (cargo tree -i zvariant
@@ -11,4 +11,11 @@ ignore = [
     "RUSTSEC-2026-0370",
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0372",
+    # chrono 0.4.45 is unmaintained (17 November 2026), with no vulnerability and no patched
+    # version. Alcuin's own code uses jiff; chrono stays only because rmcp 3.9.0 depends on it
+    # on every target (the newest, 3.11.0, still does) and turns on schemars' chrono04
+    # feature. Path (cargo tree -i chrono --target all): chrono <- rmcp, and chrono <- schemars
+    # <- rmcp and this crate. Remove once rmcp drops it:
+    # https://github.com/modelcontextprotocol/rust-sdk/issues/1469
+    "RUSTSEC-2026-0543",
 ]
