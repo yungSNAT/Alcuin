@@ -10612,6 +10612,21 @@ fn a_failed_attempt_reports_nothing_sent_only_before_its_dispatch_started() {
     write(None, None);
     let unsent = attempt_failure(&store, parent, child);
     assert!(unsent.contains("nothing was sent"), "{unsent}");
+    // Neither a child another process owned nor one cancelled after its dispatch started proves it.
+    let edit = |change: &dyn Fn(&mut Value)| {
+        let path = store.directory(child).unwrap().join("meta.json");
+        let mut meta: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        change(&mut meta);
+        fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    };
+    write(None, Some("PUBLIC-target"));
+    edit(&|meta| meta["lifecycle"]["processIdentity"] = json!({"pid":1,"start":"PUBLIC-other"}));
+    let foreign = attempt_failure(&store, parent, child);
+    assert!(foreign.contains("recovery evidence"), "{foreign}");
+    write(Some(json!({"state":"started"})), Some("PUBLIC-target"));
+    edit(&|meta| meta["status"] = json!("cancelled"));
+    let cancelled = attempt_failure(&store, parent, child);
+    assert!(cancelled.contains("recovery evidence"), "{cancelled}");
     // An unsent-looking child proves nothing unless it is the parent's active attempt.
     let other = attempt_failure(&store, parent, "PUBLIC-other-child");
     assert!(other.contains("recovery evidence"), "{other}");
