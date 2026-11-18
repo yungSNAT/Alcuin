@@ -213,9 +213,9 @@ fn owner_liveness(owner: &Owner) -> Liveness {
             } else if let Some(created) = owner
                 .created_at
                 .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .and_then(|s| s.parse::<jiff::Timestamp>().ok())
             {
-                if actual.started_at_ms <= created.timestamp_millis() as f64 + 10000.0 {
+                if actual.started_at_ms <= created.as_millisecond() as f64 + 10000.0 {
                     Liveness::Alive
                 } else {
                     Liveness::Dead
@@ -363,9 +363,7 @@ impl DirectoryLock {
                     let record = Owner {
                         id: id.clone(),
                         pid: identity.pid,
-                        created_at: Some(
-                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                        ),
+                        created_at: Some(crate::sessions::timestamp()),
                         process_started_at_ms: Some(identity.started_at_ms),
                         process_identity: Some(identity.clone()),
                     };

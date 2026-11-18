@@ -561,9 +561,7 @@ pub fn start(option: Option<String>, argv: &[String], cwd: &Path) {
         return;
     };
     let path = if raw == "1" || raw == "true" {
-        let time = chrono::Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-            .replace([':', '.'], "-");
+        let time = crate::sessions::timestamp().replace([':', '.'], "-");
         cwd.join(format!(".oracle-perf-{time}-{}.json", std::process::id()))
     } else {
         cwd.join(raw)

@@ -70,8 +70,9 @@ pub(crate) fn saved_partial(meta: &Value) -> bool {
 pub(crate) fn answered(status: &Value) -> bool {
     matches!(status.as_str(), Some("completed" | "partial"))
 }
+/// The current UTC time in RFC 3339 with milliseconds, truncated, as `2026-10-26T01:02:03.456Z`.
 pub fn timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    format!("{:.3}", jiff::Timestamp::now())
 }
 
 #[derive(Clone, Debug)]
@@ -332,6 +333,8 @@ impl SessionStore {
                 private_file(&dir.join("models").join(format!("{slug}.log")), true)?;
             }
             private_file(&dir.join("output.log"), true)?;
+            // A session the index failed to cover is read by every duplicate check.
+            let _ = self.index_run(&id, &metadata["options"]);
             guard.leaf(&dir.join("meta.json"))?;
             atomic_json(&dir.join("meta.json"), &metadata)?;
             guard.check()?;
@@ -414,11 +417,13 @@ impl SessionStore {
         let guard = self.write_directory(id)?;
         let mut current = self.stored_for_update(id)?;
         if let Some(patch) = decide(&current)? {
+            let signature = run_key(&current["options"])?;
             apply_patch(&mut current, &patch)?;
             if current["id"] != id {
                 bail!("Invalid stored metadata for session {id}.");
             }
             self.index_target(id, &current)?;
+            self.reindex_run(id, &signature, &current["options"])?;
             guard.leaf(&dir.join("meta.json"))?;
             match deadline {
                 Some(deadline) => atomic_json_until(&dir.join("meta.json"), &current, deadline)?,
@@ -485,11 +490,13 @@ impl SessionStore {
                 }
                 current["models"] = json!(runs);
             }
+            let signature = run_key(&current["options"])?;
             apply_patch(&mut current, &patch)?;
             if current["id"] != id {
                 bail!("Invalid stored metadata for session {id}.");
             }
             self.index_target(id, &current)?;
+            self.reindex_run(id, &signature, &current["options"])?;
             if model_patch.is_some() {
                 let models = guard.models()?;
                 let path = self.model_path(id, model)?;
@@ -687,23 +694,108 @@ impl SessionStore {
         Ok(())
     }
     pub fn list(&self, summary: bool) -> Result<Vec<Value>> {
+        self.list_created_since(summary, None)
+    }
+    /// `list`, skipping unread the sessions created more than `hours` before now when `hours` is
+    /// given. A session's folder is created with it and never replaced, and a copy or restore
+    /// creates a new folder, so one whose folder was created before the cutoff was created before
+    /// it, whatever its files' times. Some older sessions are still returned; `filter_range`
+    /// applies the window. Where a folder's creation time cannot be read, the session is read.
+    /// shortcut: trusts the folder's creation time to be no more than an hour before the
+    /// session's `createdAt`, which holds unless the file system's clock trails Alcuin's by more
+    /// than that or the creation time is set back by hand; such a session is missing from the
+    /// window but `status --all` still reads every one. An index of creation times, like the run
+    /// index, would lift this.
+    pub fn list_created_since(&self, summary: bool, hours: Option<f64>) -> Result<Vec<Value>> {
         let mut output = vec![];
-        match fs::read_dir(self.root()) {
+        let entries = match fs::read_dir(self.root()) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(output),
             Err(error) => return Err(error.into()),
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    let id = entry.file_name().to_string_lossy().into_owned();
-                    if valid_id(&id)
-                        && let Some(meta) = self.read_raw(&id, summary)?
-                    {
-                        output.push(meta);
-                    }
-                }
+            Ok(entries) => entries,
+        };
+        let cutoff = hours.map(|hours| {
+            jiff::Timestamp::now().as_millisecond() as f64 - (hours + 1.0) * 3_600_000.0
+        });
+        for entry in entries.flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if !valid_id(&id) || cutoff.is_some_and(|cutoff| self.created_before(&id, cutoff)) {
+                continue;
+            }
+            if let Some(meta) = self.read_raw(&id, summary)? {
+                output.push(meta);
             }
         }
         output.sort_by(|a, b| b["createdAt"].as_str().cmp(&a["createdAt"].as_str()));
         Ok(output)
+    }
+    /// Beside the store: `runs/<signature>/<session>` says the session was created with that
+    /// run signature (its trimmed prompt and browser follow-ups, which no later write changes);
+    /// `covered/<session>` says the session is indexed. Markers are only ever added.
+    fn run_index(&self) -> PathBuf {
+        self.home.join("sessions-run-index")
+    }
+    /// Written by `create` before the metadata, so a covered session is always indexed.
+    fn index_run(&self, id: &str, options: &Value) -> Result<()> {
+        let directory = self.run_index().join("runs").join(run_key(options)?);
+        private_dir(&directory)?;
+        marker(&directory.join(id))?;
+        let covered = self.run_index().join("covered");
+        private_dir(&covered)?;
+        marker(&covered.join(id))
+    }
+    /// A metadata write that changes the run signature of a covered session marks the new one
+    /// first, so the session stays under every signature it has had. A failure refuses the write.
+    fn reindex_run(&self, id: &str, before: &str, options: &Value) -> Result<()> {
+        if run_key(options)? != before && self.run_index().join("covered").join(id).exists() {
+            self.index_run(id, options)?;
+        }
+        Ok(())
+    }
+    /// Every `list(true)` session that may share `options`'s run signature, newest first, as
+    /// `list` orders them: the covered sessions the index names, and every uncovered one
+    /// (created before the index or by another writer), which is indexed as it is read, for a
+    /// bounded time per call. An index that cannot be read leaves every session uncovered.
+    pub(crate) fn list_same_run(&self, options: &Value) -> Result<Vec<Value>> {
+        let index = self.run_index();
+        let (covered, named) = match (
+            names(&index.join("covered")),
+            names(&index.join("runs").join(run_key(options)?)),
+        ) {
+            (Ok(covered), Ok(named)) => (covered, named),
+            _ => Default::default(),
+        };
+        let cover_until = Instant::now() + Duration::from_millis(250);
+        let mut output = vec![];
+        let entries = match fs::read_dir(self.root()) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(output),
+            Err(error) => return Err(error.into()),
+            Ok(entries) => entries,
+        };
+        for entry in entries.flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if !valid_id(&id) || (covered.contains(&id) && !named.contains(&id)) {
+                continue;
+            }
+            let Some(meta) = self.read_raw(&id, true)? else {
+                continue;
+            };
+            if !covered.contains(&id) && Instant::now() < cover_until {
+                // Left uncovered on failure, so later checks read it again.
+                let _ = self.index_run(&id, &meta["options"]);
+            }
+            output.push(meta);
+        }
+        output.sort_by(|a, b| b["createdAt"].as_str().cmp(&a["createdAt"].as_str()));
+        Ok(output)
+    }
+    /// Whether the session's folder was created before `cutoff` (Unix milliseconds). A folder
+    /// whose creation time cannot be read counts as recent.
+    fn created_before(&self, id: &str, cutoff: f64) -> bool {
+        self.directory(id)
+            .and_then(|dir| Ok(fs::metadata(dir)?.created()?))
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_some_and(|since| (since.as_millis() as f64) < cutoff)
     }
     /// Beside the store: `targets/<target>/<session>` says the session's metadata has named
     /// that `browser.runtime.chromeTargetId`; `covered/<session>` says every target the
@@ -770,23 +862,12 @@ impl SessionStore {
         if !indexable(target) {
             return self.list(true);
         }
-        let names = |path: PathBuf| -> Result<std::collections::BTreeSet<String>> {
-            match fs::read_dir(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(Default::default())
-                }
-                Err(error) => Err(error.into()),
-                Ok(entries) => entries
-                    .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
-                    .collect(),
-            }
-        };
         let index = self.target_index();
-        let covered = names(index.join("covered"))?;
-        let named = names(index.join("targets").join(target))?;
+        let covered = names(&index.join("covered"))?;
+        let named = names(&index.join("targets").join(target))?;
         let cover_until = Instant::now() + Duration::from_millis(250);
         let mut output = vec![];
-        for id in names(self.root())? {
+        for id in names(&self.root())? {
             if !valid_id(&id) {
                 continue;
             }
@@ -807,7 +888,7 @@ impl SessionStore {
             .iter()
             .filter_map(|meta| meta["id"].as_str().map(str::to_owned))
             .collect();
-        for id in names(index.join("targets").join(target))? {
+        for id in names(&index.join("targets").join(target))? {
             if valid_id(&id)
                 && !named.contains(&id)
                 && !listed.contains(&id)
@@ -961,19 +1042,19 @@ impl SessionStore {
         let Some(started) = current["startedAt"]
             .as_str()
             .or(current["createdAt"].as_str())
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .and_then(|s| s.parse::<jiff::Timestamp>().ok())
         else {
             return Ok(None);
         };
-        let mut anchor = started.with_timezone(&chrono::Utc);
+        let mut anchor = started;
         if current["options"]["zombieUseLastActivity"] == true
             && let Some(activity) = self.last_activity(id, &current["model"], &runs)?
         {
             anchor = activity;
         }
         let max_age = zombie_max_age(current);
-        let stale = chrono::Utc::now().signed_duration_since(anchor);
-        if stale.to_std().is_ok_and(|stale| stale > max_age) {
+        let stale = jiff::Timestamp::now().duration_since(anchor);
+        if Duration::try_from(stale).is_ok_and(|stale| stale > max_age) {
             Ok(Some(json!({
                 "status": "error",
                 "errorMessage": format!(
@@ -993,7 +1074,7 @@ impl SessionStore {
         id: &str,
         model: &Value,
         runs: &[Value],
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    ) -> Result<Option<jiff::Timestamp>> {
         let dir = self.directory(id)?;
         let mut paths = vec![dir.join("output.log")];
         for model in std::iter::once(model).chain(runs.iter().map(|run| &run["model"])) {
@@ -1001,11 +1082,9 @@ impl SessionStore {
                 paths.push(dir.join(format!("models/{}.log", safe_model_slug(model))));
             }
         }
-        Ok(paths
-            .iter()
-            .filter_map(|path| fs::symlink_metadata(path).ok()?.modified().ok())
-            .max()
-            .map(chrono::DateTime::<chrono::Utc>::from))
+        Ok(latest(paths.iter().filter_map(|path| {
+            fs::symlink_metadata(path).ok()?.modified().ok()
+        })))
     }
     /// Capacity release records worker death without deleting dispatch or target evidence.
     pub fn release_dead_worker_capacity(&self, id: &str) -> Result<Value> {
@@ -1082,6 +1161,21 @@ thread_local! {
     pub(crate) static READ_SESSIONS: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
+/// The index key of `options`'s run signature: its trimmed prompt and browser follow-ups.
+fn run_key(options: &Value) -> Result<String> {
+    let signature = crate::execution::run_signature(options);
+    Ok(crate::artifacts::sha256(&serde_json::to_vec(&signature)?))
+}
+/// The entry names in a directory, none if it does not exist.
+fn names(path: &Path) -> Result<std::collections::BTreeSet<String>> {
+    match fs::read_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(error) => Err(error.into()),
+        Ok(entries) => entries
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect(),
+    }
+}
 /// A target the index can name as one path component; others fall back to a full read.
 fn indexable(target: &str) -> bool {
     crate::browser_target::valid_id(target) && target.len() <= 128
@@ -1150,12 +1244,12 @@ pub fn filter_range(
     limit: usize,
 ) -> (Vec<Value>, usize, bool) {
     if !include_all {
-        let cutoff = chrono::Utc::now().timestamp_millis() as f64 - hours * 3600000.0;
+        let cutoff = jiff::Timestamp::now().as_millisecond() as f64 - hours * 3600000.0;
         entries.retain(|meta| {
             meta["createdAt"]
                 .as_str()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .is_some_and(|time| time.timestamp_millis() as f64 >= cutoff)
+                .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+                .is_some_and(|time| time.as_millisecond() as f64 >= cutoff)
         });
     }
     let total = entries.len();
@@ -1289,9 +1383,35 @@ pub fn merge_artifacts(current: &Value, additions: &Value, basis: &Value) -> Val
     }
 }
 
+/// The latest of `times` that jiff can hold.
+fn latest(times: impl Iterator<Item = std::time::SystemTime>) -> Option<jiff::Timestamp> {
+    times
+        .filter_map(|modified| jiff::Timestamp::try_from(modified).ok())
+        .max()
+}
+
 #[cfg(test)]
 mod deadline_tests {
     use super::*;
+    #[test]
+    fn last_activity_skips_a_file_time_jiff_cannot_hold() {
+        let recent = std::time::SystemTime::now();
+        // About the year 11,500, past jiff's last instant in 9999.
+        let beyond = std::time::UNIX_EPOCH + Duration::from_secs(300_000_000_000);
+        assert_eq!(
+            latest([recent, beyond].into_iter()),
+            jiff::Timestamp::try_from(recent).ok()
+        );
+    }
+    #[test]
+    fn timestamps_are_utc_with_milliseconds() {
+        let shape = regex::Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$").unwrap();
+        let text = timestamp();
+        assert!(shape.is_match(&text), "{text}");
+        // `timestamp` truncates to the millisecond, as chrono's `SecondsFormat::Millis` did.
+        let last = jiff::Timestamp::new(1_792_976_523, 999_999_999).unwrap();
+        assert_eq!(format!("{last:.3}"), "2026-10-26T01:02:03.999Z");
+    }
     #[test]
     fn a_contended_cleanup_update_respects_its_remaining_deadline_without_mutation() {
         let home = tempfile::tempdir().unwrap();
@@ -1422,5 +1542,197 @@ mod deadline_tests {
                 .unwrap();
         })));
         assert!(found("PUBLIC-TARGET").contains(&late));
+    }
+}
+#[cfg(test)]
+mod run_index_tests {
+    use super::*;
+    #[test]
+    fn a_duplicate_check_reads_only_sessions_of_the_same_run_once_they_are_indexed() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let create = |prompt: &str, slug: &str| {
+            store
+                .create(json!({"prompt":prompt}), home.path(), Some(slug))
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let older = create("PUBLIC same run", "public-older-same-run");
+        let other = create("PUBLIC other run", "public-older-other-run");
+        // Sessions written before the index existed are read, and indexed, by the first scan.
+        fs::remove_dir_all(home.path().join("sessions-run-index")).unwrap();
+        let newer = create("PUBLIC same run", "public-newer-same-run");
+        let scan = |options: &Value| {
+            READ_SESSIONS.take();
+            let mut listed: Vec<String> = store
+                .list_same_run(options)
+                .unwrap()
+                .iter()
+                .map(|meta| meta["id"].as_str().unwrap().to_owned())
+                .collect();
+            listed.sort();
+            let mut read = READ_SESSIONS.take();
+            read.sort();
+            (listed, read)
+        };
+        let query = json!({"prompt":"  PUBLIC same run\n"});
+        let mut every = vec![older.clone(), other, newer.clone()];
+        every.sort();
+        assert_eq!(scan(&query), (every.clone(), every));
+        let mut same = vec![older, newer];
+        same.sort();
+        assert_eq!(scan(&query), (same.clone(), same));
+    }
+    fn ids(sessions: Vec<Value>) -> Vec<String> {
+        sessions
+            .iter()
+            .map(|meta| meta["id"].as_str().unwrap().to_owned())
+            .collect()
+    }
+    #[test]
+    fn a_duplicate_check_lists_the_newest_matching_session_first() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let mut created = vec![];
+        for (slug, at) in [
+            ("public-z-newest", "2026-11-18T02:00:00.000Z"),
+            ("public-a-oldest", "2026-11-18T01:00:00.000Z"),
+        ] {
+            let id = store
+                .create(json!({"prompt":"PUBLIC order"}), home.path(), Some(slug))
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            store
+                .update(&id, |_| Ok(Some(json!({"createdAt":at}))))
+                .unwrap();
+            created.push(id);
+        }
+        assert_eq!(
+            ids(store
+                .list_same_run(&json!({"prompt":"PUBLIC order"}))
+                .unwrap()),
+            created
+        );
+    }
+    #[test]
+    fn a_broken_run_index_falls_back_to_reading_every_session() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let create = |slug: &str| {
+            store
+                .create(
+                    json!({"prompt":"PUBLIC broken index"}),
+                    home.path(),
+                    Some(slug),
+                )
+                .map(|meta| meta["id"].as_str().unwrap().to_owned())
+        };
+        let first = create("public-before-break").unwrap();
+        let index = home.path().join("sessions-run-index");
+        fs::remove_dir_all(&index).unwrap();
+        fs::write(&index, "PUBLIC not a directory").unwrap();
+        let second = create("public-after-break").expect("an index failure refused a session");
+        let mut listed = ids(store
+            .list_same_run(&json!({"prompt":"PUBLIC broken index"}))
+            .expect("an index failure refused the duplicate check"));
+        listed.sort();
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(listed, expected);
+    }
+    #[test]
+    fn a_session_whose_prompt_changes_is_found_under_its_new_run() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let id = store
+            .create(
+                json!({"prompt":"PUBLIC before"}),
+                home.path(),
+                Some("public-changed"),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        store
+            .update(&id, |current| {
+                let mut options = current["options"].clone();
+                options["prompt"] = json!("PUBLIC after");
+                Ok(Some(json!({"options":options})))
+            })
+            .unwrap();
+        assert_eq!(
+            ids(store
+                .list_same_run(&json!({"prompt":"PUBLIC after"}))
+                .unwrap()),
+            [id]
+        );
+    }
+}
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    #[test]
+    fn a_status_window_skips_unread_the_sessions_whose_folders_predate_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let id = store
+            .create(
+                json!({"prompt":"PUBLIC window"}),
+                home.path(),
+                Some("public-window"),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let created = fs::metadata(store.directory(&id).unwrap())
+            .unwrap()
+            .created();
+        READ_SESSIONS.take();
+        // A window that ends 2 hours from now starts after the folder was created.
+        let listed = store.list_created_since(true, Some(-3.0)).unwrap();
+        if created.is_ok() {
+            assert!(listed.is_empty());
+            assert!(READ_SESSIONS.take().is_empty());
+        } else {
+            // Without folder creation times every session is read.
+            assert_eq!(READ_SESSIONS.take(), std::slice::from_ref(&id));
+        }
+        let all = store.list_created_since(true, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["id"], id);
+    }
+    #[test]
+    fn a_session_created_inside_the_window_is_listed_whatever_its_file_times() {
+        let home = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(home.path());
+        let id = store
+            .create(
+                json!({"prompt":"PUBLIC restored"}),
+                home.path(),
+                Some("public-restored"),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // A restore that keeps old file times, or a time set back by hand.
+        let days_ago = jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_hours(72))
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(store.directory(&id).unwrap().join("meta.json"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::try_from(days_ago).unwrap())
+            .unwrap();
+        let listed = store.list_created_since(true, Some(24.0)).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["id"], id);
     }
 }

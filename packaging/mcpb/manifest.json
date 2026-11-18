@@ -7,7 +7,7 @@
   "author": { "name": "yungSNAT", "url": "https://github.com/yungSNAT" },
   "homepage": "https://github.com/yungSNAT/Alcuin",
   "repository": { "type": "git", "url": "https://github.com/yungSNAT/Alcuin" },
-  "license": "FSL-1.1-ALv2 AND MIT",
+  "license": "Apache-2.0 AND MIT",
   "server": {
     "type": "binary",
     "entry_point": "server/linux-x64/alcuin-mcp",

@@ -343,8 +343,11 @@ fn estimate_tokens(text: &str) -> u64 {
 }
 
 fn elapsed_ms(meta: &Value) -> Option<u64> {
-    let started = chrono::DateTime::parse_from_rfc3339(meta["startedAt"].as_str()?).ok()?;
-    u64::try_from((chrono::Utc::now() - started.to_utc()).num_milliseconds()).ok()
+    let started = meta["startedAt"]
+        .as_str()?
+        .parse::<jiff::Timestamp>()
+        .ok()?;
+    u64::try_from(jiff::Timestamp::now().duration_since(started).as_millis()).ok()
 }
 
 /// Reference buildUnavailableModelSelectionEvidence.
@@ -706,8 +709,10 @@ mod tests {
         );
     }
     fn started(ms_ago: i64) -> String {
-        (chrono::Utc::now() - chrono::Duration::milliseconds(ms_ago))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        format!(
+            "{:.3}",
+            jiff::Timestamp::now() - jiff::SignedDuration::from_millis(ms_ago)
+        )
     }
 
     #[test]

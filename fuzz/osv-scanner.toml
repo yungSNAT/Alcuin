@@ -12,3 +12,7 @@ reason = "zbus_names unmaintained, no vulnerability; via zbus 5 <- secret-servic
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive unmaintained, no vulnerability; via zbus 5 <- secret-service, Linux only (.cargo/audit.toml)"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "chrono unmaintained, no vulnerability; via rmcp and schemars' chrono04 feature, which rmcp turns on; Alcuin's own code uses jiff (.cargo/audit.toml)"

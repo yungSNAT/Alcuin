@@ -98,19 +98,12 @@ pub(crate) fn priced_cost(meta: &Value) -> Option<f64> {
 }
 /// Reference formatTimestampAligned: en-US local date and 12-hour time.
 pub(crate) fn aligned_timestamp(iso: &str) -> String {
-    let Ok(time) = chrono::DateTime::parse_from_rfc3339(iso) else {
+    let Ok(time) = iso.parse::<jiff::Timestamp>() else {
         return "Invalid Date".into();
     };
-    let local = time.with_timezone(&chrono::Local);
-    let hour = local.format("%-I").to_string();
-    format!(
-        "{}  {}{}:{}\u{202f}{}",
-        local.format("%m/%d/%Y"),
-        if hour.len() == 1 { " " } else { "" },
-        hour,
-        local.format("%M"),
-        local.format("%p")
-    )
+    time.to_zoned_datetime(jiff::tz::TimeZone::system())
+        .strftime("%m/%d/%Y  %l:%M\u{202f}%p")
+        .to_string()
 }
 pub(crate) fn table_header() -> String {
     format!(
@@ -183,6 +176,15 @@ pub(crate) fn response_owners(sessions: &[Value]) -> BTreeMap<String, String> {
         }
     }
     owners
+}
+/// Whether an entry follows a previous response that no session in `sessions` owns, so a row
+/// could only name its parent from sessions outside them.
+pub(crate) fn unresolved_parent(entries: &[Value], sessions: &[Value]) -> bool {
+    let owners = response_owners(sessions);
+    entries.iter().any(|entry| {
+        lineage(entry, Some(&owners))
+            .is_some_and(|lineage| lineage.session.is_none() && lineage.response.is_some())
+    })
 }
 struct Lineage {
     response: Option<String>,
@@ -404,8 +406,8 @@ pub(crate) fn status_listing(
 }
 /// Reference formatRelativeDuration.
 fn relative_duration(iso: &str) -> Option<String> {
-    let time = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
-    let diff = chrono::Utc::now().timestamp_millis() - time.timestamp_millis();
+    let time = iso.parse::<jiff::Timestamp>().ok()?;
+    let diff = jiff::Timestamp::now().as_millisecond() - time.as_millisecond();
     if diff < 0 {
         return None;
     }
@@ -844,12 +846,13 @@ mod tests {
     }
     #[test]
     fn timestamps_use_en_us_twelve_hour_alignment() {
-        let local = chrono::DateTime::parse_from_rfc3339("2026-10-26T01:02:03.000Z")
+        let local = "2026-10-26T01:02:03.000Z"
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .with_timezone(&chrono::Local);
+            .to_zoned_datetime(jiff::tz::TimeZone::system());
         let text = aligned_timestamp("2026-10-26T01:02:03.000Z");
         assert!(
-            text.starts_with(&local.format("%m/%d/%Y  ").to_string()),
+            text.starts_with(&local.strftime("%m/%d/%Y  ").to_string()),
             "{text}"
         );
         assert_eq!(text.chars().count(), 20, "{text}");
@@ -886,6 +889,16 @@ mod tests {
             "br/bg"
         );
         assert_eq!(execution_label(&json!({"mode":"browser"})), "browser");
+    }
+    #[test]
+    fn a_parent_named_only_by_a_response_no_session_read_owns_is_unresolved() {
+        let parent = json!({"id":"public-parent","response":{"responseId":"resp_PUBLIC_parent_response_1234"}});
+        let child = json!({"id":"public-child","options":{"previousResponseId":"resp_PUBLIC_parent_response_1234"}});
+        let named = json!({"id":"public-named","options":{"followupSessionId":"public-gone","previousResponseId":"resp_PUBLIC_gone_response_99999"}});
+        let root = json!({"id":"public-root"});
+        assert!(unresolved_parent(std::slice::from_ref(&child), &[]));
+        assert!(!unresolved_parent(std::slice::from_ref(&child), &[parent]));
+        assert!(!unresolved_parent(&[named, root], &[]));
     }
     #[test]
     fn attach_metadata_and_summary_follow_the_reference_lines() {
