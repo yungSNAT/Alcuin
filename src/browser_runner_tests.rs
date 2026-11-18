@@ -2757,8 +2757,8 @@ fn dead_provider_attempt_state(
             .spawn()
             .unwrap(),
     );
-    // The deadline only stops a hung helper from holding the suite. A helper exits in about a
-    // second, but a stalled CI runner once held 2 of them past a 20-second deadline.
+    // The deadline only stops a hung helper from holding the suite. A helper takes a few
+    // seconds, but a stalled CI runner once held 2 of them past a 20-second deadline.
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let status = loop {
         if let Some(status) = helper.0.try_wait().unwrap() {
