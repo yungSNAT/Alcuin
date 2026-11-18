@@ -694,8 +694,10 @@ impl SessionStore {
     /// given. A session's metadata is written when it is created and only rewritten after, so one
     /// whose metadata files were all last written before the cutoff was created before it. Some
     /// older sessions are still returned; `filter_range` applies the window.
-    /// shortcut: trusts file times to within an hour of `createdAt`; a store copied with older
-    /// times hides its sessions here, and `status --all` still reads every one.
+    /// shortcut: trusts each metadata file's time to be no more than an hour before the session's
+    /// `createdAt`, which holds unless the file system's clock trails Alcuin's by more than that
+    /// or a time is set back by hand; such a session is missing from the window but `status --all`
+    /// still reads every one. An index of creation times, like the run index, would lift this.
     pub fn list_created_since(&self, summary: bool, hours: Option<f64>) -> Result<Vec<Value>> {
         let mut output = vec![];
         let entries = match fs::read_dir(self.root()) {
