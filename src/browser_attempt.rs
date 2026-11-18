@@ -175,20 +175,14 @@ pub(crate) fn needs_recovery(store: &SessionStore, parent: &Value) -> bool {
         return true;
     }
     let runtime = &child["browser"]["runtime"];
-    // A failed child whose dispatch never started cannot send: the started record precedes the
-    // single physical Send and needs a running session. Its own `recoveryRequired` then marks
-    // only a tab not yet retired, which closes with the consultation.
-    let unsent = matches!(child["status"].as_str(), Some("error" | "cancelled"))
-        && (child.get("dispatch").is_none() || child["dispatch"]["state"] == "not-started");
-    !unsent
-        && (child["recoveryRequired"] == true
-            || child.get("dispatch").is_some()
-            || runtime["chromeTargetId"].is_string()
-            || runtime["freshProfileOwner"].is_object()
-                && !matches!(
-                    runtime["freshProfileDisposal"]["disposition"].as_str(),
-                    Some("removed" | "kept")
-                ))
+    child["recoveryRequired"] == true
+        || child.get("dispatch").is_some()
+        || runtime["chromeTargetId"].is_string()
+        || runtime["freshProfileOwner"].is_object()
+            && !matches!(
+                runtime["freshProfileDisposal"]["disposition"].as_str(),
+                Some("removed" | "kept")
+            )
 }
 
 /// Resolve endpoint evidence through reciprocal seals, without transferring target authority.
@@ -1193,49 +1187,6 @@ mod tests {
         let mut foreign = parent;
         foreign["browser"]["consultation"]["active"]["childId"] = json!("PUBLIC-missing");
         assert!(needs_recovery(&store, &foreign));
-    }
-
-    #[test]
-    fn a_failed_child_that_never_started_its_send_needs_no_recovery_despite_its_tab() {
-        let (_root, store, identity) = parent();
-        let id = id(&store);
-        let cancel = CancellationToken::new();
-        let mut coordinator = Parent::begin(&store, &id, &identity, &cancel).unwrap();
-        let link = coordinator.reserve_first(&cancel).unwrap();
-        let parent = store.require(&id).unwrap();
-        let child = store.require(&link.child_id).unwrap();
-        // A login refusal after the tab opened: the child's own failure write records no send,
-        // and recoveryRequired while its tab is not yet retired.
-        let cases = [
-            ("error", json!({"state":"not-started"}), true, false),
-            ("cancelled", Value::Null, false, false),
-            ("running", json!({"state":"not-started"}), false, true),
-            ("error", json!({"state":"uncertain"}), true, true),
-            ("error", json!({"state":"started"}), false, true),
-        ];
-        for (status, dispatch, recovery, expected) in cases {
-            let mut meta = child.clone();
-            meta["status"] = json!(status);
-            meta["recoveryRequired"] = json!(recovery);
-            meta["browser"]["runtime"]["chromeTargetId"] = json!("PUBLIC-owned");
-            meta["browser"]["runtime"]["freshProfileOwner"] = json!({"sessionId":link.child_id});
-            if !dispatch.is_null() {
-                meta["dispatch"] = dispatch.clone();
-            }
-            store
-                .update(&link.child_id, |_| Ok(Some(meta.clone())))
-                .unwrap();
-            assert_eq!(
-                needs_recovery(&store, &parent),
-                expected,
-                "{status} {dispatch}"
-            );
-            atomic_json(
-                &store.directory(&link.child_id).unwrap().join("meta.json"),
-                &child,
-            )
-            .unwrap();
-        }
     }
 
     #[test]

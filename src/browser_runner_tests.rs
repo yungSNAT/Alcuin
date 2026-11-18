@@ -10602,6 +10602,13 @@ fn a_failed_attempt_reports_nothing_sent_only_before_its_dispatch_started() {
     write(Some(json!({"state":"uncertain"})), Some("PUBLIC-target"));
     let uncertain = attempt_failure(&store, parent, child);
     assert!(uncertain.contains("recovery evidence"), "{uncertain}");
+    // The owned failure path also keeps recoveryRequired whilst the tab is not yet retired.
+    write(Some(json!({"state":"not-started"})), Some("PUBLIC-target"));
+    store
+        .update(child, |_| Ok(Some(json!({"recoveryRequired":true}))))
+        .unwrap();
+    let unretired = attempt_failure(&store, parent, child);
+    assert!(unretired.contains("nothing was sent"), "{unretired}");
     write(None, None);
     let unsent = attempt_failure(&store, parent, child);
     assert!(unsent.contains("nothing was sent"), "{unsent}");
