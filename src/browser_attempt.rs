@@ -832,7 +832,7 @@ thread_local! {
 /// parent's owner, or none, and positively never sent.
 /// A missing dispatch, or the not-started record failure writes only when none exists, proves
 /// no Send: the started record precedes the single physical Send.
-pub(super) fn unsent_grok(parent: &Value, child: &Value) -> bool {
+pub(crate) fn unsent_grok(parent: &Value, child: &Value) -> bool {
     let owner = &child["lifecycle"]["processIdentity"];
     (owner.is_null() || *owner == parent["lifecycle"]["processIdentity"])
         && child["capturedAnswer"].is_null()

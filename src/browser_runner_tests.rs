@@ -10569,7 +10569,7 @@ async fn remote_host_downloads_are_not_redirected_into_local_directories() {
 }
 
 #[test]
-fn a_failed_attempt_reports_nothing_sent_only_without_dispatch_or_tab() {
+fn a_failed_attempt_reports_nothing_sent_only_before_its_dispatch_started() {
     let (_root, manifest) = dead_provider_attempt();
     let store =
         SessionStore::new(std::path::Path::new(manifest["home"].as_str().unwrap()).join(".oracle"));
@@ -10595,12 +10595,38 @@ fn a_failed_attempt_reports_nothing_sent_only_without_dispatch_or_tab() {
     write(Some(json!({"state":"started"})), None);
     let started = attempt_failure(&store, parent, child);
     assert!(started.contains("recovery evidence"), "{started}");
+    // The failed child's tab opened, but its dispatch never started, so it sent nothing.
     write(None, Some("PUBLIC-target"));
     let tab = attempt_failure(&store, parent, child);
-    assert!(tab.contains("recovery evidence"), "{tab}");
+    assert!(tab.contains("nothing was sent"), "{tab}");
+    write(Some(json!({"state":"uncertain"})), Some("PUBLIC-target"));
+    let uncertain = attempt_failure(&store, parent, child);
+    assert!(uncertain.contains("recovery evidence"), "{uncertain}");
+    // The owned failure path also keeps recoveryRequired whilst the tab is not yet retired.
+    write(Some(json!({"state":"not-started"})), Some("PUBLIC-target"));
+    store
+        .update(child, |_| Ok(Some(json!({"recoveryRequired":true}))))
+        .unwrap();
+    let unretired = attempt_failure(&store, parent, child);
+    assert!(unretired.contains("nothing was sent"), "{unretired}");
     write(None, None);
     let unsent = attempt_failure(&store, parent, child);
     assert!(unsent.contains("nothing was sent"), "{unsent}");
+    // Neither a child another process owned nor one cancelled after its dispatch started proves it.
+    let edit = |change: &dyn Fn(&mut Value)| {
+        let path = store.directory(child).unwrap().join("meta.json");
+        let mut meta: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        change(&mut meta);
+        fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    };
+    write(None, Some("PUBLIC-target"));
+    edit(&|meta| meta["lifecycle"]["processIdentity"] = json!({"pid":1,"start":"PUBLIC-other"}));
+    let foreign = attempt_failure(&store, parent, child);
+    assert!(foreign.contains("recovery evidence"), "{foreign}");
+    write(Some(json!({"state":"started"})), Some("PUBLIC-target"));
+    edit(&|meta| meta["status"] = json!("cancelled"));
+    let cancelled = attempt_failure(&store, parent, child);
+    assert!(cancelled.contains("recovery evidence"), "{cancelled}");
     // An unsent-looking child proves nothing unless it is the parent's active attempt.
     let other = attempt_failure(&store, parent, "PUBLIC-other-child");
     assert!(other.contains("recovery evidence"), "{other}");
