@@ -1643,14 +1643,20 @@ pub(crate) async fn run_native_with_capture(
     ))
     .await
 }
-/// What a failed first attempt leaves behind. Recovery-free attempts (failed before their dispatch
-/// started, or with no dispatch record, tab or fresh profile) cannot have sent, so the consult
-/// wrapper may send the packet by another route.
+/// What a failed first attempt leaves behind. One that failed before its dispatch started cannot
+/// have sent, whatever tab or profile it left to clean, so the consult wrapper may send the packet
+/// by another route.
 fn attempt_failure(store: &SessionStore, parent: &str, child: &str) -> String {
-    // Only proof about this child counts: needs_recovery is also false with no active attempt.
+    // Only proof about this child counts: it must be the parent's active attempt. The started
+    // record precedes the single physical Send, as for the fresh-tab retry's own check.
     let unsent = store.require(parent).is_ok_and(|parent| {
-        parent["browser"]["consultation"]["active"]["childId"] == child
-            && !crate::browser_attempt::needs_recovery(store, &parent)
+        let active = &parent["browser"]["consultation"]["active"];
+        active["childId"] == child
+            && store.require(child).is_ok_and(|meta| {
+                meta["browser"]["attempt"] == *active
+                    && matches!(meta["status"].as_str(), Some("error" | "cancelled"))
+                    && crate::browser_attempt::unsent_grok(&parent, &meta)
+            })
     });
     if !unsent {
         format!(
