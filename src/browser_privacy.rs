@@ -87,7 +87,8 @@ pub(crate) async fn require(
             .await
         {
             Ok(verdict) => verdict,
-            // A re-read that the deadline cut short leaves the state unknown at the deadline.
+            // A re-read that the deadline cut short leaves the state unknown at the deadline. It stays
+            // a stalled read, which the answer wait rides out.
             Err(error)
                 if unknown.is_some()
                     && tokio::time::Instant::now() >= deadline
@@ -95,7 +96,9 @@ pub(crate) async fn require(
                         .downcast_ref::<crate::cdp::PageReadStalled>()
                         .is_some() =>
             {
-                anyhow::bail!(unverified(unknown.as_deref(), timeout))
+                return Err(
+                    crate::cdp::PageReadStalled(unverified(unknown.as_deref(), timeout)).into(),
+                );
             }
             Err(error) => {
                 let message = format!("{REFUSAL}: {error}");
