@@ -40,7 +40,7 @@ With `--browser-research search`, ChatGPT adds a search token to the message and
 
 Several text files are bundled into one upload by default. Each file must be under the size limit, 1 MB unless you set `--max-file-size-bytes`, `ORACLE_MAX_FILE_SIZE_BYTES` or `maxFileSizeBytes` ([Configuration](configuration.md)). A file that looks like it holds a credential is refused unless you name it with `--allow-secret-file <path>`.
 
-Before Send, Alcuin checks that every attachment in the composer is one it uploaded. ChatGPT replaces a file's 'Remove <name>' control once the upload finishes processing, so Alcuin follows a file to a replacement that carries the same name when nothing else could be it. If you remove Alcuin's attachment in its tab and attach a different file with the same name before Send, Alcuin sends that file; avoid editing the composer of a tab Alcuin is using.
+Before Send, Alcuin checks that every attachment in the composer is one it uploaded. ChatGPT replaces a file's 'Remove <name>' control once the upload finishes processing, so Alcuin follows a file to a replacement whose label names the file the same way when nothing else could be it. If you remove Alcuin's attachment in its tab and attach a different file that the page labels the same way before Send, Alcuin sends that file; avoid editing the composer of a tab Alcuin is using.
 
 Preview what a run would send, with each file's size, before sending it:
 
