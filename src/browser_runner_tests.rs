@@ -2757,14 +2757,18 @@ fn dead_provider_attempt_state(
             .spawn()
             .unwrap(),
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    // The deadline only stops a hung helper from holding the suite. A helper takes a few
+    // seconds, but a stalled CI runner once held 2 of them past a 20-second deadline.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let status = loop {
         if let Some(status) = helper.0.try_wait().unwrap() {
             break status;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "Synthetic provider owner did not exit before its deadline"
+            "Synthetic provider owner did not exit before its deadline; stdout: {} stderr: {}",
+            fs::read_to_string(root.path().join("helper.stdout")).unwrap_or_default(),
+            fs::read_to_string(root.path().join("helper.stderr")).unwrap_or_default()
         );
         std::thread::sleep(Duration::from_millis(10));
     };
