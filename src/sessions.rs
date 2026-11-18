@@ -704,7 +704,7 @@ impl SessionStore {
             Ok(entries) => entries,
         };
         let cutoff = hours.map(|hours| {
-            chrono::Utc::now().timestamp_millis() as f64 - (hours + 1.0) * 3_600_000.0
+            jiff::Timestamp::now().as_millisecond() as f64 - (hours + 1.0) * 3_600_000.0
         });
         for entry in entries.flatten() {
             let id = entry.file_name().to_string_lossy().into_owned();
@@ -1501,10 +1501,12 @@ mod window_tests {
                 .to_owned()
         };
         let (old, recent) = (create("public-old-window"), create("public-recent-window"));
-        let days_ago = chrono::Utc::now() - chrono::Duration::days(3);
+        let days_ago = jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_hours(72))
+            .unwrap();
         store
             .update(&old, |_| {
-                Ok(Some(json!({"createdAt":days_ago.to_rfc3339()})))
+                Ok(Some(json!({"createdAt":days_ago.to_string()})))
             })
             .unwrap();
         fs::File::options()
