@@ -2099,6 +2099,10 @@ pub fn read_devtools_endpoint(profile: &Path) -> Result<Option<AttachmentEndpoin
             raw.len() <= 4096,
             "Chrome debugging record exceeds its limit"
         );
+        // Chrome creates the record before writing it, so an empty one is not written yet.
+        if raw.is_empty() {
+            continue;
+        }
         entry.require_matches(&path)?;
         directory.require_matches(profile)?;
         let mut lines = raw.lines();
@@ -4417,6 +4421,12 @@ mod tests {
         }
         assert_eq!(owners[0].as_ref().unwrap(), &[browsers[0].id()]);
         assert_eq!(owners[1].as_ref().unwrap(), &[browsers[1].id()]);
+    }
+    #[test]
+    fn an_empty_devtools_record_is_not_written_yet() {
+        let home = tempfile::tempdir().unwrap();
+        fs::write(home.path().join("DevToolsActivePort"), "").unwrap();
+        assert!(read_devtools_endpoint(home.path()).unwrap().is_none());
     }
     #[test]
     fn endpoint_identity_and_native_devtools_record_refuse_foreign_sockets() {
