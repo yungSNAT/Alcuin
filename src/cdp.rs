@@ -20,8 +20,8 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// A page read that gave no usable result: the renderer did not reply in time, or the
-/// expression threw something other than the privacy guard's refusal.
+/// A page read that gave no usable result: the renderer did not reply in time, the command was
+/// not sent in time, or the expression threw something other than the privacy guard's refusal.
 #[derive(Debug)]
 pub(crate) struct PageReadStalled(pub(crate) String);
 impl std::fmt::Display for PageReadStalled {
@@ -676,12 +676,31 @@ mod tests {
             copy.evaluate("'PUBLIC'", Duration::from_millis(10), &token)
                 .await
         });
+        // A read cancelled whilst queued is refused for its cancellation, never as a stall.
+        let (copy, token) = (client.clone(), CancellationToken::new());
+        let withdrawn = token.clone();
+        let cancelled = tokio::spawn(async move {
+            copy.evaluate("'PUBLIC'", Duration::from_secs(60), &token)
+                .await
+        });
         tokio::task::yield_now().await;
         // Freeing the buffer wakes the transport task before the clock passes the late read's
         // deadline, so the task takes the read from its queue before the read's timer fires.
+        // The cancellation lands after that wake, so the task replies to the cancelled read
+        // before its caller sees the cancellation.
         let mut buffer = vec![0; 8192];
         assert_eq!(server.read(&mut buffer).await.unwrap(), 4096);
+        withdrawn.cancel();
         tokio::time::advance(Duration::from_millis(20)).await;
+        let error = cancelled.await.unwrap().unwrap_err();
+        assert!(
+            error.to_string().starts_with("CDP command was cancelled"),
+            "{error:#}"
+        );
+        assert!(
+            error.downcast_ref::<PageReadStalled>().is_none(),
+            "{error:#}"
+        );
         let error = late.await.unwrap().unwrap_err();
         assert_eq!(
             error.to_string(),
