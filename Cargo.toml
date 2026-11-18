@@ -3,7 +3,7 @@ name = "alcuin"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-license = "FSL-1.1-ALv2 AND MIT"
+license = "Apache-2.0 AND MIT"
 description = "Source-backed consultations with durable sessions and guarded browser recovery"
 
 [lib]

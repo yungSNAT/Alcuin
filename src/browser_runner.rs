@@ -283,7 +283,7 @@ fn prepare_with_base(
         // A run whose worker and controller are verifiably dead no longer counts as running.
         // Summaries skip finished sessions' model runs, which status and options do not need.
         let signature = crate::execution::run_signature(&request.options);
-        for current in store.list(true)? {
+        for current in store.list_same_run(&request.options)? {
             if matches!(current["status"].as_str(), Some("pending" | "running"))
                 && crate::execution::run_signature(&current["options"]) == signature
                 && !store.verified_dead_run(&current)
@@ -1645,13 +1645,20 @@ pub(crate) async fn run_native_with_capture(
     ))
     .await
 }
-/// What a failed first attempt leaves behind. Recovery-free attempts (no dispatch record, no tab,
-/// no fresh profile) cannot have sent, so the consult wrapper may send the packet by another route.
+/// What a failed first attempt leaves behind. One that failed before its dispatch started cannot
+/// have sent, whatever tab or profile it left to clean, so the consult wrapper may send the packet
+/// by another route.
 fn attempt_failure(store: &SessionStore, parent: &str, child: &str) -> String {
-    // Only proof about this child counts: needs_recovery is also false with no active attempt.
+    // Only proof about this child counts: it must be the parent's active attempt. The started
+    // record precedes the single physical Send, as for the fresh-tab retry's own check.
     let unsent = store.require(parent).is_ok_and(|parent| {
-        parent["browser"]["consultation"]["active"]["childId"] == child
-            && !crate::browser_attempt::needs_recovery(store, &parent)
+        let active = &parent["browser"]["consultation"]["active"];
+        active["childId"] == child
+            && store.require(child).is_ok_and(|meta| {
+                meta["browser"]["attempt"] == *active
+                    && matches!(meta["status"].as_str(), Some("error" | "cancelled"))
+                    && crate::browser_attempt::unsent_grok(&parent, &meta)
+            })
     });
     if !unsent {
         format!(

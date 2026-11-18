@@ -7,7 +7,7 @@
   },
   "homepage": "https://github.com/yungSNAT/Alcuin",
   "repository": "https://github.com/yungSNAT/Alcuin",
-  "license": "FSL-1.1-ALv2 AND MIT",
+  "license": "Apache-2.0 AND MIT",
   "keywords": ["chatgpt", "second-opinion", "code-review", "mcp"],
   "mcpServers": {
     "alcuin": {

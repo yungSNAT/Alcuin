@@ -11,7 +11,7 @@
 
 [![tests](https://github.com/yungSNAT/Alcuin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yungSNAT/Alcuin/actions/workflows/ci.yml) [![Codecov](https://codecov.io/gh/yungSNAT/Alcuin/graph/badge.svg)](https://codecov.io/gh/yungSNAT/Alcuin) [![CodeQL](https://github.com/yungSNAT/Alcuin/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/yungSNAT/Alcuin/actions/workflows/codeql.yml) [![OSV-Scanner](https://github.com/yungSNAT/Alcuin/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/yungSNAT/Alcuin/actions/workflows/osv-scanner.yml) [![SonarCloud](https://sonarcloud.io/api/project_badges/measure?project=EquityBot_Industrious&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=EquityBot_Industrious) [![Codacy code quality](https://app.codacy.com/project/badge/Grade/64b01c5d3b174763951ce4fa40124a84)](https://app.codacy.com/gh/yungSNAT/Alcuin/dashboard)<br>
 [![OpenSSF Scorecard](https://raw.githubusercontent.com/ryanduguid/.github/badges/EquityBot/Alcuin.svg)](https://scorecard.dev/viewer/?uri=github.com/yungSNAT/Alcuin)<br>
-[![rust: 1.99+](.github/assets/badges/rust.svg)](https://www.rust-lang.org/) [![licence: FSL-1.1-ALv2](.github/assets/badges/licence.svg)](LICENSE)
+[![rust: 1.99+](.github/assets/badges/rust.svg)](https://www.rust-lang.org/) [![licence: Apache-2.0](.github/assets/badges/licence.svg)](LICENSE)
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
 
@@ -178,7 +178,9 @@ The banner's lettering and emblem are drawn from Cascadia Mono and Besley glyphs
 
 ## Licence
 
-FSL-1.1-ALv2 (Functional Source License, Version 1.1, ALv2 Future License); see [LICENSE](LICENSE). Two years after its release, each version also becomes available under Apache-2.0. Oracle's MIT notice and third-party notices are in [NOTICE](NOTICE).
+Apache-2.0; see [LICENSE](LICENSE). If you redistribute this work or build on it, keep the attribution in [NOTICE](NOTICE). Oracle's MIT notice and third-party notices are in [NOTICE](NOTICE).
+
+Earlier versions, including the 0.1.0 release, stay under the licence they were released with, FSL-1.1-ALv2 for Ryan Duguid's work; each becomes available under Apache-2.0 2 years after it was made available.
 
 ---
 
