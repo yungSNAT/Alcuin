@@ -1482,7 +1482,11 @@ mod window_tests {
         let home = tempfile::tempdir().unwrap();
         let store = SessionStore::new(home.path());
         let id = store
-            .create(json!({"prompt":"PUBLIC window"}), home.path(), Some("public-window"))
+            .create(
+                json!({"prompt":"PUBLIC window"}),
+                home.path(),
+                Some("public-window"),
+            )
             .unwrap()["id"]
             .as_str()
             .unwrap()
@@ -1509,7 +1513,11 @@ mod window_tests {
         let home = tempfile::tempdir().unwrap();
         let store = SessionStore::new(home.path());
         let id = store
-            .create(json!({"prompt":"PUBLIC restored"}), home.path(), Some("public-restored"))
+            .create(
+                json!({"prompt":"PUBLIC restored"}),
+                home.path(),
+                Some("public-restored"),
+            )
             .unwrap()["id"]
             .as_str()
             .unwrap()
