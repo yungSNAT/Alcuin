@@ -2476,6 +2476,9 @@ async fn attachment_identity_cases(page: &Cdp) -> Result<()> {
 /// needs every control to be owned.
 async fn remounted_attachment_control_cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
     let cancel = CancellationToken::new();
+    let words = tempfile::tempdir()?;
+    let word = words.path().join("file");
+    std::fs::write(&word, "PUBLIC generic word")?; // NOSONAR: test setup on a local temporary file
     let setup = "()=>{sessionStorage.removeItem('oracle:target-claim');window.PUBLIC_removeClicks=0;const form=document.querySelector('form');form.addEventListener('change',event=>{if(event.target.type!=='file')return;for(const file of event.target.files){const chip=document.createElement('div');chip.className='PUBLIC-chip';chip.textContent=file.name;const remove=document.createElement('button');remove.type='button';remove.setAttribute('aria-label','Remove '+file.name);remove.textContent='Remove';remove.onclick=()=>{window.PUBLIC_removeClicks++;chip.remove();};chip.append(remove);form.append(chip);}event.target.value='';});}";
     // The first chip's control is replaced; `renamed` names another file, `doubled` adds a
     // second control with the label.
@@ -2494,9 +2497,11 @@ async fn remounted_attachment_control_cases(page: &Cdp, file: &std::path::Path) 
         "renamed",
         "doubled",
         "generic",
+        "generic-word",
     ] {
-        // `generic` uses a label that does not name the file, which cannot show what replaced it.
-        let case_setup = if case == "generic" {
+        // `generic` uses a label that does not name the file, which cannot show what replaced it;
+        // `generic-word` uploads a file named `file`, which that label only seems to name.
+        let case_setup = if case.starts_with("generic") {
             setup.replace("'Remove '+file.name", "'Remove file'")
         } else {
             setup.into()
@@ -2513,7 +2518,8 @@ async fn remounted_attachment_control_cases(page: &Cdp, file: &std::path::Path) 
         // `pair` uploads the file twice, so the untouched control carries the same label.
         let mut manifests = Vec::new();
         for _ in 0..if case == "pair" { 2 } else { 1 } {
-            let mut upload = browser_dom::UploadFile::open(file)?;
+            let mut upload =
+                browser_dom::UploadFile::open(if case == "generic-word" { &word } else { file })?;
             manifests.push(
                 browser_dom::upload(&mut reservation, &mut upload, &nav, SHORT, &cancel).await?,
             );
