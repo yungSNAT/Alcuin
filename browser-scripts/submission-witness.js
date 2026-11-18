@@ -80,13 +80,16 @@
         !conflicts.some(value => value.reason === detail && value.phase === phase)) conflicts.push(next);
   };
   const refusePrivacy = reason => { privacyFailure = reason; return false; };
-  const privacyState = () => {
+  // `checked` is a Temporary Chat state the caller read in this renderer task; anything else
+  // runs the predicate here.
+  const privacyState = checked => {
     privacyFailure = null;
+    const state = () => checked === true || checked === false || checked === null ? checked : temporary();
     if (document !== originalDocument) return refusePrivacy('document-changed');
     if (window !== window.top) return refusePrivacy('frame-changed');
     if (location.origin !== 'https://chatgpt.com') return refusePrivacy('origin-changed');
     if (!conversationId && /^\/c\/local-chatgpt%3A[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(location.pathname))
-      return temporary() === false ? refusePrivacy('temporary-refused') : null;
+      return state() === false ? refusePrivacy('temporary-refused') : null;
     const current = location.pathname.match(/^\/c\/([a-zA-Z0-9-]+)$/)?.[1] ?? null;
     if (current) {
       if (conversationId && current !== conversationId) return refusePrivacy('conversation-changed');
@@ -95,8 +98,8 @@
       routeFailure ??= {initial:pathShape(originalPath),current:pathShape(location.pathname),latched:conversationId !== null};
       return refusePrivacy('path-changed');
     }
-    const state = temporary();
-    return state === false ? refusePrivacy('temporary-refused') : state;
+    const verdict = state();
+    return verdict === false ? refusePrivacy('temporary-refused') : verdict;
   };
   const restore = () => {
     if (window.fetch === observedFetch) window.fetch = original;
@@ -146,10 +149,10 @@
     }
     return () => { try { called = performance.now(); } catch {} };
   };
-  const read = phase => {
+  const read = (phase, checked) => {
     if (closed && sealedResult) return sealedResult;
     try {
-      const privacy = privacyState();
+      const privacy = privacyState(checked);
       if (privacy === false) invalidate('submission-privacy-changed', privacyFailure, phase);
       if (failure) return {state:'invalid',reason:failure,failureDetail:diagnostic.reason,failurePhase:diagnostic.phase,
         ...(routeFailure ? {routeShape:routeFailure} : {}),
@@ -244,7 +247,7 @@
         release();
       }
     },
-    read: () => read('receipt-read'),
+    read: checked => read('receipt-read', checked),
     cleanup: () => {
       try {
         restore();
