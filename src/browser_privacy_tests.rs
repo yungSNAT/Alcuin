@@ -246,6 +246,9 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
     attachment_identity_cases(page)
         .await
         .context("Attachment identity regression")?;
+    remounted_attachment_control_cases(page, file)
+        .await
+        .context("Remounted attachment control regression")?;
     upload_reset_privacy_cases(page, file)
         .await
         .context("Reset privacy regression")?;
@@ -2457,6 +2460,92 @@ async fn attachment_identity_cases(page: &Cdp) -> Result<()> {
             prepared.cleanup(&mut reservation, SHORT).await?;
             prepared.cleanup_witness(&reservation, false, SHORT).await?;
         }
+        page.evaluate(
+            "sessionStorage.removeItem('oracle:target-claim');true",
+            SHORT,
+            &cancel,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// ChatGPT's page build of 17 November 2026 empties the file input on change and remounts the
+/// attachment's removal control, with the same label, once the upload finishes processing.
+/// Send still needs that label to name the file and every control to be owned.
+async fn remounted_attachment_control_cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let setup = "()=>{sessionStorage.removeItem('oracle:target-claim');window.PUBLIC_removeClicks=0;const form=document.querySelector('form');form.addEventListener('change',event=>{if(event.target.type!=='file')return;for(const file of event.target.files){const chip=document.createElement('div');chip.className='PUBLIC-chip';chip.textContent=file.name;const remove=document.createElement('button');remove.type='button';remove.setAttribute('aria-label','Remove '+file.name);remove.textContent='Remove';remove.onclick=()=>{window.PUBLIC_removeClicks++;chip.remove();};chip.append(remove);form.append(chip);}event.target.value='';});}";
+    let remount = r#"(cfg)=>{
+        const old=document.querySelector('.PUBLIC-chip button'),chip=old.parentElement;
+        const label=cfg.case==='renamed'?'Remove PUBLIC-other.txt':old.getAttribute('aria-label');
+        const fresh=()=>{const button=document.createElement('button');button.type='button';button.setAttribute('aria-label',label);button.textContent='Remove';button.onclick=()=>{window.PUBLIC_removeClicks++;chip.remove();};return button;};
+        old.replaceWith(fresh());
+        if(cfg.case==='doubled')chip.append(fresh());
+        return document.querySelector('#PUBLIC-file').files.length;
+    }"#;
+    for case in ["remounted", "renamed", "doubled"] {
+        mount(page, ACTIVE, "/", setup).await?;
+        let mut reservation = RendererReservation::acquire(
+            page.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            SHORT,
+            &cancel,
+        )
+        .await?;
+        let nav = browser_dom::navigation("https://chatgpt.com/")?;
+        let mut upload = browser_dom::UploadFile::open(file)?;
+        let manifest =
+            browser_dom::upload(&mut reservation, &mut upload, &nav, SHORT, &cancel).await?;
+        let files = page
+            .evaluate_with_arguments(remount, &json!([{"case":case}]), SHORT, &cancel)
+            .await?;
+        assert_eq!(files, 0, "{case}: the page left the file in its input");
+        let prepared = PreparedPrompt::stage(
+            &mut reservation,
+            "PUBLIC remounted attachment",
+            &nav,
+            &[browser_dom::receipt_expectation(&manifest, false)?],
+            SHORT,
+            &cancel,
+        )
+        .await?;
+        let armed = prepared.arm_send(&mut reservation, SHORT, &cancel).await;
+        if case != "remounted" {
+            let error = format!("{:#}", armed.expect_err(case));
+            assert!(error.contains("attachmentsReady"), "{case}: {error}");
+            page.evaluate(
+                "sessionStorage.removeItem('oracle:target-claim');true",
+                SHORT,
+                &cancel,
+            )
+            .await?;
+            continue;
+        }
+        armed.context("A remounted control naming the uploaded file was refused")?;
+        reservation
+            .evaluate_mutation(
+                "()=>{window.__oracleAttachmentDispatchGuard.cleanup();return true;}",
+                json!({}),
+                SHORT,
+                &cancel,
+            )
+            .await?;
+        prepared.cleanup_witness(&reservation, false, SHORT).await?;
+        prepared.cleanup(&mut reservation, SHORT).await?;
+        browser_dom::reset_uploads(&mut reservation, &[manifest], &nav, SHORT, &cancel)
+            .await
+            .context("Reset after a remounted control")?;
+        assert_eq!(
+            page.evaluate(
+                "({clicks:window.PUBLIC_removeClicks,evidence:window.__oracleAttachmentEvidence.size})",
+                SHORT,
+                &cancel
+            )
+            .await?,
+            json!({"clicks":1,"evidence":0})
+        );
+        reservation.release_clean(SHORT).await?;
         page.evaluate(
             "sessionStorage.removeItem('oracle:target-claim');true",
             SHORT,
