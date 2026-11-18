@@ -1513,7 +1513,7 @@ mod window_tests {
             .write(true)
             .open(store.directory(&old).unwrap().join("meta.json"))
             .unwrap()
-            .set_modified(std::time::SystemTime::from(days_ago))
+            .set_modified(std::time::SystemTime::try_from(days_ago).unwrap())
             .unwrap();
         let ids = |sessions: Vec<Value>| -> Vec<String> {
             sessions
