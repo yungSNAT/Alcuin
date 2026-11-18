@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A browser read whose time limit passes whilst it waits behind another command now counts as a stalled read, as one whose reply comes too late already did. The Temporary Chat check's last re-read cut short this way refused with 'CDP command expired or was cancelled before dispatch.' instead of the view's reason and 'still unknown after <n> ms', and an answer wait failed on it instead of reading again. Nothing is sent either way.
 - Alcuin no longer stops a Chrome launch with 'Missing Chrome debugging port' when it reads Chrome's `DevToolsActivePort` record in the moment after Chrome creates it and before Chrome writes it: an empty record now counts as not written yet, and the launch keeps waiting for it.
 - When the Temporary Chat check is still waiting for a conversation view to show itself and its last re-read is cut short by the check's time limit, it now refuses with the view's reason and 'still unknown after <n> ms', as when the limit passes between re-reads. It refused with 'CDP command timed out', which reads as a stalled page. Either way nothing is sent.
 - A receipt read of a live submission witness, made whilst a ChatGPT send waits for its receipt, now hands the witness the Temporary Chat state the read has just checked, so the witness no longer checks it again: each read walks a long conversation's page one time fewer. The witness's own checks when it sees the send's request, and when it stops, are unchanged.

@@ -30,7 +30,20 @@ impl std::fmt::Display for PageReadStalled {
     }
 }
 impl std::error::Error for PageReadStalled {}
+/// The transport task's reply to a command it took from its queue after the command's deadline
+/// or cancellation; such a command was never written.
+const EXPIRED: &str = "CDP command expired or was cancelled before dispatch.";
 
+/// The error for a command the transport task refused. Cancellation wins the caller's wait for
+/// the reply, so an expiry reaching the caller is its deadline's: the command gave no result in
+/// time, a stall, as when the caller's own timer fires first.
+fn reply_error(error: String) -> anyhow::Error {
+    if error == EXPIRED {
+        PageReadStalled(error).into()
+    } else {
+        anyhow::Error::msg(error)
+    }
+}
 /// The most page-supplied text an error message carries.
 const PAGE_TEXT_CHARS: usize = 300;
 /// Page-supplied text for an error message: its first line, without control characters,
@@ -143,7 +156,7 @@ impl Cdp {
                     command=requests.recv()=>{
                         let Some(command)=command else{break};
                         if command.reply.is_closed()||command.cancel.is_cancelled()||Instant::now()>=command.deadline {
-                            let _=command.reply.send(Err("CDP command expired or was cancelled before dispatch.".into()));continue;
+                            let _=command.reply.send(Err(EXPIRED.into()));continue;
                         }
                         if pending.len()>=64{let _=command.reply.send(Err("CDP pending command capacity is full; command was not sent.".into()));continue;}
                         let text=match serde_json::to_string(&command.message){Ok(text) if text.len()<=2*1024*1024=>text,_=>{let _=command.reply.send(Err("Invalid or oversized CDP request; command was not sent.".into()));continue;}};
@@ -274,7 +287,7 @@ impl Cdp {
             message["sessionId"] = json!(session);
         }
         tokio::select! {biased;_=cancel.cancelled()=>bail!("CDP command was cancelled before dispatch."),_=self.connection.shutdown.cancelled()=>return Err(NotSent("CDP connection is closed; command was not sent.".into()).into()),result=tokio::time::timeout_at(deadline,self.connection.commands.send(Command{id,message,reply,cancel:cancel.clone(),deadline}))=>result.map_err(|_|NotSent("CDP command queue timed out; command was not sent.".into()))?.map_err(|_|NotSent("CDP connection is closed; command was not sent.".into()))?};
-        let value = tokio::select! {biased;_=cancel.cancelled()=>bail!("CDP command was cancelled after reservation; acknowledgement is uncertain. Do not replay."),result=tokio::time::timeout_at(deadline,answer)=>result.map_err(|_|PageReadStalled(format!("CDP command timed out; acknowledgement is uncertain. Do not replay. Method: {method}.")))?.map_err(|_|anyhow::anyhow!("CDP command acknowledgement is unavailable."))?.map_err(anyhow::Error::msg)?};
+        let value = tokio::select! {biased;_=cancel.cancelled()=>bail!("CDP command was cancelled after reservation; acknowledgement is uncertain. Do not replay."),result=tokio::time::timeout_at(deadline,answer)=>result.map_err(|_|PageReadStalled(format!("CDP command timed out; acknowledgement is uncertain. Do not replay. Method: {method}.")))?.map_err(|_|anyhow::anyhow!("CDP command acknowledgement is unavailable."))?.map_err(reply_error)?};
         if value.get("error").is_some() {
             bail!("CDP command {method} was refused by the endpoint.");
         }
@@ -639,6 +652,50 @@ mod tests {
         .await
         .unwrap();
         drop(server);
+    }
+    /// The transport task can find a read's deadline passed before the caller's own timer
+    /// fires. The read gave no result in time either way, so both orders give a stall.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_whose_deadline_passes_before_dispatch_is_a_stall() {
+        use tokio::io::AsyncReadExt;
+        let (client, mut server) = tokio::io::duplex(4096);
+        let client = Cdp::from_socket(
+            WebSocketStream::from_raw_socket(client, Role::Client, Some(websocket_limits())).await,
+            Duration::from_secs(60),
+        );
+        let cancel = CancellationToken::new();
+        // A frame of more than one buffer and at most 2 holds the transport task in its write.
+        let (copy, token) = (client.clone(), cancel.clone());
+        let held = tokio::spawn(async move {
+            copy.evaluate(&"x".repeat(6000), Duration::from_secs(60), &token)
+                .await
+        });
+        tokio::task::yield_now().await;
+        let (copy, token) = (client.clone(), cancel.clone());
+        let late = tokio::spawn(async move {
+            copy.evaluate("'PUBLIC'", Duration::from_millis(10), &token)
+                .await
+        });
+        tokio::task::yield_now().await;
+        // Freeing the buffer wakes the transport task before the clock passes the late read's
+        // deadline, so the task takes the read from its queue before the read's timer fires.
+        let mut buffer = vec![0; 8192];
+        assert_eq!(server.read(&mut buffer).await.unwrap(), 4096);
+        tokio::time::advance(Duration::from_millis(20)).await;
+        let error = late.await.unwrap().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "CDP command expired or was cancelled before dispatch."
+        );
+        assert!(
+            error.downcast_ref::<PageReadStalled>().is_some(),
+            "{error:#}"
+        );
+        client
+            .disconnect_and_wait(Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert!(held.await.unwrap().is_err());
     }
     #[tokio::test]
     async fn connection_and_attachment_never_grant_retirement_authority() {
