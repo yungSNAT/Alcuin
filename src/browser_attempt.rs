@@ -1203,17 +1203,19 @@ mod tests {
         let link = coordinator.reserve_first(&cancel).unwrap();
         let parent = store.require(&id).unwrap();
         let child = store.require(&link.child_id).unwrap();
-        // A login refusal after the tab opened: the child's own failure write records no send.
+        // A login refusal after the tab opened: the child's own failure write records no send,
+        // and recoveryRequired while its tab is not yet retired.
         let cases = [
-            ("error", json!({"state":"not-started"}), false),
-            ("cancelled", Value::Null, false),
-            ("running", json!({"state":"not-started"}), true),
-            ("error", json!({"state":"uncertain"}), true),
-            ("error", json!({"state":"started"}), true),
+            ("error", json!({"state":"not-started"}), true, false),
+            ("cancelled", Value::Null, false, false),
+            ("running", json!({"state":"not-started"}), false, true),
+            ("error", json!({"state":"uncertain"}), true, true),
+            ("error", json!({"state":"started"}), false, true),
         ];
-        for (status, dispatch, expected) in cases {
+        for (status, dispatch, recovery, expected) in cases {
             let mut meta = child.clone();
             meta["status"] = json!(status);
+            meta["recoveryRequired"] = json!(recovery);
             meta["browser"]["runtime"]["chromeTargetId"] = json!("PUBLIC-owned");
             meta["browser"]["runtime"]["freshProfileOwner"] = json!({"sessionId":link.child_id});
             if !dispatch.is_null() {
