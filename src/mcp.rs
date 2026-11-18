@@ -245,9 +245,11 @@ impl AlcuinMcp {
                 json!({"entries":[session_entry(&meta)],"total":1,"truncated":false}),
             );
         }
+        let hours = input["hours"].as_f64().unwrap_or(24.0);
+        let include_all = input["includeAll"] == true;
         let entries = self
             .store
-            .list(true)?
+            .list_created_since(true, (!include_all).then_some(hours))?
             .into_iter()
             .filter(|entry| !crate::browser_attempt::internal(entry) && self.in_project(entry))
             .map(|mut entry| {
@@ -257,8 +259,8 @@ impl AlcuinMcp {
             .collect();
         let (entries, total, truncated) = sessions::filter_range(
             entries,
-            input["hours"].as_f64().unwrap_or(24.0),
-            input["includeAll"] == true,
+            hours,
+            include_all,
             input["limit"].as_f64().unwrap_or(100.0).max(0.0) as usize,
         );
         let text = entries
