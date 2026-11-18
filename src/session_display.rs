@@ -177,6 +177,15 @@ pub(crate) fn response_owners(sessions: &[Value]) -> BTreeMap<String, String> {
     }
     owners
 }
+/// Whether an entry follows a previous response that no session in `sessions` owns, so a row
+/// could only name its parent from sessions outside them.
+pub(crate) fn unresolved_parent(entries: &[Value], sessions: &[Value]) -> bool {
+    let owners = response_owners(sessions);
+    entries.iter().any(|entry| {
+        lineage(entry, Some(&owners))
+            .is_some_and(|lineage| lineage.session.is_none() && lineage.response.is_some())
+    })
+}
 struct Lineage {
     response: Option<String>,
     session: Option<String>,
@@ -880,6 +889,16 @@ mod tests {
             "br/bg"
         );
         assert_eq!(execution_label(&json!({"mode":"browser"})), "browser");
+    }
+    #[test]
+    fn a_parent_named_only_by_a_response_no_session_read_owns_is_unresolved() {
+        let parent = json!({"id":"public-parent","response":{"responseId":"resp_PUBLIC_parent_response_1234"}});
+        let child = json!({"id":"public-child","options":{"previousResponseId":"resp_PUBLIC_parent_response_1234"}});
+        let named = json!({"id":"public-named","options":{"followupSessionId":"public-gone","previousResponseId":"resp_PUBLIC_gone_response_99999"}});
+        let root = json!({"id":"public-root"});
+        assert!(unresolved_parent(std::slice::from_ref(&child), &[]));
+        assert!(!unresolved_parent(std::slice::from_ref(&child), &[parent]));
+        assert!(!unresolved_parent(&[named, root], &[]));
     }
     #[test]
     fn attach_metadata_and_summary_follow_the_reference_lines() {
