@@ -333,7 +333,8 @@ impl SessionStore {
                 private_file(&dir.join("models").join(format!("{slug}.log")), true)?;
             }
             private_file(&dir.join("output.log"), true)?;
-            self.index_run(&id, &metadata["options"])?;
+            // A session the index failed to cover is read by every duplicate check.
+            let _ = self.index_run(&id, &metadata["options"]);
             guard.leaf(&dir.join("meta.json"))?;
             atomic_json(&dir.join("meta.json"), &metadata)?;
             guard.check()?;
@@ -416,11 +417,13 @@ impl SessionStore {
         let guard = self.write_directory(id)?;
         let mut current = self.stored_for_update(id)?;
         if let Some(patch) = decide(&current)? {
+            let run = run_key(&current["options"])?;
             apply_patch(&mut current, &patch)?;
             if current["id"] != id {
                 bail!("Invalid stored metadata for session {id}.");
             }
             self.index_target(id, &current)?;
+            self.reindex_run(id, &run, &current["options"])?;
             guard.leaf(&dir.join("meta.json"))?;
             match deadline {
                 Some(deadline) => atomic_json_until(&dir.join("meta.json"), &current, deadline)?,
@@ -487,11 +490,13 @@ impl SessionStore {
                 }
                 current["models"] = json!(runs);
             }
+            let run = run_key(&current["options"])?;
             apply_patch(&mut current, &patch)?;
             if current["id"] != id {
                 bail!("Invalid stored metadata for session {id}.");
             }
             self.index_target(id, &current)?;
+            self.reindex_run(id, &run, &current["options"])?;
             if model_patch.is_some() {
                 let models = guard.models()?;
                 let path = self.model_path(id, model)?;
@@ -715,27 +720,43 @@ impl SessionStore {
     }
     /// Written by `create` before the metadata, so a covered session is always indexed.
     fn index_run(&self, id: &str, options: &Value) -> Result<()> {
-        let signature = crate::execution::run_signature(options);
-        let key = crate::artifacts::sha256(&serde_json::to_vec(&signature)?);
-        let directory = self.run_index().join("runs").join(key);
+        let directory = self.run_index().join("runs").join(run_key(options)?);
         private_dir(&directory)?;
         marker(&directory.join(id))?;
         let covered = self.run_index().join("covered");
         private_dir(&covered)?;
         marker(&covered.join(id))
     }
-    /// Every `list(true)` session that may share `options`'s run signature, unsorted: the
-    /// covered sessions the index names, and every uncovered one (created before the index or
-    /// by another writer), which is indexed as it is read, for a bounded time per call.
+    /// A metadata write that changes the run signature of a covered session marks the new one
+    /// first, so the session stays under every signature it has had. A failure refuses the write.
+    fn reindex_run(&self, id: &str, before: &str, options: &Value) -> Result<()> {
+        if run_key(options)? != before && self.run_index().join("covered").join(id).exists() {
+            self.index_run(id, options)?;
+        }
+        Ok(())
+    }
+    /// Every `list(true)` session that may share `options`'s run signature, newest first, as
+    /// `list` orders them: the covered sessions the index names, and every uncovered one
+    /// (created before the index or by another writer), which is indexed as it is read, for a
+    /// bounded time per call. An index that cannot be read leaves every session uncovered.
     pub(crate) fn list_same_run(&self, options: &Value) -> Result<Vec<Value>> {
-        let signature = crate::execution::run_signature(options);
-        let key = crate::artifacts::sha256(&serde_json::to_vec(&signature)?);
         let index = self.run_index();
-        let covered = names(&index.join("covered"))?;
-        let named = names(&index.join("runs").join(key))?;
+        let (covered, named) = match (
+            names(&index.join("covered")),
+            names(&index.join("runs").join(run_key(options)?)),
+        ) {
+            (Ok(covered), Ok(named)) => (covered, named),
+            _ => Default::default(),
+        };
         let cover_until = Instant::now() + Duration::from_millis(250);
         let mut output = vec![];
-        for id in names(&self.root())? {
+        let entries = match fs::read_dir(self.root()) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(output),
+            Err(error) => return Err(error.into()),
+            Ok(entries) => entries,
+        };
+        for entry in entries.flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
             if !valid_id(&id) || (covered.contains(&id) && !named.contains(&id)) {
                 continue;
             }
@@ -743,10 +764,12 @@ impl SessionStore {
                 continue;
             };
             if !covered.contains(&id) && Instant::now() < cover_until {
-                self.index_run(&id, &meta["options"])?;
+                // Left uncovered on failure, so later checks read it again.
+                let _ = self.index_run(&id, &meta["options"]);
             }
             output.push(meta);
         }
+        output.sort_by(|a, b| b["createdAt"].as_str().cmp(&a["createdAt"].as_str()));
         Ok(output)
     }
     /// Beside the store: `targets/<target>/<session>` says the session's metadata has named
@@ -1112,6 +1135,11 @@ thread_local! {
     /// The sessions this thread has read whole, so a test can check what a scan reads.
     pub(crate) static READ_SESSIONS: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+/// The index key of `options`'s run signature: its trimmed prompt and browser follow-ups.
+fn run_key(options: &Value) -> Result<String> {
+    let signature = crate::execution::run_signature(options);
+    Ok(crate::artifacts::sha256(&serde_json::to_vec(&signature)?))
 }
 /// The entry names in a directory, none if it does not exist.
 fn names(path: &Path) -> Result<std::collections::BTreeSet<String>> {
