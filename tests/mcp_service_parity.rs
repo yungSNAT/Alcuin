@@ -356,7 +356,10 @@ async fn sessions_wait_and_resources_see_only_this_projects_sessions_unless_opte
             .resource(&format!("oracle-session://{outside}/{kind}"))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("ORACLE_MCP_ALL_SESSIONS=1"), "{kind}: {error}");
+        assert!(
+            error.contains("ORACLE_MCP_ALL_SESSIONS=1"),
+            "{kind}: {error}"
+        );
         scoped
             .resource(&format!("oracle-session://{inside}/{kind}"))
             .unwrap();
