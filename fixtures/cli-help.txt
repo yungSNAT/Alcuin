@@ -1,4 +1,4 @@
-Alcuin CLI v0.1.0: Consult Latest (GPT-6) at Pro or verified Extra High.
+Alcuin CLI v0.2.0: Consult Latest (GPT-6) at Pro or verified Extra High.
 
 Usage: alcuin [options] [command] [prompt]
 

@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-19)
+
+The first release with archives for macOS on Apple silicon and Linux on aarch64, and the first under Apache-2.0 for Ryan Duguid's work.
 
 - A browser read whose time limit passes whilst it waits for the browser connection now counts as a stalled read, as one whose reply comes too late already did. The Temporary Chat check's last re-read cut short this way refused with 'CDP command expired or was cancelled before dispatch.' instead of the view's reason and 'still unknown after <n> ms', and an answer wait failed on it instead of reading again. Nothing is sent either way.
 - Alcuin no longer stops a Chrome launch with 'Missing Chrome debugging port' when it reads Chrome's `DevToolsActivePort` record in the moment after Chrome creates it and before Chrome writes it: an empty record now counts as not written yet, and the launch keeps waiting for it.
