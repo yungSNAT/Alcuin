@@ -1315,105 +1315,95 @@ pub(crate) async fn native_cases(
             .grok_witness(DISPATCH, true, SHORT, &cancel)
             .await?;
     }
+    witness_release_cases(page, &cancel).await?;
+    // Quoted controls in an answer never prove Private mode.
+    page.evaluate("document.body.innerHTML='<textarea></textarea><div id=\"response-PUBLIC\"><a aria-label=\"Switch to Default Chat\">Private</a><div class=\"query-bar bg-surface-incognito\"></div></div>';true",SHORT,&cancel).await?;
+    assert!(require(page, SHORT, &cancel).await.is_err());
+    Ok(())
+}
+/// The witness releases its prompt and observers on stop, expiry, rejection and a refused
+/// legacy request, and keeps each send's no-replay barrier.
+async fn witness_release_cases(page: &Cdp, cancel: &CancellationToken) -> Result<()> {
     // Explicit stop releases the input object even if a foreign wrapper retains
     // the delegating observer. No payload or authority survives in that closure.
     let mut reservation = setup(page, "Auto").await?;
     reservation
-        .grok_witness(DISPATCH, true, SHORT, &cancel)
+        .grok_witness(DISPATCH, true, SHORT, cancel)
         .await?;
-    page.evaluate("delete window.__oracleGrokWitness;true", SHORT, &cancel)
+    page.evaluate("delete window.__oracleGrokWitness;true", SHORT, cancel)
         .await?;
     reservation.evaluate_mutation(&format!("(cfg,privateChat)=>{{window.PUBLIC_cfgWeak=new WeakRef(cfg);return ({WITNESS})(cfg,privateChat);}}"),
-        json!({"prompt":PROMPT,"promptSha256":sha256(PROMPT.as_bytes()),"mode":"Auto","dispatchId":DISPATCH,"lifetimeMs":60000}),SHORT,&cancel).await?;
-    page.evaluate("{const observed=WebSocket.prototype.send;WebSocket.prototype.send=function(raw){return observed.call(this,raw);};}true",SHORT,&cancel).await?;
+        json!({"prompt":PROMPT,"promptSha256":sha256(PROMPT.as_bytes()),"mode":"Auto","dispatchId":DISPATCH,"lifetimeMs":60000}),SHORT,cancel).await?;
+    page.evaluate("{const observed=WebSocket.prototype.send;WebSocket.prototype.send=function(raw){return observed.call(this,raw);};}true",SHORT,cancel).await?;
     reservation
-        .grok_witness(DISPATCH, true, SHORT, &cancel)
+        .grok_witness(DISPATCH, true, SHORT, cancel)
         .await?;
-    page.call("HeapProfiler.collectGarbage", json!({}), SHORT, &cancel)
+    page.call("HeapProfiler.collectGarbage", json!({}), SHORT, cancel)
         .await?;
     assert_eq!(
-        page.evaluate("PUBLIC_cfgWeak.deref()===undefined", SHORT, &cancel)
+        page.evaluate("PUBLIC_cfgWeak.deref()===undefined", SHORT, cancel)
             .await?,
         true
     );
     page.evaluate(
         "PUBLIC_socket.send('PUBLIC after stopped observer');true",
         SHORT,
-        &cancel,
+        cancel,
     )
     .await?;
-    assert_eq!(
-        page.evaluate("PUBLIC_sent.length", SHORT, &cancel).await?,
-        1
-    );
+    assert_eq!(page.evaluate("PUBLIC_sent.length", SHORT, cancel).await?, 1);
     // The expiry timer detaches and releases prompt data after caller loss too.
-    page.evaluate("delete window.__oracleGrokWitness;true", SHORT, &cancel)
+    page.evaluate("delete window.__oracleGrokWitness;true", SHORT, cancel)
         .await?;
-    reservation.evaluate_mutation(WITNESS,json!({"prompt":PROMPT,"promptSha256":sha256(PROMPT.as_bytes()),"mode":"Auto","dispatchId":DISPATCH,"lifetimeMs":1}),SHORT,&cancel).await?;
+    reservation.evaluate_mutation(WITNESS,json!({"prompt":PROMPT,"promptSha256":sha256(PROMPT.as_bytes()),"mode":"Auto","dispatchId":DISPATCH,"lifetimeMs":1}),SHORT,cancel).await?;
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert_eq!(
         reservation
-            .grok_witness(DISPATCH, false, SHORT, &cancel)
+            .grok_witness(DISPATCH, false, SHORT, cancel)
             .await?["state"],
         "invalid"
     );
     assert!(send(&mut reservation).await.is_err());
     assert_eq!(
-        page.evaluate("PUBLIC_sent.length", SHORT, &cancel).await?,
+        page.evaluate("PUBLIC_sent.length", SHORT, cancel).await?,
         1,
         "Expired witness must refuse the click and leave only the earlier post-stop fixture send"
     );
     // An asynchronous click handler must not escape observation by writing only
     // after expiry. The remaining guard retains no prompt or document data.
     let mut delayed = setup_with_lifetime(page, "Auto", Duration::from_millis(1000)).await?;
-    page.evaluate("{const clicked=document.querySelector('button[aria-label=\"Send message\"]').onclick;window.PUBLIC_clicked=0;window.PUBLIC_lateBlocked=false;document.querySelector('button[aria-label=\"Send message\"]').onclick=()=>{PUBLIC_clicked++;setTimeout(()=>{try{clicked();}catch{PUBLIC_lateBlocked=true;}},1500);};}true",SHORT,&cancel).await?;
+    page.evaluate("{const clicked=document.querySelector('button[aria-label=\"Send message\"]').onclick;window.PUBLIC_clicked=0;window.PUBLIC_lateBlocked=false;document.querySelector('button[aria-label=\"Send message\"]').onclick=()=>{PUBLIC_clicked++;setTimeout(()=>{try{clicked();}catch{PUBLIC_lateBlocked=true;}},1500);};}true",SHORT,cancel).await?;
     send(&mut delayed).await?;
-    assert_eq!(page.evaluate("PUBLIC_clicked", SHORT, &cancel).await?, 1);
+    assert_eq!(page.evaluate("PUBLIC_clicked", SHORT, cancel).await?, 1);
     tokio::time::sleep(Duration::from_millis(1600)).await;
+    assert_eq!(page.evaluate("PUBLIC_sent.length", SHORT, cancel).await?, 0);
     assert_eq!(
-        page.evaluate("PUBLIC_sent.length", SHORT, &cancel).await?,
-        0
-    );
-    assert_eq!(
-        page.evaluate("PUBLIC_lateBlocked", SHORT, &cancel).await?,
+        page.evaluate("PUBLIC_lateBlocked", SHORT, cancel).await?,
         true
     );
     assert_eq!(
-        delayed
-            .grok_witness(DISPATCH, false, SHORT, &cancel)
-            .await?["state"],
+        delayed.grok_witness(DISPATCH, false, SHORT, cancel).await?["state"],
         "invalid"
     );
     // Rejection consumes the arm but never removes the outstanding click's
     // no-replay barrier. A later provider retry stays blocked after cleanup.
     let mut rejected = setup(page, "Auto").await?;
-    page.evaluate("document.querySelector('button[aria-label=\"Send message\"]').onclick=()=>{try{PUBLIC_socket.send(JSON.stringify({session_id:'00000000-0000-4000-8000-000000000005',event:{type:'response.create',item:{role:'user',x_grok:{client_message_id:'00000000-0000-4000-8000-000000000001',input_chunks:[{text:{text:'PUBLIC wrong prompt'}}]}}}}));}catch{}};true",SHORT,&cancel).await?;
+    page.evaluate("document.querySelector('button[aria-label=\"Send message\"]').onclick=()=>{try{PUBLIC_socket.send(JSON.stringify({session_id:'00000000-0000-4000-8000-000000000005',event:{type:'response.create',item:{role:'user',x_grok:{client_message_id:'00000000-0000-4000-8000-000000000001',input_chunks:[{text:{text:'PUBLIC wrong prompt'}}]}}}}));}catch{}};true",SHORT,cancel).await?;
     send(&mut rejected).await?;
     assert_eq!(
-        rejected
-            .grok_witness(DISPATCH, true, SHORT, &cancel)
-            .await?["state"],
+        rejected.grok_witness(DISPATCH, true, SHORT, cancel).await?["state"],
         "invalid"
     );
-    assert!(page.evaluate_with_arguments("(cfg)=>{PUBLIC_socket.send(JSON.stringify({session_id:cfg.session,event:{type:'response.create',item:{role:'user',x_grok:{client_message_id:cfg.client,input_chunks:[{text:{text:cfg.prompt}}]}}}}));return true;}",&json!([{"session":SESSION,"client":CLIENT,"prompt":PROMPT}]),SHORT,&cancel).await.is_err());
-    assert_eq!(
-        page.evaluate("PUBLIC_sent.length", SHORT, &cancel).await?,
-        0
-    );
+    assert!(page.evaluate_with_arguments("(cfg)=>{PUBLIC_socket.send(JSON.stringify({session_id:cfg.session,event:{type:'response.create',item:{role:'user',x_grok:{client_message_id:cfg.client,input_chunks:[{text:{text:cfg.prompt}}]}}}}));return true;}",&json!([{"session":SESSION,"client":CLIENT,"prompt":PROMPT}]),SHORT,cancel).await.is_err());
+    assert_eq!(page.evaluate("PUBLIC_sent.length", SHORT, cancel).await?, 0);
     // The retired unenveloped request is refused, never passed through unobserved.
     let mut legacy = setup(page, "Auto").await?;
-    page.evaluate_with_arguments("(cfg)=>{document.querySelector('button[aria-label=\"Send message\"]').onclick=()=>{try{PUBLIC_socket.send(JSON.stringify({type:'response.create',item:{role:'user',x_grok:{client_message_id:cfg.client,input_chunks:[{text:{text:cfg.prompt}}]}}}));}catch{}};return true;}",&json!([{"client":CLIENT,"prompt":PROMPT}]),SHORT,&cancel).await?;
+    page.evaluate_with_arguments("(cfg)=>{document.querySelector('button[aria-label=\"Send message\"]').onclick=()=>{try{PUBLIC_socket.send(JSON.stringify({type:'response.create',item:{role:'user',x_grok:{client_message_id:cfg.client,input_chunks:[{text:{text:cfg.prompt}}]}}}));}catch{}};return true;}",&json!([{"client":CLIENT,"prompt":PROMPT}]),SHORT,cancel).await?;
     send(&mut legacy).await?;
     assert_eq!(
-        legacy.grok_witness(DISPATCH, true, SHORT, &cancel).await?["state"],
+        legacy.grok_witness(DISPATCH, true, SHORT, cancel).await?["state"],
         "invalid"
     );
-    assert_eq!(
-        page.evaluate("PUBLIC_sent.length", SHORT, &cancel).await?,
-        0
-    );
-    // Quoted controls in an answer never prove Private mode.
-    page.evaluate("document.body.innerHTML='<textarea></textarea><div id=\"response-PUBLIC\"><a aria-label=\"Switch to Default Chat\">Private</a><div class=\"query-bar bg-surface-incognito\"></div></div>';true",SHORT,&cancel).await?;
-    assert!(require(page, SHORT, &cancel).await.is_err());
+    assert_eq!(page.evaluate("PUBLIC_sent.length", SHORT, cancel).await?, 0);
     Ok(())
 }
