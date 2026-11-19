@@ -142,7 +142,28 @@ jobs:
           TMP: ${{ runner.temp }}
       # The x86_64 Linux leg runs the same tests under cargo-llvm-cov for the Codecov report.
       - if: runner.os == 'Linux' && runner.arch == 'X64'
-        run: cargo llvm-cov --locked --lcov --output-path coverage-rust.lcov -- --test-threads=2
+        run: cargo llvm-cov --no-report --locked -- --test-threads=2
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+      # The ignored native fixtures drive a real browser through launch, ownership and profile
+      # disposal, code no other test reaches. They exec /usr/lib/chromium/chromium, which is
+      # Google Chrome on the runner, and some need a display. The fixtures pass Chrome DISPLAY
+      # but not XAUTHORITY, so the disposable display takes any local client (-ac).
+      - if: runner.os == 'Linux' && runner.arch == 'X64'
+        run: |
+          sudo mkdir -p /usr/lib/chromium
+          sudo ln -s /opt/google/chrome/chrome /usr/lib/chromium/chromium
+          xvfb-run -a -s "-screen 0 1280x1024x24 -ac" cargo llvm-cov --no-report --locked --lib -- --ignored --test-threads=1 \
+            native_temporary_chat_predicate_and_retained_send_guard \
+            native_persistent_idle_browser_exits_without_removing_its_profile \
+            copied_profile_reuses_synthetic_cookies_and_removes_only_its_owned_copy \
+            explicit_cookie_bootstrap_holds_the_original_launch_lock_until_seeding \
+            home_cookie_bootstrap_holds_the_original_launch_lock_until_seeding \
+            fresh_ordinary_profile_is_seeded_privately_and_disposed_only_when_untouched \
+            real_chromium_on_prefixed_profiles_owns_only_its_own \
+            grok_borrows_only_the_verified_browser_left_on_its_profile
+          cargo llvm-cov report --lcov --output-path coverage-rust.lcov
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
