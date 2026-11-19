@@ -515,9 +515,9 @@ impl DirectoryLock {
         self.release()
     }
     fn release_owned(&self) -> Result<()> {
-        let timeout = self
-            .deadline
-            .map_or(Duration::from_secs(10), |_| Duration::from_secs(10));
+        let timeout = self.deadline.map_or(Duration::from_secs(10), |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        });
         let _mutex = RecoveryMutex::acquire(&self.path, timeout)?;
         self.directory.require_matches(&self.path)?;
         anyhow::ensure!(
