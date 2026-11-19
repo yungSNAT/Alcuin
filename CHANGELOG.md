@@ -2,13 +2,12 @@
 
 ## Unreleased
 
-- The MCP session resources (`oracle-session://<id>/metadata`, `/log` and `/request`) now see only sessions started in or below the server's working directory, as the `sessions` and `wait` tools already did; they returned any project's session to an agent that knew its id. `ORACLE_MCP_ALL_SESSIONS=1` still shows every project's sessions.
-- When a ChatGPT run saved by an older Alcuin replaces a prompt too long for the composer with a bundled upload, the run's cleanup now also deletes the session's staged copy of each attached media file, such as a PDF. That copy stayed in the session folder after the run, because the fallback took the file into the bundle but dropped the copy from the request it saved.
-
 ## 0.2.0 (2026-11-19)
 
 The first release with archives for macOS on Apple silicon and Linux on aarch64, and the first under Apache-2.0 for Ryan Duguid's work.
 
+- The MCP session resources (`oracle-session://<id>/metadata`, `/log` and `/request`) now see only sessions started in or below the server's working directory, as the `sessions` and `wait` tools already did; they returned any project's session to an agent that knew its id. `ORACLE_MCP_ALL_SESSIONS=1` still shows every project's sessions.
+- When a ChatGPT run saved by an older Alcuin replaces a prompt too long for the composer with a bundled upload, the run's cleanup now also deletes the session's staged copy of each attached media file, such as a PDF. That copy stayed in the session folder after the run, because the fallback took the file into the bundle but dropped the copy from the request it saved.
 - A browser read whose time limit passes whilst it waits for the browser connection now counts as a stalled read, as one whose reply comes too late already did. The Temporary Chat check's last re-read cut short this way refused with 'CDP command expired or was cancelled before dispatch.' instead of the view's reason and 'still unknown after <n> ms', and an answer wait failed on it instead of reading again. Nothing is sent either way.
 - Alcuin no longer stops a Chrome launch with 'Missing Chrome debugging port' when it reads Chrome's `DevToolsActivePort` record in the moment after Chrome creates it and before Chrome writes it: an empty record now counts as not written yet, and the launch keeps waiting for it.
 - When the Temporary Chat check is still waiting for a conversation view to show itself and its last re-read is cut short by the check's time limit, it now refuses with the view's reason and 'still unknown after <n> ms', as when the limit passes between re-reads. It refused with 'CDP command timed out', which reads as a stalled page. Either way nothing is sent.
