@@ -35,6 +35,7 @@ async fn plugin_server_matches_the_local_browser_claude_config() {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
     command
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")

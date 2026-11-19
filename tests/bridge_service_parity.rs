@@ -5,6 +5,7 @@ fn command(home: &Path, args: &[&str]) -> std::process::Command {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
     command
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home)
         .env("USERPROFILE", home)

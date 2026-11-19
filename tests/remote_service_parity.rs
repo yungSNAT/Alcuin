@@ -38,6 +38,7 @@ async fn serve_with(
     let stderr = std::fs::File::create(home.path().join("serve.stderr")).unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -137,6 +138,7 @@ fn manual_login_hosts_print_the_profile_guidance_before_the_launch() {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
     command
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -212,6 +214,7 @@ fn unusable_token_sources_are_refused_before_startup() {
     ] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
