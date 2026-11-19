@@ -10685,3 +10685,145 @@ fn stream_end_line_writes_only_a_known_state_and_whole_milliseconds() {
         );
     }
 }
+
+fn legacy_fallback_snapshot(f: &Fixture, name: &str, bytes: &[u8]) -> StagedUploads {
+    let path = f.home.path().join(name);
+    fs::write(&path, bytes).unwrap();
+    let captured = StagedUploads::capture(
+        &f.store,
+        &f.id,
+        &[crate::browser_prompt::Attachment {
+            path: path.clone(),
+            display_path: format!("PUBLIC original/{name}"),
+            size_bytes: bytes.len() as u64,
+            generated_bundle: false,
+            scanned_sha256: Some(sha256(bytes)),
+        }],
+    )
+    .unwrap();
+    fs::remove_file(path).unwrap();
+    captured
+}
+
+/// A request saved by an older Alcuin: its long text is inline in the prompt, its durable
+/// fallback keeps that text's snapshot, and its raw media is the request's staged upload.
+async fn legacy_inline_fallback_fixture() -> Fixture {
+    let f = fixture_attempt(
+        Fault::TruncatedComposer,
+        false,
+        false,
+        json!({"prompt":"PUBLIC inspect these original sources","browserBundleFiles":true}),
+    )
+    .await;
+    let text = format!("PUBLIC original source {}", "public line\n".repeat(5_000));
+    let text_source = legacy_fallback_snapshot(&f, "public-original.txt", text.as_bytes());
+    let raw_source =
+        legacy_fallback_snapshot(&f, "public-original.pdf", b"%PDF-1.7 PUBLIC original media");
+    let mut saved = request(&f.store, &f.id).unwrap();
+    saved.prompt = format!("{}\n\n{text}", saved.prompt);
+    saved.prompt_sha256 = sha256(saved.prompt.as_bytes());
+    saved.upload_paths = raw_source.paths().unwrap();
+    saved.staged_uploads = Some(raw_source.clone());
+    saved.fallback = Some(BrowserFallback {
+        composer_text: "PUBLIC inspect these original sources".into(),
+        pending_bundle: None,
+        text_sources: vec![text_source],
+        raw_source: Some(raw_source),
+        remote_source: None,
+    });
+    atomic_json(
+        &f.store
+            .directory(&f.id)
+            .unwrap()
+            .join("browser-request.json"),
+        &saved,
+    )
+    .unwrap();
+    f
+}
+
+#[tokio::test]
+async fn legacy_inline_fallback_keeps_declared_all_source_scope_and_deletes_original_media() {
+    use crate::browser_prompt::{BundleFormat, BundleScope, PendingBundle};
+    // Without its own raw snapshot, the fallback's raw media is the request's staged upload,
+    // which the fallback's committed request replaces: it must still be deleted at the end.
+    for retain_raw_source in [true, false] {
+        let f = legacy_inline_fallback_fixture().await;
+        let mut original = request(&f.store, &f.id).unwrap();
+        let fallback = original.fallback.as_mut().unwrap();
+        fallback.pending_bundle = Some(PendingBundle {
+            format: BundleFormat::Zip,
+            scope: BundleScope::All,
+        });
+        if !retain_raw_source {
+            fallback.raw_source = None;
+        }
+        atomic_json(
+            &f.store
+                .directory(&f.id)
+                .unwrap()
+                .join("browser-request.json"),
+            &original,
+        )
+        .unwrap();
+        let text_directory = original.fallback.as_ref().unwrap().text_sources[0]
+            .directory
+            .clone();
+        let raw_directory = original.staged_uploads.as_ref().unwrap().directory.clone();
+        let witness = ExecutionWitness::capture(&f.store, &f.id, &f.identity).unwrap();
+        let mut committed = original.clone();
+        materialize_fallback(
+            &f.store,
+            &f.id,
+            &witness,
+            &mut committed,
+            &browser_dom::PromptTooLarge {
+                prompt_length: original.prompt.encode_utf16().count(),
+                observed_length: 30_000,
+            },
+            &f.cancel,
+        )
+        .unwrap();
+        let saved = request(&f.store, &f.id).unwrap();
+        assert!(saved.fallback_used);
+        let retained_raw = saved
+            .fallback
+            .as_ref()
+            .unwrap()
+            .raw_source
+            .as_ref()
+            .unwrap();
+        assert_eq!(retained_raw.directory, raw_directory, "{retain_raw_source}");
+        retained_raw.verify(&f.store, &f.id).unwrap();
+        assert_eq!(saved.extra["bundled"]["originalCount"], 2);
+        assert_eq!(saved.extra["bundled"]["format"], "zip");
+        assert_eq!(saved.upload_paths.len(), 1);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(
+            fs::read(&saved.upload_paths[0]).unwrap(),
+        ))
+        .unwrap();
+        let mut actual = (0..archive.len())
+            .map(|index| {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut archive.by_index(index).unwrap(), &mut bytes)
+                    .unwrap();
+                bytes
+            })
+            .collect::<Vec<_>>();
+        let mut expected = vec![
+            format!("PUBLIC original source {}", "public line\n".repeat(5_000)).into_bytes(),
+            b"%PDF-1.7 PUBLIC original media".to_vec(),
+        ];
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+        assert_eq!(f.sends.load(Ordering::SeqCst), 0);
+        let result = run(&f).await.unwrap();
+        assert_eq!(result["status"], "completed");
+        assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+        assert!(!saved.staged_uploads.unwrap().directory.exists());
+        assert!(!text_directory.exists());
+        assert!(!raw_directory.exists(), "{retain_raw_source}");
+        stop(f).await;
+    }
+}
