@@ -97,6 +97,7 @@ fn actual_cli_reports_drift_as_exit_one_and_json_stays_parseable() {
     let run = |file: &str| {
         Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
@@ -287,6 +288,7 @@ fn cli_reference_covers_every_command_and_option_its_help_shows() {
     let help = |args: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())

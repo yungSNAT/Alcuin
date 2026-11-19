@@ -536,6 +536,7 @@ fn native_lock_survives_owner_crash_and_is_recovered() {
             "--nocapture",
         ])
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -704,6 +705,7 @@ fn status_listing_marks_unverifiable_zombies_and_leaves_live_workers() {
     );
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -780,6 +782,7 @@ fn status_table_shows_creation_times_in_the_local_zone() {
     }
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -817,6 +820,7 @@ async fn internal_provider_attempts_are_addressable_but_do_not_clog_public_sessi
     assert_eq!(store.list(true).unwrap().len(), 2);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())

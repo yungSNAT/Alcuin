@@ -2834,6 +2834,7 @@ fn dead_provider_attempt_state(
                 "--nocapture",
             ])
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", root.path())
             .env("USERPROFILE", root.path())

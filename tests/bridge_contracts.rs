@@ -24,6 +24,7 @@ async fn cli(home: &Path, args: &[&str]) -> std::process::Output {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
     command
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .envs(environment(home))
         .current_dir(home)
