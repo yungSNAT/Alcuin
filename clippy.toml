@@ -1,0 +1,3 @@
+# too_many_lines (Cargo.toml [lints]) fails a function longer than this. Lower it as long
+# functions are split; never raise it.
+too-many-lines-threshold = 297

@@ -566,573 +566,620 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         return Ok(0);
     }
     if let Some((name, sub)) = matches.subcommand() {
-        let session_view = matches!(name, "session" | "status");
-        let ignored = if session_view {
-            ignored_root_flags(&matches)?
-        } else {
-            vec![]
-        };
-        // Session views report or ignore root flags themselves.
-        if !session_view {
-            require_flags(
-                &matches,
-                if name == "project-sources" {
-                    PROJECT_SOURCE_FLAGS
-                } else if name == "serve" {
-                    &[
-                        "browser-attach-running",
-                        "remote-chrome",
-                        "browser-approval-wait",
-                        "browser-cookie-sync",
-                    ]
-                } else if name == "browser-health" {
-                    HEALTH_FLAGS
-                } else {
-                    &[]
-                },
-            )?;
+        return subcommand(store, &matches, name, sub, env, cwd).await;
+    }
+    root_command(&store, &matches, &args, &env, &cwd).await
+}
+/// Runs a subcommand; every one returns, so the root consultation never follows it.
+async fn subcommand(
+    store: SessionStore,
+    matches: &ArgMatches,
+    name: &str,
+    sub: &ArgMatches,
+    env: Environment,
+    cwd: PathBuf,
+) -> Result<i32> {
+    let session_view = matches!(name, "session" | "status");
+    let ignored = if session_view {
+        ignored_root_flags(matches)?
+    } else {
+        vec![]
+    };
+    // Session views report or ignore root flags themselves.
+    if !session_view {
+        require_flags(
+            matches,
+            if name == "project-sources" {
+                PROJECT_SOURCE_FLAGS
+            } else if name == "serve" {
+                &[
+                    "browser-attach-running",
+                    "remote-chrome",
+                    "browser-approval-wait",
+                    "browser-cookie-sync",
+                ]
+            } else if name == "browser-health" {
+                HEALTH_FLAGS
+            } else {
+                &[]
+            },
+        )?;
+    }
+    match name {
+        "browser-health" => browser_health_command(&store, matches, sub, &env, &cwd).await,
+        "bridge" => bridge_command(store, matches, sub, env, cwd).await,
+        "serve" => serve_command(store, matches, sub, env, cwd).await,
+        "docs" => {
+            require_flags(sub, &[])?;
+            let (operation, child) = sub.subcommand().context("docs requires check")?;
+            anyhow::ensure!(operation == "check", "Unsupported docs command");
+            require_flags(child, &["docs-path", "json"])?;
+            let result = crate::docs_check::check(&cwd, &values(child, "docs-path"))?;
+            if flag(child, "json") {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", crate::docs_check::format_result(&result));
+            }
+            Ok(if result.issues.is_empty() { 0 } else { 1 })
         }
-        match name {
-            "browser-health" => {
-                let mut allowed = HEALTH_FLAGS.to_vec();
-                allowed.push("json");
-                require_flags(sub, &allowed)?;
-                let loaded = load_config(&store, &cwd, &env, false);
-                let mut input = json!({});
-                for (source, target) in [
-                    ("browser-chrome-path", "chromePath"),
-                    ("browser-manual-login-profile-dir", "manualLoginProfileDir"),
-                    ("browser-max-concurrent-tabs", "maxConcurrentTabs"),
-                    ("browser-thinking-time", "thinkingTime"),
-                ] {
-                    if let Some(value) = text(&matches, source) {
-                        input[target] = json!(value);
-                    } else if let Some(value) = loaded.config["browser"].get(target) {
-                        input[target] = value.clone();
-                    }
-                }
-                input["desiredModel"] = json!(
-                    text(&matches, "model")
-                        .or(loaded.config["model"].as_str())
-                        .unwrap_or("Latest")
-                );
-                let timeout = text(&matches, "browser-timeout")
-                    .map(|s| duration_option(s, "Browser health timeout"))
-                    .transpose()?
-                    .unwrap_or(30_000.0);
-                anyhow::ensure!(
-                    timeout.is_finite()
-                        && timeout.fract() == 0.0
-                        && (1.0..=300_000.0).contains(&timeout),
-                    "Browser health timeout must be between 1ms and 5m."
-                );
-                let cancel = CancellationToken::new();
-                let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
-                let result = crate::browser_health::inspect(
-                    &input,
-                    &env,
-                    &cwd,
-                    Duration::from_millis(timeout as u64),
-                    &cancel,
-                )
-                .await;
-                signal.abort();
-                if cancel.is_cancelled() {
-                    return Ok(130);
-                }
-                let result = result?;
-                if flag(sub, "json") {
-                    println!("{}", serde_json::to_string(&result)?);
-                } else {
-                    println!("{}", crate::browser_health::format(&result));
-                }
-                return Ok(
-                    if result["status"] == "ready" && result["cleanupComplete"] == true {
-                        0
-                    } else {
-                        1
-                    },
-                );
+        "perf-summary" => {
+            require_flags(sub, &["traces", "json"])?;
+            let files = sub
+                .get_many::<String>("traces")
+                .map(|v| v.map(PathBuf::from).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let summary = crate::perf::summarise(&files)?;
+            if flag(sub, "json") {
+                println!("{}", serde_json::to_string(&summary)?);
+            } else {
+                println!("{}", crate::perf::format_summary(&summary));
             }
-            "bridge" => {
-                require_flags(sub, &[])?;
-                let (operation, child) = sub.subcommand().context("bridge requires a command")?;
-                let allowed: &[&str] = match operation {
-                    "host" => &[
-                        "bind",
-                        "token",
-                        "write-connection",
-                        "ssh",
-                        "ssh-remote-port",
-                        "ssh-identity",
-                        "ssh-extra-args",
-                        "background",
-                        "foreground",
-                        "respawn",
-                        "print",
-                        "print-token",
-                    ],
-                    "doctor" => &["verbose"],
-                    "client" => &[
-                        "connect",
-                        "config",
-                        "no-write-config",
-                        "no-test",
-                        "print-env",
-                    ],
-                    "codex-config" | "claude-config" => &[
-                        "print-token",
-                        "local-browser",
-                        "oracle-home-dir",
-                        "browser-profile-dir",
-                    ],
-                    _ => bail!("Bridge {operation} is not yet qualified in the Rust candidate"),
-                };
-                require_flags(child, allowed)?;
-                let mut options = json!({});
-                for key in allowed {
-                    if let Some(value) = text(child, key) {
-                        options[*key] = json!(value);
-                    } else if flag(child, key) {
-                        options[*key] = json!(true);
-                    }
+            Ok(0)
+        }
+        "ground" => {
+            require_flags(sub, &["session", "json"])?;
+            let id = text(sub, "session").context("ground requires a session ID")?;
+            // Exit 1 means the answer has findings, so a check that cannot run exits 2.
+            let report = match crate::grounding::session_report(&store, id, None) {
+                Ok(report) => report,
+                Err(error) => {
+                    eprintln!("✖ {error:#}");
+                    return Ok(2);
                 }
-                // Reference runBridgeHost reads optsWithGlobals, so a program --background applies.
-                if operation == "host" && flag(&matches, "background") {
-                    options["background"] = json!(true);
-                }
-                if operation == "host" {
-                    crate::bridge_host::run(&options, store, cwd, env, &CancellationToken::new())
-                        .await?;
-                    return Ok(0);
-                }
-                let mut exit_code = 0;
-                let output = if operation == "client" {
-                    crate::bridge::configure_client(
-                        &options,
-                        &store,
-                        &cwd,
-                        &CancellationToken::new(),
-                    )
-                    .await?
-                } else {
-                    let loaded = load_config(&store, &cwd, &env, true);
-                    if operation == "doctor" {
-                        let (output, code) =
-                            crate::bridge::doctor(&loaded, &store, &env, &CancellationToken::new())
-                                .await?;
-                        exit_code = code;
-                        output
-                    } else {
-                        crate::bridge::mcp_snippet(operation, &options, &loaded.config, &env)?
-                    }
-                };
-                println!("{output}");
-                if matches!(operation, "codex-config" | "claude-config")
-                    && options["print-token"] != true
-                    && options["local-browser"] != true
-                {
-                    eprintln!();
-                    eprintln!(
-                        "Tip: rerun with --print-token to include ORACLE_REMOTE_TOKEN in the snippet."
-                    );
-                }
-                return Ok(exit_code);
+            };
+            if flag(sub, "json") {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", crate::grounding::format_report(&report));
             }
-            "serve" => {
-                require_flags(
-                    sub,
-                    &[
-                        "host",
-                        "port",
-                        "token",
-                        "token-file",
-                        "max-concurrent-runs",
-                        "max-queued-runs",
-                        "manual-login",
-                        "manual-login-profile-dir",
-                        "browser-cookie-sync",
-                        "remote-chrome",
-                        "browser-attach-running",
-                        "browser-approval-wait",
-                    ],
-                )?;
-                let count = |name: &str| -> Result<Option<usize>> {
-                    text(sub, name)
-                        .map(|raw| {
-                            let number = raw
-                                .trim()
-                                .parse::<f64>()
-                                .with_context(|| format!("--{name} must be an integer"))?;
-                            anyhow::ensure!(
-                                number.is_finite()
-                                    && number.fract() == 0.0
-                                    && (0.0..=9_007_199_254_740_991.0).contains(&number),
-                                "--{name} must be a nonnegative safe integer"
-                            );
-                            usize::try_from(number as u64).with_context(|| {
-                                format!("--{name} exceeds the native integer range")
-                            })
-                        })
-                        .transpose()
-                };
-                let concurrent = count("max-concurrent-runs")?;
-                let queued = count("max-queued-runs")?;
-                anyhow::ensure!(
-                    concurrent.is_some() || queued.is_none(),
-                    "--max-queued-runs requires --max-concurrent-runs."
-                );
-                anyhow::ensure!(
-                    concurrent != Some(0),
-                    "--max-concurrent-runs must be a positive integer."
-                );
-                let port = text(sub, "port")
-                    .unwrap_or("0")
-                    .parse::<u16>()
-                    .context("Service port must be between 0 and 65535")?;
-                let address =
-                    tokio::net::lookup_host((text(sub, "host").unwrap_or("127.0.0.1"), port))
-                        .await?
-                        .next()
-                        .context("Service bind host did not resolve")?;
-                let loaded = load_config(&store, &cwd, &env, true);
-                let mut flags = json!({"manualLogin":flag(sub,"manual-login"),"cookieSync":flag(sub,"browser-cookie-sync") || flag(&matches,"browser-cookie-sync")});
-                for (source, target) in [
-                    ("remote-chrome", "remoteChrome"),
-                    ("browser-approval-wait", "approvalWait"),
-                ] {
-                    if let Some(value) = text(&matches, source) {
-                        flags[target] = json!(value);
-                    }
-                }
-                if specified(&matches, "browser-attach-running") {
-                    flags["attachRunning"] = json!(flag(&matches, "browser-attach-running"));
-                }
-                if let Some(path) = text(sub, "manual-login-profile-dir") {
-                    flags["manualLoginProfileDir"] = json!(path);
-                }
-                let browser =
-                    crate::remote_service::browser_config(&loaded.config, &flags, &env, &cwd)?;
-                // Reference resolveBrowserConfig: config, then a digits-only environment cap,
-                // normalised like any browser tab limit.
-                let configured = &loaded.config["browser"]["maxConcurrentTabs"];
-                let cap = crate::browser_health::tab_limit(&if configured.is_null() {
-                    browser_capacity_override(configured, &env).unwrap_or(Value::Null)
-                } else {
-                    configured.clone()
-                });
-                let supplied = match (text(sub, "token"), text(sub, "token-file")) {
-                    (Some(_), Some(_)) => anyhow::bail!("Use --token or --token-file, not both."),
-                    (token, None) => token.map(str::to_owned),
-                    (None, Some(path)) => {
-                        Some(crate::remote_service::read_token_file(Path::new(path))?)
-                    }
-                };
-                let generated = supplied.is_none();
-                let token = supplied.unwrap_or_else(crate::remote_service::access_token);
-                let options = crate::remote_host::HostOptions {
-                    address,
-                    token,
-                    max_concurrent_runs: concurrent,
-                    max_queued_runs: queued,
-                    max_browser_tabs: cap,
-                };
-                Box::pin(crate::remote_service::serve(
-                    store,
-                    options,
-                    generated,
-                    browser,
-                    env,
-                    cwd,
-                    &CancellationToken::new(),
-                ))
-                .await?;
-                return Ok(0);
-            }
-            "docs" => {
-                require_flags(sub, &[])?;
-                let (operation, child) = sub.subcommand().context("docs requires check")?;
-                anyhow::ensure!(operation == "check", "Unsupported docs command");
-                require_flags(child, &["docs-path", "json"])?;
-                let result = crate::docs_check::check(&cwd, &values(child, "docs-path"))?;
-                if flag(child, "json") {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    println!("{}", crate::docs_check::format_result(&result));
-                }
-                return Ok(if result.issues.is_empty() { 0 } else { 1 });
-            }
-            "perf-summary" => {
-                require_flags(sub, &["traces", "json"])?;
-                let files = sub
-                    .get_many::<String>("traces")
-                    .map(|v| v.map(PathBuf::from).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                let summary = crate::perf::summarise(&files)?;
-                if flag(sub, "json") {
-                    println!("{}", serde_json::to_string(&summary)?);
-                } else {
-                    println!("{}", crate::perf::format_summary(&summary));
-                }
-                return Ok(0);
-            }
-            "ground" => {
-                require_flags(sub, &["session", "json"])?;
-                let id = text(sub, "session").context("ground requires a session ID")?;
-                // Exit 1 means the answer has findings, so a check that cannot run exits 2.
-                let report = match crate::grounding::session_report(&store, id, None) {
-                    Ok(report) => report,
-                    Err(error) => {
-                        eprintln!("✖ {error:#}");
-                        return Ok(2);
-                    }
-                };
-                if flag(sub, "json") {
-                    println!("{}", serde_json::to_string_pretty(&report)?);
-                } else {
-                    println!("{}", crate::grounding::format_report(&report));
-                }
-                return Ok(i32::from(report.flagged()));
-            }
-            "session" | "status" => {
-                require_flags(sub, SESSION_FLAGS)?;
-                return session_command(&store, &matches, sub, name, &env, &ignored).await;
-            }
-            "restart" => {
-                require_flags(
-                    sub,
-                    &["id", "wait", "no-wait", "remote-host", "remote-token"],
-                )?;
-                anyhow::ensure!(
-                    !(flag(sub, "wait") && flag(sub, "no-wait")),
-                    "Cannot combine --wait and --no-wait."
-                );
-                let cancel = CancellationToken::new();
-                // Restart can run its browser consultation inline.
-                let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
-                let result = crate::restart::run(
-                    &store,
-                    crate::restart::Options {
-                        source: text(sub, "id").context("restart requires a session ID")?,
-                        // Reference optsWithGlobals: program --wait, --no-wait, --remote-host
-                        // and --remote-token apply; the later restart value wins.
-                        wait: [sub, &matches].into_iter().find_map(|m| {
-                            if specified(m, "wait") {
-                                Some(flag(m, "wait"))
-                            } else {
-                                flag(m, "no-wait").then_some(false)
-                            }
-                        }),
-                        remote_host: text(sub, "remote-host").or(text(&matches, "remote-host")),
-                        remote_token: text(sub, "remote-token").or(text(&matches, "remote-token")),
-                    },
-                    &env,
-                    &cwd,
-                    &cancel,
-                )
-                .await;
-                signal.abort();
-                let _ = signal.await;
-                return result.map_err(|error| anyhow::anyhow!("{error:#}"));
-            }
-            "recover-native" => {
-                require_flags(sub, &["request", "write-output"])?;
-                let request = text(sub, "request").context(
-                    "recover-native requires --request <path> and --write-output <path>",
-                )?;
-                // Reference optsWithGlobals: a program --write-output applies.
-                let output = text(
-                    option_scope(&matches, &[sub], "write-output"),
-                    "write-output",
-                )
-                .context("recover-native requires --request <path> and --write-output <path>")?;
-                let cancel = CancellationToken::new();
-                let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
-                let result = crate::native_reply::recover(
-                    &store,
-                    &env,
-                    &cwd,
-                    Path::new(request),
-                    Path::new(output),
-                    &cancel,
-                )
-                .await;
-                signal.abort();
-                let _ = signal.await;
-                if cancel.is_cancelled() {
-                    return Ok(130);
-                }
-                let count = result?;
-                let mut stdout = std::io::stdout().lock();
-                writeln!(
-                    stdout,
-                    "Recovered completed reply ({} characters).",
-                    grouped(count)
-                )?;
-                stdout.flush()?;
-                return Ok(0);
-            }
-            "recover-remote" => {
-                require_flags(sub, &["run-id", "host", "token"])?;
-                let host =
-                    text(sub, "host").context("recover-remote requires --host <host:port>")?;
-                let connection = crate::remote_session::Connection {
-                    host: host.into(),
-                    token: text(sub, "token").map(str::to_owned),
-                };
-                let run_id = text(sub, "run-id").context("Missing remote recovery run ID")?;
-                let (id, result) = crate::remote_session::recover(
-                    &store,
-                    &cwd,
-                    &connection,
-                    run_id,
-                    &CancellationToken::new(),
-                )
-                .await?;
-                println!("Recovered session: {id}");
-                println!(
-                    "{}",
-                    result["answerMarkdown"]
-                        .as_str()
-                        .filter(|text| !text.is_empty())
-                        .or(result["answerText"].as_str())
-                        .unwrap_or("")
-                );
-                return Ok(0);
-            }
-            "doctor" => return doctor(&store, &matches, sub, &env, &cwd),
-            "project-sources" => {
-                require_flags(&matches, PROJECT_SOURCE_FLAGS)?;
-                require_flags(sub, PROJECT_SOURCE_FLAGS)?;
-                let (operation, child) = sub
-                    .subcommand()
-                    .context("project-sources requires list or add")?;
-                let mut child_flags = PROJECT_SOURCE_FLAGS.to_vec();
-                child_flags.extend(["file", "dry-run"]);
-                require_flags(child, &child_flags)?;
-                // Reference optsWithGlobals: program file inputs merge like mergePathLikeOptions
-                // and a program --dry-run applies.
-                let mut files = values(&matches, "file");
-                files.extend(values(child, "file"));
-                for key in ["include", "files", "path", "paths"] {
-                    files.extend(values(&matches, key));
-                }
-                let dry_run = flag(child, "dry-run") || specified(&matches, "dry-run");
-                let mut input = json!({"operation":operation,"dryRun":dry_run,"confirmMutation":operation=="add","files":prompts::collect_paths(&files)});
-                for (flag, key) in [
-                    ("browser-inline-cookies", "browserInlineCookies"),
-                    ("browser-inline-cookies-file", "browserInlineCookiesFile"),
-                ] {
-                    if let Some(value) = text(option_scope(&matches, &[child, sub], flag), flag) {
-                        input[key] = json!(value);
-                    }
-                }
-                if let Some(url) = text(child, "chatgpt-url")
-                    .or_else(|| text(sub, "chatgpt-url"))
-                    .or_else(|| text(&matches, "chatgpt-url"))
-                    .or_else(|| text(&matches, "browser-url"))
-                {
-                    input["chatgptUrl"] = json!(url);
-                }
-                anyhow::ensure!(
-                    operation != "add" || input["files"].as_array().is_some_and(|a| !a.is_empty()),
-                    "project-sources add requires at least one --file."
-                );
-                let server = mcp::AlcuinMcp { store, cwd, env };
-                let mut overrides = browser_runtime_overrides_at_scope(
-                    &matches,
-                    &[child, sub],
-                    &server.configured()?["browser"],
-                    &server.env,
-                )?;
-                for (flag, key) in [
-                    ("browser-headless", "headless"),
-                    ("browser-hide-window", "hideWindow"),
-                    ("browser-keep-browser", "keepBrowser"),
-                    ("browser-manual-login", "manualLogin"),
-                ] {
-                    let scope = option_scope(&matches, &[child, sub], flag);
-                    if specified(scope, flag) {
-                        overrides[key] = json!(self::flag(scope, flag));
-                    }
-                }
-                sources_cookie_options(
-                    &matches,
-                    &[child, sub],
-                    &mut input,
-                    &mut overrides,
-                    &server.env,
-                );
-                for (flag, key) in [
-                    ("browser-manual-login-profile-dir", "manualLoginProfileDir"),
-                    ("remote-host", "remoteHost"),
-                ] {
-                    if let Some(value) = text(option_scope(&matches, &[child, sub], flag), flag) {
-                        overrides[key] = json!(value);
-                    }
-                }
-                if let Some(raw) = text(
-                    option_scope(&matches, &[child, sub], "max-file-size-bytes"),
-                    "max-file-size-bytes",
-                ) {
-                    input["maxFileSizeBytes"] = json!(
-                        raw.parse::<u64>()
-                            .context("max-file-size-bytes must be a positive integer")?
-                    );
-                    anyhow::ensure!(
-                        input["maxFileSizeBytes"].as_u64() != Some(0),
-                        "max-file-size-bytes must be positive"
-                    );
-                }
-                let cancel = CancellationToken::new();
-                let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
-                crate::browser_signal::install();
-                // Boxed: browser futures must not enlarge the stack-pinned CLI future.
-                let result = Box::pin(server.project_sources(&input, &overrides, &cancel)).await;
-                signal.abort();
-                let _ = signal.await;
-                if cancel.is_cancelled() {
-                    return Ok(130);
-                }
-                let result = result?.structured_content.unwrap_or_default();
-                if flag(option_scope(&matches, &[child, sub], "json"), "json") {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                } else {
-                    println!("{}", crate::cli_format::project_sources(&result));
-                }
-                return Ok(0);
-            }
-            "tui" => bail!(
-                "alcuin tui is not supported in this build: the terminal UI is not included. Use `alcuin status` and `alcuin session <id>`."
-            ),
-            // Clap yields only the captured commands, and every one in COMMANDS has an arm.
-            _ => bail!("Unknown command {name}."),
+            Ok(i32::from(report.flagged()))
+        }
+        "session" | "status" => {
+            require_flags(sub, SESSION_FLAGS)?;
+            session_command(&store, matches, sub, name, &env, &ignored).await
+        }
+        "restart" => restart_command(&store, matches, sub, &env, &cwd).await,
+        "recover-native" => recover_native_command(&store, matches, sub, &env, &cwd).await,
+        "recover-remote" => recover_remote_command(&store, sub, &cwd).await,
+        "doctor" => doctor(&store, matches, sub, &env, &cwd),
+        "project-sources" => project_sources_command(store, matches, sub, env, cwd).await,
+        "tui" => bail!(
+            "alcuin tui is not supported in this build: the terminal UI is not included. Use `alcuin status` and `alcuin session <id>`."
+        ),
+        // Clap yields only the captured commands, and every one in COMMANDS has an arm.
+        _ => bail!("Unknown command {name}."),
+    }
+}
+/// The `browser-health` command.
+async fn browser_health_command(
+    store: &SessionStore,
+    matches: &ArgMatches,
+    sub: &ArgMatches,
+    env: &Environment,
+    cwd: &Path,
+) -> Result<i32> {
+    let mut allowed = HEALTH_FLAGS.to_vec();
+    allowed.push("json");
+    require_flags(sub, &allowed)?;
+    let loaded = load_config(store, cwd, env, false);
+    let mut input = json!({});
+    for (source, target) in [
+        ("browser-chrome-path", "chromePath"),
+        ("browser-manual-login-profile-dir", "manualLoginProfileDir"),
+        ("browser-max-concurrent-tabs", "maxConcurrentTabs"),
+        ("browser-thinking-time", "thinkingTime"),
+    ] {
+        if let Some(value) = text(matches, source) {
+            input[target] = json!(value);
+        } else if let Some(value) = loaded.config["browser"].get(target) {
+            input[target] = value.clone();
         }
     }
+    input["desiredModel"] = json!(
+        text(matches, "model")
+            .or(loaded.config["model"].as_str())
+            .unwrap_or("Latest")
+    );
+    let timeout = text(matches, "browser-timeout")
+        .map(|s| duration_option(s, "Browser health timeout"))
+        .transpose()?
+        .unwrap_or(30_000.0);
+    anyhow::ensure!(
+        timeout.is_finite() && timeout.fract() == 0.0 && (1.0..=300_000.0).contains(&timeout),
+        "Browser health timeout must be between 1ms and 5m."
+    );
+    let cancel = CancellationToken::new();
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
+    let result = crate::browser_health::inspect(
+        &input,
+        env,
+        cwd,
+        Duration::from_millis(timeout as u64),
+        &cancel,
+    )
+    .await;
+    signal.abort();
+    if cancel.is_cancelled() {
+        return Ok(130);
+    }
+    let result = result?;
+    if flag(sub, "json") {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("{}", crate::browser_health::format(&result));
+    }
+    Ok(
+        if result["status"] == "ready" && result["cleanupComplete"] == true {
+            0
+        } else {
+            1
+        },
+    )
+}
+/// The `bridge` command.
+async fn bridge_command(
+    store: SessionStore,
+    matches: &ArgMatches,
+    sub: &ArgMatches,
+    env: Environment,
+    cwd: PathBuf,
+) -> Result<i32> {
+    require_flags(sub, &[])?;
+    let (operation, child) = sub.subcommand().context("bridge requires a command")?;
+    let allowed: &[&str] = match operation {
+        "host" => &[
+            "bind",
+            "token",
+            "write-connection",
+            "ssh",
+            "ssh-remote-port",
+            "ssh-identity",
+            "ssh-extra-args",
+            "background",
+            "foreground",
+            "respawn",
+            "print",
+            "print-token",
+        ],
+        "doctor" => &["verbose"],
+        "client" => &[
+            "connect",
+            "config",
+            "no-write-config",
+            "no-test",
+            "print-env",
+        ],
+        "codex-config" | "claude-config" => &[
+            "print-token",
+            "local-browser",
+            "oracle-home-dir",
+            "browser-profile-dir",
+        ],
+        _ => bail!("Bridge {operation} is not yet qualified in the Rust candidate"),
+    };
+    require_flags(child, allowed)?;
+    let mut options = json!({});
+    for key in allowed {
+        if let Some(value) = text(child, key) {
+            options[*key] = json!(value);
+        } else if flag(child, key) {
+            options[*key] = json!(true);
+        }
+    }
+    // Reference runBridgeHost reads optsWithGlobals, so a program --background applies.
+    if operation == "host" && flag(matches, "background") {
+        options["background"] = json!(true);
+    }
+    if operation == "host" {
+        crate::bridge_host::run(&options, store, cwd, env, &CancellationToken::new()).await?;
+        return Ok(0);
+    }
+    let mut exit_code = 0;
+    let output = if operation == "client" {
+        crate::bridge::configure_client(&options, &store, &cwd, &CancellationToken::new()).await?
+    } else {
+        let loaded = load_config(&store, &cwd, &env, true);
+        if operation == "doctor" {
+            let (output, code) =
+                crate::bridge::doctor(&loaded, &store, &env, &CancellationToken::new()).await?;
+            exit_code = code;
+            output
+        } else {
+            crate::bridge::mcp_snippet(operation, &options, &loaded.config, &env)?
+        }
+    };
+    println!("{output}");
+    if matches!(operation, "codex-config" | "claude-config")
+        && options["print-token"] != true
+        && options["local-browser"] != true
+    {
+        eprintln!();
+        eprintln!("Tip: rerun with --print-token to include ORACLE_REMOTE_TOKEN in the snippet.");
+    }
+    Ok(exit_code)
+}
+/// The `serve` command.
+async fn serve_command(
+    store: SessionStore,
+    matches: &ArgMatches,
+    sub: &ArgMatches,
+    env: Environment,
+    cwd: PathBuf,
+) -> Result<i32> {
+    require_flags(
+        sub,
+        &[
+            "host",
+            "port",
+            "token",
+            "token-file",
+            "max-concurrent-runs",
+            "max-queued-runs",
+            "manual-login",
+            "manual-login-profile-dir",
+            "browser-cookie-sync",
+            "remote-chrome",
+            "browser-attach-running",
+            "browser-approval-wait",
+        ],
+    )?;
+    let count = |name: &str| -> Result<Option<usize>> {
+        text(sub, name)
+            .map(|raw| {
+                let number = raw
+                    .trim()
+                    .parse::<f64>()
+                    .with_context(|| format!("--{name} must be an integer"))?;
+                anyhow::ensure!(
+                    number.is_finite()
+                        && number.fract() == 0.0
+                        && (0.0..=9_007_199_254_740_991.0).contains(&number),
+                    "--{name} must be a nonnegative safe integer"
+                );
+                usize::try_from(number as u64)
+                    .with_context(|| format!("--{name} exceeds the native integer range"))
+            })
+            .transpose()
+    };
+    let concurrent = count("max-concurrent-runs")?;
+    let queued = count("max-queued-runs")?;
+    anyhow::ensure!(
+        concurrent.is_some() || queued.is_none(),
+        "--max-queued-runs requires --max-concurrent-runs."
+    );
+    anyhow::ensure!(
+        concurrent != Some(0),
+        "--max-concurrent-runs must be a positive integer."
+    );
+    let port = text(sub, "port")
+        .unwrap_or("0")
+        .parse::<u16>()
+        .context("Service port must be between 0 and 65535")?;
+    let address = tokio::net::lookup_host((text(sub, "host").unwrap_or("127.0.0.1"), port))
+        .await?
+        .next()
+        .context("Service bind host did not resolve")?;
+    let loaded = load_config(&store, &cwd, &env, true);
+    let mut flags = json!({"manualLogin":flag(sub,"manual-login"),"cookieSync":flag(sub,"browser-cookie-sync") || flag(matches,"browser-cookie-sync")});
+    for (source, target) in [
+        ("remote-chrome", "remoteChrome"),
+        ("browser-approval-wait", "approvalWait"),
+    ] {
+        if let Some(value) = text(matches, source) {
+            flags[target] = json!(value);
+        }
+    }
+    if specified(matches, "browser-attach-running") {
+        flags["attachRunning"] = json!(flag(matches, "browser-attach-running"));
+    }
+    if let Some(path) = text(sub, "manual-login-profile-dir") {
+        flags["manualLoginProfileDir"] = json!(path);
+    }
+    let browser = crate::remote_service::browser_config(&loaded.config, &flags, &env, &cwd)?;
+    // Reference resolveBrowserConfig: config, then a digits-only environment cap,
+    // normalised like any browser tab limit.
+    let configured = &loaded.config["browser"]["maxConcurrentTabs"];
+    let cap = crate::browser_health::tab_limit(&if configured.is_null() {
+        browser_capacity_override(configured, &env).unwrap_or(Value::Null)
+    } else {
+        configured.clone()
+    });
+    let supplied = match (text(sub, "token"), text(sub, "token-file")) {
+        (Some(_), Some(_)) => anyhow::bail!("Use --token or --token-file, not both."),
+        (token, None) => token.map(str::to_owned),
+        (None, Some(path)) => Some(crate::remote_service::read_token_file(Path::new(path))?),
+    };
+    let generated = supplied.is_none();
+    let token = supplied.unwrap_or_else(crate::remote_service::access_token);
+    let options = crate::remote_host::HostOptions {
+        address,
+        token,
+        max_concurrent_runs: concurrent,
+        max_queued_runs: queued,
+        max_browser_tabs: cap,
+    };
+    Box::pin(crate::remote_service::serve(
+        store,
+        options,
+        generated,
+        browser,
+        env,
+        cwd,
+        &CancellationToken::new(),
+    ))
+    .await?;
+    Ok(0)
+}
+/// The `restart` command.
+async fn restart_command(
+    store: &SessionStore,
+    matches: &ArgMatches,
+    sub: &ArgMatches,
+    env: &Environment,
+    cwd: &Path,
+) -> Result<i32> {
+    require_flags(
+        sub,
+        &["id", "wait", "no-wait", "remote-host", "remote-token"],
+    )?;
+    anyhow::ensure!(
+        !(flag(sub, "wait") && flag(sub, "no-wait")),
+        "Cannot combine --wait and --no-wait."
+    );
+    let cancel = CancellationToken::new();
+    // Restart can run its browser consultation inline.
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
+    let result = crate::restart::run(
+        store,
+        crate::restart::Options {
+            source: text(sub, "id").context("restart requires a session ID")?,
+            // Reference optsWithGlobals: program --wait, --no-wait, --remote-host
+            // and --remote-token apply; the later restart value wins.
+            wait: [sub, matches].into_iter().find_map(|m| {
+                if specified(m, "wait") {
+                    Some(flag(m, "wait"))
+                } else {
+                    flag(m, "no-wait").then_some(false)
+                }
+            }),
+            remote_host: text(sub, "remote-host").or(text(matches, "remote-host")),
+            remote_token: text(sub, "remote-token").or(text(matches, "remote-token")),
+        },
+        env,
+        cwd,
+        &cancel,
+    )
+    .await;
+    signal.abort();
+    let _ = signal.await;
+    result.map_err(|error| anyhow::anyhow!("{error:#}"))
+}
+/// The `recover-native` command.
+async fn recover_native_command(
+    store: &SessionStore,
+    matches: &ArgMatches,
+    sub: &ArgMatches,
+    env: &Environment,
+    cwd: &Path,
+) -> Result<i32> {
+    require_flags(sub, &["request", "write-output"])?;
+    let request = text(sub, "request")
+        .context("recover-native requires --request <path> and --write-output <path>")?;
+    // Reference optsWithGlobals: a program --write-output applies.
+    let output = text(
+        option_scope(matches, &[sub], "write-output"),
+        "write-output",
+    )
+    .context("recover-native requires --request <path> and --write-output <path>")?;
+    let cancel = CancellationToken::new();
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
+    let result = crate::native_reply::recover(
+        store,
+        env,
+        cwd,
+        Path::new(request),
+        Path::new(output),
+        &cancel,
+    )
+    .await;
+    signal.abort();
+    let _ = signal.await;
+    if cancel.is_cancelled() {
+        return Ok(130);
+    }
+    let count = result?;
+    let mut stdout = std::io::stdout().lock();
+    writeln!(
+        stdout,
+        "Recovered completed reply ({} characters).",
+        grouped(count)
+    )?;
+    stdout.flush()?;
+    Ok(0)
+}
+/// The `recover-remote` command.
+async fn recover_remote_command(store: &SessionStore, sub: &ArgMatches, cwd: &Path) -> Result<i32> {
+    require_flags(sub, &["run-id", "host", "token"])?;
+    let host = text(sub, "host").context("recover-remote requires --host <host:port>")?;
+    let connection = crate::remote_session::Connection {
+        host: host.into(),
+        token: text(sub, "token").map(str::to_owned),
+    };
+    let run_id = text(sub, "run-id").context("Missing remote recovery run ID")?;
+    let (id, result) =
+        crate::remote_session::recover(store, cwd, &connection, run_id, &CancellationToken::new())
+            .await?;
+    println!("Recovered session: {id}");
+    println!(
+        "{}",
+        result["answerMarkdown"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .or(result["answerText"].as_str())
+            .unwrap_or("")
+    );
+    Ok(0)
+}
+/// The `project-sources` command.
+async fn project_sources_command(
+    store: SessionStore,
+    matches: &ArgMatches,
+    sub: &ArgMatches,
+    env: Environment,
+    cwd: PathBuf,
+) -> Result<i32> {
+    require_flags(matches, PROJECT_SOURCE_FLAGS)?;
+    require_flags(sub, PROJECT_SOURCE_FLAGS)?;
+    let (operation, child) = sub
+        .subcommand()
+        .context("project-sources requires list or add")?;
+    let mut child_flags = PROJECT_SOURCE_FLAGS.to_vec();
+    child_flags.extend(["file", "dry-run"]);
+    require_flags(child, &child_flags)?;
+    // Reference optsWithGlobals: program file inputs merge like mergePathLikeOptions
+    // and a program --dry-run applies.
+    let mut files = values(matches, "file");
+    files.extend(values(child, "file"));
+    for key in ["include", "files", "path", "paths"] {
+        files.extend(values(matches, key));
+    }
+    let dry_run = flag(child, "dry-run") || specified(matches, "dry-run");
+    let mut input = json!({"operation":operation,"dryRun":dry_run,"confirmMutation":operation=="add","files":prompts::collect_paths(&files)});
+    for (flag, key) in [
+        ("browser-inline-cookies", "browserInlineCookies"),
+        ("browser-inline-cookies-file", "browserInlineCookiesFile"),
+    ] {
+        if let Some(value) = text(option_scope(matches, &[child, sub], flag), flag) {
+            input[key] = json!(value);
+        }
+    }
+    if let Some(url) = text(child, "chatgpt-url")
+        .or_else(|| text(sub, "chatgpt-url"))
+        .or_else(|| text(matches, "chatgpt-url"))
+        .or_else(|| text(matches, "browser-url"))
+    {
+        input["chatgptUrl"] = json!(url);
+    }
+    anyhow::ensure!(
+        operation != "add" || input["files"].as_array().is_some_and(|a| !a.is_empty()),
+        "project-sources add requires at least one --file."
+    );
+    let server = mcp::AlcuinMcp { store, cwd, env };
+    let mut overrides = browser_runtime_overrides_at_scope(
+        matches,
+        &[child, sub],
+        &server.configured()?["browser"],
+        &server.env,
+    )?;
+    for (flag, key) in [
+        ("browser-headless", "headless"),
+        ("browser-hide-window", "hideWindow"),
+        ("browser-keep-browser", "keepBrowser"),
+        ("browser-manual-login", "manualLogin"),
+    ] {
+        let scope = option_scope(matches, &[child, sub], flag);
+        if specified(scope, flag) {
+            overrides[key] = json!(self::flag(scope, flag));
+        }
+    }
+    sources_cookie_options(
+        matches,
+        &[child, sub],
+        &mut input,
+        &mut overrides,
+        &server.env,
+    );
+    for (flag, key) in [
+        ("browser-manual-login-profile-dir", "manualLoginProfileDir"),
+        ("remote-host", "remoteHost"),
+    ] {
+        if let Some(value) = text(option_scope(matches, &[child, sub], flag), flag) {
+            overrides[key] = json!(value);
+        }
+    }
+    if let Some(raw) = text(
+        option_scope(matches, &[child, sub], "max-file-size-bytes"),
+        "max-file-size-bytes",
+    ) {
+        input["maxFileSizeBytes"] = json!(
+            raw.parse::<u64>()
+                .context("max-file-size-bytes must be a positive integer")?
+        );
+        anyhow::ensure!(
+            input["maxFileSizeBytes"].as_u64() != Some(0),
+            "max-file-size-bytes must be positive"
+        );
+    }
+    let cancel = CancellationToken::new();
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
+    crate::browser_signal::install();
+    // Boxed: browser futures must not enlarge the stack-pinned CLI future.
+    let result = Box::pin(server.project_sources(&input, &overrides, &cancel)).await;
+    signal.abort();
+    let _ = signal.await;
+    if cancel.is_cancelled() {
+        return Ok(130);
+    }
+    let result = result?.structured_content.unwrap_or_default();
+    if flag(option_scope(matches, &[child, sub], "json"), "json") {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("{}", crate::cli_format::project_sources(&result));
+    }
+    Ok(0)
+}
+/// The root command: a consultation, its preview or a route check.
+async fn root_command(
+    store: &SessionStore,
+    matches: &ArgMatches,
+    args: &[OsString],
+    env: &Environment,
+    cwd: &Path,
+) -> Result<i32> {
     crate::perf::mark("root-command-start", None);
     anyhow::ensure!(
         env.get("ORACLE_FORCE_TUI").map(String::as_str) != Some("1"),
         "ORACLE_FORCE_TUI=1 requests the terminal UI, which is not supported in this build. Unset it to run a consultation."
     );
     anyhow::ensure!(
-        !(text(&matches, "models")
+        !(text(matches, "models")
             .is_some_and(|models| models.split(',').any(|m| !m.trim().is_empty()))
-            && specified(&matches, "model")
-            && text(&matches, "model").is_some_and(|model| !crate::policy::trim(model).is_empty())),
+            && specified(matches, "model")
+            && text(matches, "model").is_some_and(|model| !crate::policy::trim(model).is_empty())),
         "--models cannot be combined with --model."
     );
     // Reference root --status and --session aliases ignore the other root flags silently.
-    if flag(&matches, "status") {
-        ignored_root_flags(&matches)?;
-        return session_command(&store, &matches, &matches, "status", &env, &[]).await;
+    if flag(matches, "status") {
+        ignored_root_flags(matches)?;
+        return session_command(store, matches, matches, "status", env, &[]).await;
     }
-    if let Some(id) = text(&matches, "session") {
-        ignored_root_flags(&matches)?;
-        return attach(&store, id, &attach_view(&matches, &matches), &env).await;
+    if let Some(id) = text(matches, "session") {
+        ignored_root_flags(matches)?;
+        return attach(store, id, &attach_view(matches, matches), env).await;
     }
-    let mut prompt = text(&matches, "prompt")
+    let mut prompt = text(matches, "prompt")
         .filter(|s| !s.is_empty())
-        .or_else(|| text(&matches, "message"))
+        .or_else(|| text(matches, "message"))
         .or_else(|| {
             matches
                 .get_one::<String>("positional-prompt")
@@ -1152,7 +1199,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         );
         prompt = Some(crate::policy::trim(&stdin).to_owned());
     }
-    if no_routing_arguments(&args) {
+    if no_routing_arguments(args) {
         // Reference zero-argument entry; its `alcuin tui` pointer names an excluded command.
         println!("No prompt or subcommand supplied. Run `alcuin --help` for usage.");
         print!("{}", include_str!("../fixtures/cli-help.txt"));
@@ -1161,41 +1208,150 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
     // Reference shouldRequirePrompt: route checks bypass the prompt unless a preview or
     // Markdown render is also requested.
     if prompt.is_none()
-        && (flag(&matches, "render-markdown")
-            || specified(&matches, "preview")
-            || specified(&matches, "dry-run")
-            || !(flag(&matches, "route") || flag(&matches, "preflight")))
+        && (flag(matches, "render-markdown")
+            || specified(matches, "preview")
+            || specified(matches, "dry-run")
+            || !(flag(matches, "route") || flag(matches, "preflight")))
     {
         println!("Prompt is required. Provide it via --prompt \"<text>\" or positional [prompt].");
         eprint!("{}", include_str!("../fixtures/cli-help.txt"));
         return Ok(1);
     }
-    refuse_unimplemented_flags(&matches)?;
-    let render = flag(&matches, "render") || flag(&matches, "render-markdown");
+    refuse_unimplemented_flags(matches)?;
+    let render = flag(matches, "render") || flag(matches, "render-markdown");
     anyhow::ensure!(
-        !specified(&matches, "dry-run") || !render,
+        !specified(matches, "dry-run") || !render,
         "--dry-run cannot be combined with --render-markdown."
     );
     anyhow::ensure!(
-        !(flag(&matches, "no-azure") && text(&matches, "provider") == Some("azure")),
+        !(flag(matches, "no-azure") && text(matches, "provider") == Some("azure")),
         "--provider azure cannot be combined with --no-azure."
     );
-    if flag(&matches, "no-azure") || text(&matches, "provider") == Some("openai") {
+    if flag(matches, "no-azure") || text(matches, "provider") == Some("openai") {
         anyhow::ensure!(
             !["azure-endpoint", "azure-deployment", "azure-api-version"]
                 .iter()
-                .any(|key| specified(&matches, key)),
+                .any(|key| specified(matches, key)),
             "--provider openai/--no-azure cannot be combined with Azure options."
         );
     }
-    let loaded = load_config(&store, &cwd, &env, true);
+    let loaded = load_config(store, cwd, env, true);
     refuse_excluded_config(&loaded.config)?;
     // The reference hidden alias appends include to file before the general path merge adds
     // include again, so its duplicate warning is part of the CLI output contract.
-    let mut files = values(&matches, "file");
-    files.extend(values(&matches, "include"));
+    let files = file_inputs(matches, cwd);
+    let copy_requested = flag(matches, "copy-markdown") || flag(matches, "copy");
+    let preview = text(matches, "dry-run").or_else(|| text(matches, "preview"));
+    let (mut input, browser_followup) = root_input(
+        store,
+        matches,
+        env,
+        cwd,
+        prompt,
+        files,
+        render || copy_requested,
+    )?;
+    let mut remote_config = loaded.config["browser"]
+        .as_object()
+        .cloned()
+        .map(Value::Object)
+        .unwrap_or_else(|| json!({}));
+    for (flag, key) in [
+        ("remote-host", "remoteHost"),
+        ("remote-token", "remoteToken"),
+    ] {
+        if let Some(value) = text(matches, flag)
+            .map(crate::policy::trim)
+            .filter(|value| !value.is_empty())
+        {
+            remote_config[key] = json!(value);
+        }
+    }
+    let remote = crate::remote_session::Connection::resolve(&remote_config, env);
+    if let Some(connection) = &remote {
+        println!("Remote browser host detected: {}", connection.host);
+        input["remoteBrowser"] = json!(true);
+    }
+    let mut request = resolve_request(
+        &input,
+        &loaded,
+        matches,
+        env,
+        cwd,
+        browser_followup,
+        remote.is_some(),
+    )?;
+    if flag(matches, "route") || flag(matches, "preflight") {
+        return route_check(&input, &request, &loaded, matches, env);
+    }
+    if flag(matches, "browser") {
+        println!("`--browser` is deprecated; use `--engine browser` instead.");
+    }
+    if render || copy_requested {
+        print_render(&request, render, copy_requested);
+        return Ok(0);
+    }
+    if let Some(mode) = preview {
+        print_preview(&request, mode, env)?;
+        return Ok(0);
+    }
+    let preference = if flag(matches, "wait") {
+        Some(true)
+    } else if flag(matches, "no-wait") {
+        Some(false)
+    } else {
+        None
+    };
+    let mut wait = crate::cli_execution::wait_preference(
+        preference,
+        &json!({"mode":request.engine,"options":request.options}),
+    );
+    if remote.is_some() {
+        if !wait {
+            println!("Remote browser runs require --wait; ignoring --no-wait.");
+        }
+        wait = true;
+    }
+    request.options["waitPreference"] = json!(wait);
+    let (session, route) = if let Some(connection) = &remote {
+        (
+            crate::remote_session::prepare(store, &request, cwd, connection)?,
+            None,
+        )
+    } else if request.engine == "browser" {
+        (crate::browser_runner::prepare(store, &request, cwd)?, None)
+    } else {
+        let (route, key) = providers::resolve_route(
+            request.options["model"].as_str().context("Missing model")?,
+            &request.options,
+            env,
+        )?;
+        let key = key.with_context(|| providers::missing_key_message(&route))?;
+        // Reference runOracle prints the file report before the over-budget refusal.
+        let session =
+            execution::prepare(store, &request, cwd, route.clone()).inspect_err(|error| {
+                if error.is::<execution::InputTooLarge>() {
+                    for line in crate::cli_execution::reported_files(&request).unwrap_or_default() {
+                        println!("{line}");
+                    }
+                }
+            })?;
+        (session, Some((route, key)))
+    };
+    let id = session["id"].as_str().context("Missing session ID")?;
+    let cancel = CancellationToken::new();
+    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
+    let result =
+        crate::cli_execution::run(store, id, &request, wait, env, route, remote, &cancel).await;
+    signal.abort();
+    result
+}
+/// The root command's file inputs, without duplicates; it reports the duplicates it drops.
+fn file_inputs(matches: &ArgMatches, cwd: &Path) -> Vec<String> {
+    let mut files = values(matches, "file");
+    files.extend(values(matches, "include"));
     for key in ["include", "files", "path", "paths"] {
-        files.extend(values(&matches, key));
+        files.extend(values(matches, key));
     }
     let collected = prompts::collect_paths(&files);
     let mut deduped = vec![];
@@ -1205,9 +1361,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         let key = if file.starts_with('!') || file.contains(['*', '?', '[', '{', '(']) {
             file.clone()
         } else {
-            prompts::absolute(&cwd, &file)
-                .to_string_lossy()
-                .into_owned()
+            prompts::absolute(cwd, &file).to_string_lossy().into_owned()
         };
         if seen.insert(key) {
             deduped.push(file);
@@ -1231,6 +1385,18 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
             }
         );
     }
+    deduped
+}
+/// The root command's request input from its flags, with a browser follow-up's saved configuration.
+fn root_input(
+    store: &SessionStore,
+    matches: &ArgMatches,
+    env: &Environment,
+    cwd: &Path,
+    prompt: Option<String>,
+    deduped: Vec<String>,
+    render_only: bool,
+) -> Result<(Value, Option<Value>)> {
     let mut input = json!({"prompt":prompt.unwrap_or_else(||"Provider route inspection".into()),"files":deduped});
     for (key, target) in [
         ("model", "model"),
@@ -1266,25 +1432,25 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
             "browserManualLoginProfileDir",
         ),
     ] {
-        if let Some(value) = text(&matches, key) {
+        if let Some(value) = text(matches, key) {
             input[target] = json!(value);
         }
     }
-    if flag(&matches, "browser") {
+    if flag(matches, "browser") {
         input["engine"] = json!("browser");
     } else if input.get("engine").is_none() {
-        if let Some(mode) = text(&matches, "mode") {
+        if let Some(mode) = text(matches, "mode") {
             input["engine"] = json!(mode);
-        } else if flag(&matches, "no-azure")
-            || text(&matches, "provider").is_some_and(|provider| provider != "auto")
+        } else if flag(matches, "no-azure")
+            || text(matches, "provider").is_some_and(|provider| provider != "auto")
             || ["azure-endpoint", "azure-deployment", "azure-api-version"]
                 .iter()
-                .any(|key| specified(&matches, key))
+                .any(|key| specified(matches, key))
         {
             input["engine"] = json!("api");
         }
     }
-    if flag(&matches, "no-azure") {
+    if flag(matches, "no-azure") {
         input["provider"] = json!("openai");
     }
     for (key, target) in [
@@ -1292,14 +1458,14 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         ("azure-deployment", "deployment"),
         ("azure-api-version", "apiVersion"),
     ] {
-        if let Some(value) = text(&matches, key) {
+        if let Some(value) = text(matches, key) {
             if !input["azure"].is_object() {
                 input["azure"] = json!({});
             }
             input["azure"][target] = json!(value);
         }
     }
-    if let Some(search) = text(&matches, "search") {
+    if let Some(search) = text(matches, "search") {
         input["search"] = json!(match crate::policy::trim(search).to_lowercase().as_str() {
             "on" | "true" | "1" | "yes" => true,
             "off" | "false" | "0" | "no" => false,
@@ -1311,7 +1477,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         ("max-input", "maxInput"),
         ("max-output", "maxOutput"),
     ] {
-        if let Some(value) = text(&matches, key) {
+        if let Some(value) = text(matches, key) {
             let n: u64 = value
                 .parse()
                 .with_context(|| format!("{key} must be a positive integer"))?;
@@ -1319,7 +1485,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
             input[target] = json!(n);
         }
     }
-    if let Some(value) = text(&matches, "max-cost") {
+    if let Some(value) = text(matches, "max-cost") {
         let dollars = value
             .trim()
             .parse::<f64>()
@@ -1328,12 +1494,10 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
             .context("max-cost must be a positive number of dollars")?;
         input["maxCost"] = json!(dollars);
     }
-    if let Some(value) = text(&matches, "http-timeout") {
+    if let Some(value) = text(matches, "http-timeout") {
         input["httpTimeoutMs"] = json!(duration_option(value, "HTTP timeout")?);
     }
-    let timeout = text(&matches, "timeout")
-        .and_then(timeout_seconds)
-        .flatten();
+    let timeout = text(matches, "timeout").and_then(timeout_seconds).flatten();
     if let Some(seconds) = timeout {
         input["timeoutSeconds"] = json!(seconds);
     }
@@ -1350,28 +1514,26 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         ("browser-allow-cookie-errors", "browserAllowCookieErrors"),
         ("force", "force"),
     ] {
-        if specified(&matches, key) {
-            input[target] = json!(flag(&matches, key));
+        if specified(matches, key) {
+            input[target] = json!(flag(matches, key));
         }
     }
-    if flag(&matches, "no-background") {
+    if flag(matches, "no-background") {
         input["background"] = json!(false);
     }
-    if flag(&matches, "browser-inline-files") {
+    if flag(matches, "browser-inline-files") {
         input["browserAttachments"] = json!("never");
     }
-    if specified(&matches, "browser-follow-up") {
-        input["browserFollowUps"] = json!(values(&matches, "browser-follow-up"));
+    if specified(matches, "browser-follow-up") {
+        input["browserFollowUps"] = json!(values(matches, "browser-follow-up"));
     }
-    if specified(&matches, "allow-secret-file") {
-        input["allowSecretFiles"] = json!(values(&matches, "allow-secret-file"));
+    if specified(matches, "allow-secret-file") {
+        input["allowSecretFiles"] = json!(values(matches, "allow-secret-file"));
     }
-    let copy_requested = flag(&matches, "copy-markdown") || flag(&matches, "copy");
-    if render || copy_requested {
+    if render_only {
         input["renderOnly"] = json!(true);
     }
-    let preview = text(&matches, "dry-run").or_else(|| text(&matches, "preview"));
-    if let Some(models) = text(&matches, "models") {
+    if let Some(models) = text(matches, "models") {
         input["models"] = json!(
             models
                 .split(',')
@@ -1380,18 +1542,72 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                 .collect::<Vec<_>>()
         );
     }
-    if flag(&matches, "wait") && flag(&matches, "no-wait") {
+    if flag(matches, "wait") && flag(matches, "no-wait") {
         bail!("Cannot combine --wait and --no-wait.");
     }
+    let browser_followup = followup_input(store, matches, &mut input)?;
+    if let Some(path) =
+        text(matches, "write-output").filter(|path| !crate::policy::trim(path).is_empty())
+    {
+        let path = output_path(path, cwd, env, store)?;
+        input["writeOutputPath"] = json!(path);
+    }
+    if flag(matches, "write-artifacts") {
+        input["writeArtifacts"] = json!(true);
+    }
+    if flag(matches, "files-report") {
+        input["filesReport"] = json!(true);
+    }
+    if flag(matches, "verbose") {
+        input["verbose"] = json!(true);
+    }
+    // Reference: the zombie cutoff follows an explicit --timeout unless set itself.
+    if let Some(value) = text(matches, "zombie-timeout") {
+        input["zombieTimeoutMs"] = json!(duration_option(value, "Zombie timeout")?);
+    } else if let Some(seconds) = timeout {
+        input["zombieTimeoutMs"] = json!(seconds * 1000.0);
+    }
+    // Reference multi-model failure policy; Alcuin's GPT-6 policy leaves one model, so it is
+    // saved but never changes an outcome.
+    if flag(matches, "allow-partial") {
+        input["partialMode"] = json!("ok");
+    } else if let Some(mode) = text(matches, "partial") {
+        anyhow::ensure!(
+            matches!(mode, "fail" | "ok"),
+            "option '--partial <mode>' argument '{mode}' is invalid. Allowed choices are fail, ok."
+        );
+        input["partialMode"] = json!(mode);
+    }
+    if flag(matches, "zombie-last-activity") {
+        input["zombieUseLastActivity"] = json!(true);
+    }
+    notification_flags(matches, &mut input);
+    if flag(matches, "gemini-show-thoughts") {
+        input["geminiShowThoughts"] = json!(true);
+    }
+    if flag(matches, "no-gemini-fallback") {
+        input["geminiAllowModelFallback"] = json!(false);
+    }
+    if let Some(value) = text(matches, "heartbeat") {
+        input["heartbeatSeconds"] = json!(heartbeat_seconds(value)?);
+    }
+    Ok((input, browser_followup))
+}
+/// Applies `--followup` to the input; a browser follow-up returns its saved configuration.
+fn followup_input(
+    store: &SessionStore,
+    matches: &ArgMatches,
+    input: &mut Value,
+) -> Result<Option<Value>> {
     let mut browser_followup = None;
-    if let Some(reference) = text(&matches, "followup") {
+    if let Some(reference) = text(matches, "followup") {
         anyhow::ensure!(
             !input["models"]
                 .as_array()
                 .is_some_and(|models| !models.is_empty()),
             "--followup cannot be combined with --models."
         );
-        match followup::resolve(&store, reference, text(&matches, "followup-model"))? {
+        match followup::resolve(store, reference, text(matches, "followup-model"))? {
             followup::Followup::Api {
                 response_id,
                 session_id,
@@ -1400,7 +1616,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                 if let Some(session_id) = session_id {
                     input["followupSessionId"] = json!(session_id);
                 }
-                if let Some(model) = text(&matches, "followup-model") {
+                if let Some(model) = text(matches, "followup-model") {
                     input["followupModel"] = json!(model);
                 }
             }
@@ -1417,74 +1633,20 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
             }
         }
     }
-    if let Some(path) =
-        text(&matches, "write-output").filter(|path| !crate::policy::trim(path).is_empty())
-    {
-        let path = output_path(path, &cwd, &env, &store)?;
-        input["writeOutputPath"] = json!(path);
-    }
-    if flag(&matches, "write-artifacts") {
-        input["writeArtifacts"] = json!(true);
-    }
-    if flag(&matches, "files-report") {
-        input["filesReport"] = json!(true);
-    }
-    if flag(&matches, "verbose") {
-        input["verbose"] = json!(true);
-    }
-    // Reference: the zombie cutoff follows an explicit --timeout unless set itself.
-    if let Some(value) = text(&matches, "zombie-timeout") {
-        input["zombieTimeoutMs"] = json!(duration_option(value, "Zombie timeout")?);
-    } else if let Some(seconds) = timeout {
-        input["zombieTimeoutMs"] = json!(seconds * 1000.0);
-    }
-    // Reference multi-model failure policy; Alcuin's GPT-6 policy leaves one model, so it is
-    // saved but never changes an outcome.
-    if flag(&matches, "allow-partial") {
-        input["partialMode"] = json!("ok");
-    } else if let Some(mode) = text(&matches, "partial") {
-        anyhow::ensure!(
-            matches!(mode, "fail" | "ok"),
-            "option '--partial <mode>' argument '{mode}' is invalid. Allowed choices are fail, ok."
-        );
-        input["partialMode"] = json!(mode);
-    }
-    if flag(&matches, "zombie-last-activity") {
-        input["zombieUseLastActivity"] = json!(true);
-    }
-    notification_flags(&matches, &mut input);
-    if flag(&matches, "gemini-show-thoughts") {
-        input["geminiShowThoughts"] = json!(true);
-    }
-    if flag(&matches, "no-gemini-fallback") {
-        input["geminiAllowModelFallback"] = json!(false);
-    }
-    if let Some(value) = text(&matches, "heartbeat") {
-        input["heartbeatSeconds"] = json!(heartbeat_seconds(value)?);
-    }
-    let mut remote_config = loaded.config["browser"]
-        .as_object()
-        .cloned()
-        .map(Value::Object)
-        .unwrap_or_else(|| json!({}));
-    for (flag, key) in [
-        ("remote-host", "remoteHost"),
-        ("remote-token", "remoteToken"),
-    ] {
-        if let Some(value) = text(&matches, flag)
-            .map(crate::policy::trim)
-            .filter(|value| !value.is_empty())
-        {
-            remote_config[key] = json!(value);
-        }
-    }
-    let remote = crate::remote_session::Connection::resolve(&remote_config, &env);
-    if let Some(connection) = &remote {
-        println!("Remote browser host detected: {}", connection.host);
-        input["remoteBrowser"] = json!(true);
-    }
-    let mut request = execution::resolve(&input, &loaded.config, &env, &cwd)?;
-    if flag(&matches, "write-artifacts") {
+    Ok(browser_followup)
+}
+/// Resolves the root command's request and applies its browser overrides and checks.
+fn resolve_request(
+    input: &Value,
+    loaded: &config::LoadedConfig,
+    matches: &ArgMatches,
+    env: &Environment,
+    cwd: &Path,
+    browser_followup: Option<Value>,
+    remote: bool,
+) -> Result<execution::ResolvedRequest> {
+    let mut request = execution::resolve(input, &loaded.config, env, cwd)?;
+    if flag(matches, "write-artifacts") {
         anyhow::ensure!(
             request.engine == "browser",
             "--write-artifacts requires --engine browser."
@@ -1498,7 +1660,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
     }
     if request.engine != "api" {
         for key in ["reasoning-mode", "reasoning-effort"] {
-            anyhow::ensure!(!specified(&matches, key), "--{key} requires --engine api.");
+            anyhow::ensure!(!specified(matches, key), "--{key} requires --engine api.");
         }
     }
     // Reference: ORACLE_BROWSER_ATTACHMENT_TIMEOUT stands in for the flag on fresh runs only.
@@ -1507,10 +1669,10 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         .map(|raw| crate::policy::trim(raw).to_owned())
         .filter(|raw| !raw.is_empty() && browser_followup.is_none());
     let attachment_timeout = if request.engine == "browser"
-        && (specified(&matches, "browser-attachment-timeout") || attachment_env.is_some())
+        && (specified(matches, "browser-attachment-timeout") || attachment_env.is_some())
     {
-        let raw = text(&matches, "browser-attachment-timeout")
-            .filter(|_| specified(&matches, "browser-attachment-timeout"))
+        let raw = text(matches, "browser-attachment-timeout")
+            .filter(|_| specified(matches, "browser-attachment-timeout"))
             .or(attachment_env.as_deref())
             .context("Missing browser attachment timeout")?;
         let milliseconds=followup::attachment_timeout(raw).unwrap_or_else(||{println!("Warning: invalid --browser-attachment-timeout duration \"{raw}\"; using fallback 45000ms.");45_000.0});
@@ -1523,17 +1685,17 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         None
     };
     anyhow::ensure!(
-        request.engine == "browser" || text(&matches, "browser-tab").is_none(),
+        request.engine == "browser" || text(matches, "browser-tab").is_none(),
         "--browser-tab requires --engine browser."
     );
     if request.engine == "browser" && browser_followup.is_none() {
-        let overrides = browser_runtime_overrides(&matches, &request.browser, &env)?;
+        let overrides = browser_runtime_overrides(matches, &request.browser, env)?;
         request.browser = config::deep_merge(&request.browser, &overrides);
         request.browser_preview = config::deep_merge(&request.browser_preview, &overrides);
         request.options["browserConfig"] = request.browser.clone();
     }
     if let Some(mut saved) = browser_followup {
-        if let Some(capacity) = browser_capacity_override(&saved, &env) {
+        if let Some(capacity) = browser_capacity_override(&saved, env) {
             saved["maxConcurrentTabs"] = capacity;
         }
         if let Some(timeout) = attachment_timeout {
@@ -1542,26 +1704,26 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         if !request.browser["endMarker"].is_null() {
             saved["endMarker"] = request.browser["endMarker"].clone();
         }
-        request.replace_browser_config(saved, &input, &env, &cwd)?;
+        request.replace_browser_config(saved, input, env, cwd)?;
     } else if let Some(timeout) = attachment_timeout {
         request.browser["attachmentTimeoutMs"] = timeout.clone();
         request.browser_preview["attachmentTimeoutMs"] = timeout;
         request.options["browserConfig"] = request.browser.clone();
     }
     anyhow::ensure!(
-        remote.is_none() || request.browser["copyProfileSource"].is_null(),
+        !remote || request.browser["copyProfileSource"].is_null(),
         "--copy-profile cannot be sent to a remote browser service"
     );
     anyhow::ensure!(
-        remote.is_none() || request.cookie_bootstrap.is_none(),
+        !remote || request.cookie_bootstrap.is_none(),
         "Explicit cookie bootstrap cannot be sent to a remote browser service"
     );
     anyhow::ensure!(
-        remote.is_none() || request.engine == "browser",
+        !remote || request.engine == "browser",
         "--remote-host requires --engine browser."
     );
     anyhow::ensure!(
-        remote.is_none() || text(&matches, "remote-chrome").is_none(),
+        !remote || text(matches, "remote-chrome").is_none(),
         "--remote-host cannot be combined with --remote-chrome."
     );
     if input.get("previousResponseId").is_some() {
@@ -1571,157 +1733,114 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
                 .as_str()
                 .context("Follow-up child has no model")?,
             &request.options,
-            &env,
+            env,
         )?;
     }
-    if flag(&matches, "route") || flag(&matches, "preflight") {
-        let mut options = request.options.clone();
-        match providers::resolve_azure(&input["azure"], &loaded.config["azure"], &env, true) {
-            Some(azure) => options["azure"] = azure,
-            None => {
-                if let Some(options) = options.as_object_mut() {
-                    options.remove("azure");
-                }
+    Ok(request)
+}
+/// The `--route` and `--preflight` checks.
+fn route_check(
+    input: &Value,
+    request: &execution::ResolvedRequest,
+    loaded: &config::LoadedConfig,
+    matches: &ArgMatches,
+    env: &Environment,
+) -> Result<i32> {
+    let mut options = request.options.clone();
+    match providers::resolve_azure(&input["azure"], &loaded.config["azure"], env, true) {
+        Some(azure) => options["azure"] = azure,
+        None => {
+            if let Some(options) = options.as_object_mut() {
+                options.remove("azure");
             }
         }
-        // Reference engineModels for route checks: API model names, whatever the engine.
-        let requested = match input["models"]
-            .as_array()
-            .filter(|models| !models.is_empty())
-        {
-            Some(models) => models
-                .iter()
-                .filter_map(|model| model.as_str().map(str::to_owned))
-                .collect(),
-            None => vec![
-                text(&matches, "model")
-                    .or(loaded.config["model"].as_str())
-                    .unwrap_or(crate::policy::DEFAULT_API_MODEL)
-                    .to_owned(),
-            ],
-        };
-        let mut models: Vec<String> = vec![];
-        for model in requested {
-            let model = execution::api_model(&model)?;
-            if !models.contains(&model) {
-                models.push(model);
-            }
-        }
-        options["models"] = json!(models);
-        return route(&options, &env, flag(&matches, "preflight"));
     }
-    if flag(&matches, "browser") {
-        println!("`--browser` is deprecated; use `--engine browser` instead.");
-    }
-    if render || copy_requested {
-        let tokens = render_tokens(&request);
-        let threshold = 196_000;
-        if tokens > threshold {
-            println!(
-                "Warning: bundle is ~{} tokens (>{}); may exceed model limits.",
-                grouped(tokens),
-                grouped(threshold)
-            );
-        }
-        if render {
-            println!("{}", request.markdown.trim_end_matches('\n'));
-        }
-        if copy_requested {
-            println!(
-                "{}",
-                copy_report(&copy(&request.markdown), tokens, request.files.len())
-            );
-        }
-        return Ok(0);
-    }
-    if let Some(mode) = preview {
-        if request.engine == "api" {
-            let (route, _) = providers::resolve_route(
-                request.options["model"]
-                    .as_str()
-                    .context("Missing preview model")?,
-                &request.options,
-                &env,
-            )?;
-            providers::require_responses(&route)?;
-            api_preview(&request)?;
-        } else {
-            let mut prompt = crate::browser_prompt::BrowserPrompt::assemble(
-                &request.files,
-                request.options["prompt"].as_str().unwrap_or(""),
-                request.options["system"].as_str(),
-                &request.options,
-                &std::env::temp_dir(),
-            )?;
-            let followups = request.options["browserFollowUps"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            for line in prompt.preview_lines(
-                &request.browser_preview,
-                request.options["model"].as_str().unwrap_or("gpt-6-pro"),
-                mode,
-                &followups,
-            )? {
-                println!("{line}");
-            }
-            prompt.cleanup()?;
-        }
-        return Ok(0);
-    }
-    let preference = if flag(&matches, "wait") {
-        Some(true)
-    } else if flag(&matches, "no-wait") {
-        Some(false)
-    } else {
-        None
+    // Reference engineModels for route checks: API model names, whatever the engine.
+    let requested = match input["models"]
+        .as_array()
+        .filter(|models| !models.is_empty())
+    {
+        Some(models) => models
+            .iter()
+            .filter_map(|model| model.as_str().map(str::to_owned))
+            .collect(),
+        None => vec![
+            text(matches, "model")
+                .or(loaded.config["model"].as_str())
+                .unwrap_or(crate::policy::DEFAULT_API_MODEL)
+                .to_owned(),
+        ],
     };
-    let mut wait = crate::cli_execution::wait_preference(
-        preference,
-        &json!({"mode":request.engine,"options":request.options}),
-    );
-    if remote.is_some() {
-        if !wait {
-            println!("Remote browser runs require --wait; ignoring --no-wait.");
+    let mut models: Vec<String> = vec![];
+    for model in requested {
+        let model = execution::api_model(&model)?;
+        if !models.contains(&model) {
+            models.push(model);
         }
-        wait = true;
     }
-    request.options["waitPreference"] = json!(wait);
-    let (session, route) = if let Some(connection) = &remote {
-        (
-            crate::remote_session::prepare(&store, &request, &cwd, connection)?,
-            None,
-        )
-    } else if request.engine == "browser" {
-        (
-            crate::browser_runner::prepare(&store, &request, &cwd)?,
-            None,
-        )
-    } else {
-        let (route, key) = providers::resolve_route(
-            request.options["model"].as_str().context("Missing model")?,
+    options["models"] = json!(models);
+    route(&options, env, flag(matches, "preflight"))
+}
+/// Prints `--render` and `--copy` output.
+fn print_render(request: &execution::ResolvedRequest, render: bool, copy_requested: bool) {
+    let tokens = render_tokens(request);
+    let threshold = 196_000;
+    if tokens > threshold {
+        println!(
+            "Warning: bundle is ~{} tokens (>{}); may exceed model limits.",
+            grouped(tokens),
+            grouped(threshold)
+        );
+    }
+    if render {
+        println!("{}", request.markdown.trim_end_matches('\n'));
+    }
+    if copy_requested {
+        println!(
+            "{}",
+            copy_report(&copy(&request.markdown), tokens, request.files.len())
+        );
+    }
+}
+/// Prints a `--dry-run` or `--preview` of the request.
+fn print_preview(
+    request: &execution::ResolvedRequest,
+    mode: &str,
+    env: &Environment,
+) -> Result<()> {
+    if request.engine == "api" {
+        let (route, _) = providers::resolve_route(
+            request.options["model"]
+                .as_str()
+                .context("Missing preview model")?,
             &request.options,
-            &env,
+            env,
         )?;
-        let key = key.with_context(|| providers::missing_key_message(&route))?;
-        // Reference runOracle prints the file report before the over-budget refusal.
-        let session =
-            execution::prepare(&store, &request, &cwd, route.clone()).inspect_err(|error| {
-                if error.is::<execution::InputTooLarge>() {
-                    for line in crate::cli_execution::reported_files(&request).unwrap_or_default() {
-                        println!("{line}");
-                    }
-                }
-            })?;
-        (session, Some((route, key)))
-    };
-    let id = session["id"].as_str().context("Missing session ID")?;
-    let cancel = CancellationToken::new();
-    let signal = crate::browser_signal::cancel_on_ctrl_c(cancel.clone());
-    let result =
-        crate::cli_execution::run(&store, id, &request, wait, &env, route, remote, &cancel).await;
-    signal.abort();
-    result
+        providers::require_responses(&route)?;
+        api_preview(request)?;
+    } else {
+        let mut prompt = crate::browser_prompt::BrowserPrompt::assemble(
+            &request.files,
+            request.options["prompt"].as_str().unwrap_or(""),
+            request.options["system"].as_str(),
+            &request.options,
+            &std::env::temp_dir(),
+        )?;
+        let followups = request.options["browserFollowUps"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for line in prompt.preview_lines(
+            &request.browser_preview,
+            request.options["model"].as_str().unwrap_or("gpt-6-pro"),
+            mode,
+            &followups,
+        )? {
+            println!("{line}");
+        }
+        prompt.cleanup()?;
+    }
+    Ok(())
 }
 pub(crate) fn grouped(value: usize) -> String {
     let text = value.to_string();

@@ -218,31 +218,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
     stale_conversation_cookie_case(page)
         .await
         .context("Stale conversation cookie regression")?;
-    for (changed, consumed) in [(false, false), (false, true), (true, false)] {
-        mount(
-            page,
-            ACTIVE,
-            "/",
-            "()=>{sessionStorage.removeItem('oracle:target-claim');}",
-        )
-        .await?;
-        let mut reservation = RendererReservation::acquire(
-            page.clone(),
-            uuid::Uuid::new_v4().to_string(),
-            SHORT,
-            &CancellationToken::new(),
-        )
-        .await?;
-        browser_dom::native_upload_selection_case(&mut reservation, changed, consumed)
-            .await
-            .context("File selection seal regression")?;
-        page.evaluate(
-            "sessionStorage.removeItem('oracle:target-claim');true",
-            SHORT,
-            &CancellationToken::new(),
-        )
-        .await?;
-    }
+    upload_selection_seal_cases(page).await?;
     attachment_identity_cases(page)
         .await
         .context("Attachment identity regression")?;
@@ -274,191 +250,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
         .await
         .context("Quarantine guard disposal regression")?;
     let cancel = CancellationToken::new();
-    mount(page, ACTIVE, "/", "").await?;
-    require(page, SHORT, &cancel).await?;
-    let off = "Header shows Temporary Chat turned off";
-    let landing = "Landing page shows no Temporary Chat control";
-    for (html, reason) in [
-        (
-            ACTIVE.replace("Turn off temporary chat", "Turn on temporary chat"),
-            off,
-        ),
-        (ACTIVE.replace("<header ", "<header hidden "), landing),
-        (
-            ACTIVE.replace("<button aria-label", "<button disabled aria-label"),
-            landing,
-        ),
-        (
-            ACTIVE.replace(
-                "</header>",
-                "<button aria-label='Turn on temporary chat'>Ordinary</button></header>",
-            ),
-            off,
-        ),
-        (
-            ACTIVE.replace(
-                "</header>",
-                "<button aria-label='Turn off temporary chat'>Duplicate</button></header>",
-            ),
-            "Header shows more than one Temporary Chat control",
-        ),
-        (
-            format!("<article data-message-author-role='assistant'>{ACTIVE}</article>"),
-            landing,
-        ),
-        (
-            ACTIVE.replace(
-                "data-app-shell-titlebar='true'",
-                "data-app-shell-titlebar='false'",
-            ),
-            landing,
-        ),
-    ] {
-        mount(page, &html, "/", "").await?;
-        refuses(page, UNKNOWN, reason)
-            .await
-            .with_context(|| format!("Accepted or misnamed unverified fixture: {html}"))?;
-    }
-    mount(page, ACTIVE, "/g/PUBLIC-project", "").await?;
-    refuses(
-        page,
-        UNKNOWN,
-        "Page is neither the landing page nor a conversation",
-    )
-    .await?;
-    let current_view = "(cfg) => { const root={return:null,stateNode:{}}; root.stateNode.current=root; const props={scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}; document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:props}; }";
-    for temporary in [false, true] {
-        let setup = current_view
-            .replace(
-                "PUBLIC-id",
-                "local-chatgpt:11111111-2222-4333-8444-555555555555",
-            )
-            .replace(
-                "isTemporaryChat:true",
-                &format!("isTemporaryChat:{temporary}"),
-            );
-        mount(
-            page,
-            ACTIVE,
-            "/c/local-chatgpt%3A11111111-2222-4333-8444-555555555555",
-            &setup,
-        )
-        .await?;
-        let state = page.evaluate(PROBE, SHORT, &cancel).await?;
-        assert_eq!(
-            state["state"],
-            if temporary { json!(null) } else { json!(false) },
-            "Provisional client route authorised privacy"
-        );
-        refuses(
-            page,
-            UNKNOWN,
-            if temporary {
-                "Conversation has only its provisional local route"
-            } else {
-                "Conversation view is not marked Temporary Chat"
-            },
-        )
-        .await?;
-    }
-    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
-    require(page, SHORT, &cancel).await?;
-    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),old=node.__reactFiber$PUBLIC,root={return:null,stateNode:{}};root.stateNode.current=root;old.return.stateNode.current=root;old.alternate={return:root,memoizedProps:old.memoizedProps};return true;}",&json!([{}]),SHORT,&cancel).await?;
-    require(page, SHORT, &cancel).await?;
-    let not_temporary = "Conversation view is not marked Temporary Chat";
-    let unbound = "Temporary Chat binding not found for the conversation view";
-    for (change, reason) in [
-        (
-            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isTemporaryChat=false;}",
-            not_temporary,
-        ),
-        (
-            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isSharedConversation=true;}",
-            "Conversation view is not confirmed unshared",
-        ),
-        (
-            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isWorkConversation=true;}",
-            "Conversation view is not confirmed outside Work",
-        ),
-        (
-            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.scrollStateConversationId='PUBLIC-other';}",
-            unbound,
-        ),
-        (
-            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.return.stateNode.current={};}",
-            unbound,
-        ),
-        (
-            "(cfg)=>{const n=document.createElement('div');n.textContent='PUBLIC conflicting view';document.querySelector('main').append(n);const f=document.querySelector('#view').__reactFiber$PUBLIC;n.__reactFiber$PUBLIC={return:f.return,memoizedProps:{...f.memoizedProps,isTemporaryChat:false}};}",
-            not_temporary,
-        ),
-    ] {
-        mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
-        page.evaluate_with_arguments(
-            &format!("(cfg)=>{{ ({change})(cfg); return true; }}"),
-            &json!([{}]),
-            SHORT,
-            &cancel,
-        )
-        .await?;
-        refuses(page, SHORT, reason).await.with_context(|| {
-            format!("Accepted or misnamed conflicting or stale React view: {change}")
-        })?;
-    }
-    // A slow renderer can make the deadline cut the last re-read short. The view stays unbound,
-    // and from 200 ms each read of it holds the renderer until 1.5 s, past require's 600 ms.
-    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
-    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),fiber=node.__reactFiber$PUBLIC,start=Date.now();fiber.memoizedProps.scrollStateConversationId='PUBLIC-other';delete node.__reactFiber$PUBLIC;Object.defineProperty(node,'__reactFiber$PUBLIC',{configurable:true,enumerable:true,get(){if(Date.now()-start>200)while(Date.now()<start+1500){}return fiber;}});return true;}",&json!([{}]),SHORT,&cancel).await?;
-    // It stays a stalled read, which the answer wait rides out.
-    let stalled = require(page, Duration::from_millis(600), &cancel)
-        .await
-        .unwrap_err();
-    anyhow::ensure!(
-        stalled
-            .downcast_ref::<crate::cdp::PageReadStalled>()
-            .is_some(),
-        "A deadline-cut re-read is no longer a stalled read: {stalled:#}"
-    );
-    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
-    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),fiber=node.__reactFiber$PUBLIC,start=Date.now();fiber.memoizedProps.scrollStateConversationId='PUBLIC-other';delete node.__reactFiber$PUBLIC;Object.defineProperty(node,'__reactFiber$PUBLIC',{configurable:true,enumerable:true,get(){if(Date.now()-start>200)while(Date.now()<start+1500){}return fiber;}});return true;}",&json!([{}]),SHORT,&cancel).await?;
-    refuses(page, Duration::from_millis(600), unbound)
-        .await
-        .context("Misnamed an unknown view whose last re-read the deadline cut short")?;
-    // From 10 November 2026 ChatGPT keys the view by its local client ID and names the server
-    // ID only in its history; scrollStateConversationId is gone.
-    let history_view = current_view.replace(
-        "scrollStateConversationId:'PUBLIC-id'",
-        "conversationId:'local-chatgpt:11111111-2222-4333-8444-555555555555',history:{serverConversationId:'PUBLIC-id'}",
-    );
-    for (setup, expected, reason) in [
-        (history_view.clone(), json!(true), None),
-        // The 10 November 2026 failure: the view's server ID does not bind it to the route.
-        (
-            history_view.replace(
-                "serverConversationId:'PUBLIC-id'",
-                "serverConversationId:'PUBLIC-other'",
-            ),
-            json!(null),
-            Some(unbound),
-        ),
-        (
-            history_view.replace("isTemporaryChat:true", "isTemporaryChat:false"),
-            json!(false),
-            Some(not_temporary),
-        ),
-    ] {
-        mount(page, ACTIVE, "/c/PUBLIC-id", &setup).await?;
-        let state = page.evaluate(PROBE, SHORT, &cancel).await?;
-        assert_eq!(state["state"], expected, "History-bound view: {setup}");
-        assert_eq!(
-            state["reason"],
-            json!(reason),
-            "History-bound view: {setup}"
-        );
-        if let Some(reason) = reason {
-            refuses(page, UNKNOWN, reason).await?;
-        }
-    }
+    temporary_chat_view_cases(page, &cancel).await?;
     // The guard is installed whilst Temporary Chat is valid, then the mode changes
     // before the native key event. A preflight-only implementation fails this case.
     mount(page, ACTIVE, "/", "(cfg)=>{window.PUBLIC_sends=0;document.querySelector('form').onsubmit=e=>{e.preventDefault();window.PUBLIC_sends++;};}").await?;
@@ -624,6 +416,294 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
             assert_eq!(result["success"], true);
         }
     }
+    copy_action_cases(page, &reservation, &copy, &cancel).await?;
+    prompt.arm_send(&mut reservation, SHORT, &cancel).await?;
+    page.evaluate_with_arguments("(cfg)=>{document.querySelector('header button').setAttribute('aria-label','Turn on temporary chat');return true;}", &json!([{}]), SHORT, &cancel).await?;
+    reservation.dispatch_started(SHORT, &cancel).await?;
+    assert!(
+        prompt
+            .send_once(&mut reservation, SHORT, &cancel)
+            .await
+            .is_err()
+    );
+    let sends = page
+        .evaluate_with_arguments("(cfg)=>window.PUBLIC_sends", &json!([{}]), SHORT, &cancel)
+        .await?;
+    assert_eq!(sends, 0, "Mode flip reached the app's submit handler");
+    // Preparation failures still remove only this upload's preflight records and quarantine.
+    failed_preparation_cases(page, file, &cancel).await?;
+    Ok(())
+}
+/// A file selection seal holds whether the selection changed, was consumed, or neither.
+async fn upload_selection_seal_cases(page: &Cdp) -> Result<()> {
+    for (changed, consumed) in [(false, false), (false, true), (true, false)] {
+        mount(
+            page,
+            ACTIVE,
+            "/",
+            "()=>{sessionStorage.removeItem('oracle:target-claim');}",
+        )
+        .await?;
+        let mut reservation = RendererReservation::acquire(
+            page.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            SHORT,
+            &CancellationToken::new(),
+        )
+        .await?;
+        browser_dom::native_upload_selection_case(&mut reservation, changed, consumed)
+            .await
+            .context("File selection seal regression")?;
+        page.evaluate(
+            "sessionStorage.removeItem('oracle:target-claim');true",
+            SHORT,
+            &CancellationToken::new(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+/// A failed upload preparation leaves no guard or evidence and quarantines its renderer.
+async fn failed_preparation_cases(
+    page: &Cdp,
+    file: &std::path::Path,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    for setup in [
+        "document.querySelector('input').remove();",
+        "const form=document.createElement('form');form.innerHTML='<input type=file>';document.body.prepend(form);",
+        "const input=document.querySelector('input');Object.defineProperty(input,'type',{get(){document.querySelector('header button').setAttribute('aria-label','Turn on temporary chat');return 'file';}});",
+    ] {
+        mount(page, ACTIVE, "/", "").await?;
+        page.evaluate_with_arguments(
+            &format!(
+                "(cfg)=>{{sessionStorage.removeItem('oracle:target-claim');{setup}return true;}}"
+            ),
+            &json!([{}]),
+            SHORT,
+            cancel,
+        )
+        .await?;
+        let mut failed = RendererReservation::acquire(
+            page.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            SHORT,
+            cancel,
+        )
+        .await?;
+        let mut upload = browser_dom::UploadFile::open(file)?;
+        let nav = browser_dom::navigation("https://chatgpt.com/")?;
+        assert!(
+            browser_dom::upload(&mut failed, &mut upload, &nav, SHORT, cancel)
+                .await
+                .is_err()
+        );
+        let retained=page.evaluate_with_arguments("(cfg)=>({guards:Object.keys(window.__oracleFileInputGuards??{}).length,evidence:window.__oracleAttachmentEvidence?.size??0,state:JSON.parse(sessionStorage.getItem('oracle:target-claim')).submission.state,files:Array.from(document.querySelectorAll('input[type=file]')).reduce((n,input)=>n+input.files.length,0)})",&json!([{}]),SHORT,cancel).await?;
+        assert_eq!(
+            retained,
+            json!({"guards":0,"evidence":0,"state":"quarantined","files":0})
+        );
+    }
+    Ok(())
+}
+/// The Temporary Chat check refuses every view it cannot prove temporary, and reads a cut-short
+/// re-read as a stalled read.
+async fn temporary_chat_view_cases(page: &Cdp, cancel: &CancellationToken) -> Result<()> {
+    mount(page, ACTIVE, "/", "").await?;
+    require(page, SHORT, cancel).await?;
+    let off = "Header shows Temporary Chat turned off";
+    let landing = "Landing page shows no Temporary Chat control";
+    for (html, reason) in [
+        (
+            ACTIVE.replace("Turn off temporary chat", "Turn on temporary chat"),
+            off,
+        ),
+        (ACTIVE.replace("<header ", "<header hidden "), landing),
+        (
+            ACTIVE.replace("<button aria-label", "<button disabled aria-label"),
+            landing,
+        ),
+        (
+            ACTIVE.replace(
+                "</header>",
+                "<button aria-label='Turn on temporary chat'>Ordinary</button></header>",
+            ),
+            off,
+        ),
+        (
+            ACTIVE.replace(
+                "</header>",
+                "<button aria-label='Turn off temporary chat'>Duplicate</button></header>",
+            ),
+            "Header shows more than one Temporary Chat control",
+        ),
+        (
+            format!("<article data-message-author-role='assistant'>{ACTIVE}</article>"),
+            landing,
+        ),
+        (
+            ACTIVE.replace(
+                "data-app-shell-titlebar='true'",
+                "data-app-shell-titlebar='false'",
+            ),
+            landing,
+        ),
+    ] {
+        mount(page, &html, "/", "").await?;
+        refuses(page, UNKNOWN, reason)
+            .await
+            .with_context(|| format!("Accepted or misnamed unverified fixture: {html}"))?;
+    }
+    mount(page, ACTIVE, "/g/PUBLIC-project", "").await?;
+    refuses(
+        page,
+        UNKNOWN,
+        "Page is neither the landing page nor a conversation",
+    )
+    .await?;
+    let current_view = "(cfg) => { const root={return:null,stateNode:{}}; root.stateNode.current=root; const props={scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}; document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:props}; }";
+    for temporary in [false, true] {
+        let setup = current_view
+            .replace(
+                "PUBLIC-id",
+                "local-chatgpt:11111111-2222-4333-8444-555555555555",
+            )
+            .replace(
+                "isTemporaryChat:true",
+                &format!("isTemporaryChat:{temporary}"),
+            );
+        mount(
+            page,
+            ACTIVE,
+            "/c/local-chatgpt%3A11111111-2222-4333-8444-555555555555",
+            &setup,
+        )
+        .await?;
+        let state = page.evaluate(PROBE, SHORT, cancel).await?;
+        assert_eq!(
+            state["state"],
+            if temporary { json!(null) } else { json!(false) },
+            "Provisional client route authorised privacy"
+        );
+        refuses(
+            page,
+            UNKNOWN,
+            if temporary {
+                "Conversation has only its provisional local route"
+            } else {
+                "Conversation view is not marked Temporary Chat"
+            },
+        )
+        .await?;
+    }
+    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
+    require(page, SHORT, cancel).await?;
+    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),old=node.__reactFiber$PUBLIC,root={return:null,stateNode:{}};root.stateNode.current=root;old.return.stateNode.current=root;old.alternate={return:root,memoizedProps:old.memoizedProps};return true;}",&json!([{}]),SHORT,cancel).await?;
+    require(page, SHORT, cancel).await?;
+    let not_temporary = "Conversation view is not marked Temporary Chat";
+    let unbound = "Temporary Chat binding not found for the conversation view";
+    for (change, reason) in [
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isTemporaryChat=false;}",
+            not_temporary,
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isSharedConversation=true;}",
+            "Conversation view is not confirmed unshared",
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.isWorkConversation=true;}",
+            "Conversation view is not confirmed outside Work",
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.memoizedProps.scrollStateConversationId='PUBLIC-other';}",
+            unbound,
+        ),
+        (
+            "(cfg)=>{document.querySelector('#view').__reactFiber$PUBLIC.return.stateNode.current={};}",
+            unbound,
+        ),
+        (
+            "(cfg)=>{const n=document.createElement('div');n.textContent='PUBLIC conflicting view';document.querySelector('main').append(n);const f=document.querySelector('#view').__reactFiber$PUBLIC;n.__reactFiber$PUBLIC={return:f.return,memoizedProps:{...f.memoizedProps,isTemporaryChat:false}};}",
+            not_temporary,
+        ),
+    ] {
+        mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
+        page.evaluate_with_arguments(
+            &format!("(cfg)=>{{ ({change})(cfg); return true; }}"),
+            &json!([{}]),
+            SHORT,
+            cancel,
+        )
+        .await?;
+        refuses(page, SHORT, reason).await.with_context(|| {
+            format!("Accepted or misnamed conflicting or stale React view: {change}")
+        })?;
+    }
+    // A slow renderer can make the deadline cut the last re-read short. The view stays unbound,
+    // and from 200 ms each read of it holds the renderer until 1.5 s, past require's 600 ms.
+    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
+    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),fiber=node.__reactFiber$PUBLIC,start=Date.now();fiber.memoizedProps.scrollStateConversationId='PUBLIC-other';delete node.__reactFiber$PUBLIC;Object.defineProperty(node,'__reactFiber$PUBLIC',{configurable:true,enumerable:true,get(){if(Date.now()-start>200)while(Date.now()<start+1500){}return fiber;}});return true;}",&json!([{}]),SHORT,cancel).await?;
+    // It stays a stalled read, which the answer wait rides out.
+    let stalled = require(page, Duration::from_millis(600), cancel)
+        .await
+        .unwrap_err();
+    anyhow::ensure!(
+        stalled
+            .downcast_ref::<crate::cdp::PageReadStalled>()
+            .is_some(),
+        "A deadline-cut re-read is no longer a stalled read: {stalled:#}"
+    );
+    mount(page, ACTIVE, "/c/PUBLIC-id", current_view).await?;
+    page.evaluate_with_arguments("(cfg)=>{const node=document.querySelector('#view'),fiber=node.__reactFiber$PUBLIC,start=Date.now();fiber.memoizedProps.scrollStateConversationId='PUBLIC-other';delete node.__reactFiber$PUBLIC;Object.defineProperty(node,'__reactFiber$PUBLIC',{configurable:true,enumerable:true,get(){if(Date.now()-start>200)while(Date.now()<start+1500){}return fiber;}});return true;}",&json!([{}]),SHORT,cancel).await?;
+    refuses(page, Duration::from_millis(600), unbound)
+        .await
+        .context("Misnamed an unknown view whose last re-read the deadline cut short")?;
+    // From 10 November 2026 ChatGPT keys the view by its local client ID and names the server
+    // ID only in its history; scrollStateConversationId is gone.
+    let history_view = current_view.replace(
+        "scrollStateConversationId:'PUBLIC-id'",
+        "conversationId:'local-chatgpt:11111111-2222-4333-8444-555555555555',history:{serverConversationId:'PUBLIC-id'}",
+    );
+    for (setup, expected, reason) in [
+        (history_view.clone(), json!(true), None),
+        // The 10 November 2026 failure: the view's server ID does not bind it to the route.
+        (
+            history_view.replace(
+                "serverConversationId:'PUBLIC-id'",
+                "serverConversationId:'PUBLIC-other'",
+            ),
+            json!(null),
+            Some(unbound),
+        ),
+        (
+            history_view.replace("isTemporaryChat:true", "isTemporaryChat:false"),
+            json!(false),
+            Some(not_temporary),
+        ),
+    ] {
+        mount(page, ACTIVE, "/c/PUBLIC-id", &setup).await?;
+        let state = page.evaluate(PROBE, SHORT, cancel).await?;
+        assert_eq!(state["state"], expected, "History-bound view: {setup}");
+        assert_eq!(
+            state["reason"],
+            json!(reason),
+            "History-bound view: {setup}"
+        );
+        if let Some(reason) = reason {
+            refuses(page, UNKNOWN, reason).await?;
+        }
+    }
+    Ok(())
+}
+/// A copy action reads only the current message's Markdown, in either DOM order, and a Copy
+/// button still showing 'Copied' ignores clicks until it resets.
+async fn copy_action_cases(
+    page: &Cdp,
+    reservation: &RendererReservation,
+    copy: &str,
+    cancel: &CancellationToken,
+) -> Result<()> {
     // Multiple actions cannot substitute a different message's Markdown, in either DOM order.
     for historical in [false, true] {
         let copy = if historical {
@@ -632,7 +712,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
                 include_str!("../browser-scripts/historical-copy-markdown.js")
             )
         } else {
-            copy.clone()
+            copy.to_owned()
         };
         for (html, expected) in [
             (
@@ -664,7 +744,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
                 true,
             ),
         ] {
-            page.evaluate_with_arguments(r#"(cfg)=>{document.querySelector('[data-turn-key]')?.remove();const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-turn');turn.innerHTML=cfg.html;window.PUBLIC_copyClicks=0;for(const button of turn.querySelectorAll('button'))button.onclick=()=>{window.PUBLIC_copyClicks++;if(button.getAttribute('aria-label')==='Copy')button.setAttribute('aria-label','Copied');navigator.clipboard.writeText(button.id==='correct'?'PUBLIC exact answer':'PUBLIC wrong answer');};document.querySelector('main').append(turn);return true;}"#,&json!([{"html":html}]),SHORT,&cancel).await?;
+            page.evaluate_with_arguments(r#"(cfg)=>{document.querySelector('[data-turn-key]')?.remove();const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-turn');turn.innerHTML=cfg.html;window.PUBLIC_copyClicks=0;for(const button of turn.querySelectorAll('button'))button.onclick=()=>{window.PUBLIC_copyClicks++;if(button.getAttribute('aria-label')==='Copy')button.setAttribute('aria-label','Copied');navigator.clipboard.writeText(button.id==='correct'?'PUBLIC exact answer':'PUBLIC wrong answer');};document.querySelector('main').append(turn);return true;}"#,&json!([{"html":html}]),SHORT,cancel).await?;
             let mut cfg = json!({"owner":reservation.owner(),"receipt":{"conversation":{"origin":"https://chatgpt.com","conversationId":null}},"meta":{"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"},"captureToken":uuid::Uuid::new_v4().to_string(),"timeoutMs":5000,"action":"prepare"});
             if historical {
                 let prepared = page
@@ -672,13 +752,13 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
                         include_str!("../browser-scripts/historical-copy-markdown.js"),
                         &json!([cfg]),
                         SHORT,
-                        &cancel,
+                        cancel,
                     )
                     .await?;
                 assert_eq!(prepared["prepared"], true);
             }
             cfg["action"] = json!("run");
-            page.evaluate_with_arguments(&copy, &json!([cfg]), SHORT, &cancel)
+            page.evaluate_with_arguments(&copy, &json!([cfg]), SHORT, cancel)
                 .await?;
             let deadline = Instant::now() + SHORT;
             let result = loop {
@@ -687,7 +767,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
                         "(cfg)=>window.PUBLIC_copyResult",
                         &json!([{}]),
                         SHORT,
-                        &cancel,
+                        cancel,
                     )
                     .await?;
                 if !result.is_null() {
@@ -704,7 +784,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
                     "(cfg)=>window.PUBLIC_copyClicks",
                     &json!([{}]),
                     SHORT,
-                    &cancel,
+                    cancel,
                 )
                 .await?;
             assert_eq!(
@@ -719,79 +799,30 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
             }
         }
     }
-    page.evaluate_with_arguments(r#"(cfg)=>{document.querySelector('[data-turn-key]')?.remove();const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-turn');turn.innerHTML='<div data-message-author-role="assistant" data-message-id="PUBLIC-assistant">PUBLIC answer</div>';document.querySelector('main').append(turn);return true;}"#,&json!([{}]),SHORT,&cancel).await?;
+    page.evaluate_with_arguments(r#"(cfg)=>{document.querySelector('[data-turn-key]')?.remove();const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-turn');turn.innerHTML='<div data-message-author-role="assistant" data-message-id="PUBLIC-assistant">PUBLIC answer</div>';document.querySelector('main').append(turn);return true;}"#,&json!([{}]),SHORT,cancel).await?;
     let historical = include_str!("../browser-scripts/historical-copy-markdown.js");
     let mut cfg = json!({"receipt":{"conversation":{"origin":"https://chatgpt.com","conversationId":null}},"meta":{"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"},"captureToken":uuid::Uuid::new_v4().to_string(),"timeoutMs":300,"action":"prepare"});
     let prepared = page
-        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, &cancel)
+        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, cancel)
         .await?;
     assert_eq!(prepared["prepared"], true);
     cfg["action"] = json!("run");
     let expired = page
-        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, &cancel)
+        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, cancel)
         .await?;
     assert_eq!(expired["status"], "missing-button", "{expired}");
     // A Copy still reading 'Copied' from an earlier capture ignores clicks until it resets.
-    page.evaluate_with_arguments(r#"(cfg)=>{document.querySelector('[data-turn-key]')?.remove();const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-turn');turn.innerHTML='<div data-content-search-unit-key="PUBLIC:2:assistant" data-chatgpt-search-message-ids="PUBLIC-assistant">PUBLIC answer</div><div class="turn-action-controls"><button aria-label="Copied"></button></div>';const button=turn.querySelector('button');button.onclick=()=>{if(button.getAttribute('aria-label')==='Copy'){button.setAttribute('aria-label','Copied');navigator.clipboard.writeText('PUBLIC reset answer');}};setTimeout(()=>button.setAttribute('aria-label','Copy'),300);document.querySelector('main').append(turn);return true;}"#,&json!([{}]),SHORT,&cancel).await?;
+    page.evaluate_with_arguments(r#"(cfg)=>{document.querySelector('[data-turn-key]')?.remove();const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-turn');turn.innerHTML='<div data-content-search-unit-key="PUBLIC:2:assistant" data-chatgpt-search-message-ids="PUBLIC-assistant">PUBLIC answer</div><div class="turn-action-controls"><button aria-label="Copied"></button></div>';const button=turn.querySelector('button');button.onclick=()=>{if(button.getAttribute('aria-label')==='Copy'){button.setAttribute('aria-label','Copied');navigator.clipboard.writeText('PUBLIC reset answer');}};setTimeout(()=>button.setAttribute('aria-label','Copy'),300);document.querySelector('main').append(turn);return true;}"#,&json!([{}]),SHORT,cancel).await?;
     let mut cfg = json!({"receipt":{"conversation":{"origin":"https://chatgpt.com","conversationId":null}},"meta":{"messageId":"PUBLIC-assistant","turnId":"PUBLIC-turn"},"captureToken":uuid::Uuid::new_v4().to_string(),"timeoutMs":2000,"action":"prepare"});
     let prepared = page
-        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, &cancel)
+        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, cancel)
         .await?;
     assert_eq!(prepared["prepared"], true);
     cfg["action"] = json!("run");
     let reset = page
-        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, &cancel)
+        .evaluate_with_arguments(historical, &json!([cfg]), SHORT, cancel)
         .await?;
     assert_eq!(reset["markdown"], "PUBLIC reset answer", "{reset}");
-    prompt.arm_send(&mut reservation, SHORT, &cancel).await?;
-    page.evaluate_with_arguments("(cfg)=>{document.querySelector('header button').setAttribute('aria-label','Turn on temporary chat');return true;}", &json!([{}]), SHORT, &cancel).await?;
-    reservation.dispatch_started(SHORT, &cancel).await?;
-    assert!(
-        prompt
-            .send_once(&mut reservation, SHORT, &cancel)
-            .await
-            .is_err()
-    );
-    let sends = page
-        .evaluate_with_arguments("(cfg)=>window.PUBLIC_sends", &json!([{}]), SHORT, &cancel)
-        .await?;
-    assert_eq!(sends, 0, "Mode flip reached the app's submit handler");
-    // Preparation failures still remove only this upload's preflight records and quarantine.
-    for setup in [
-        "document.querySelector('input').remove();",
-        "const form=document.createElement('form');form.innerHTML='<input type=file>';document.body.prepend(form);",
-        "const input=document.querySelector('input');Object.defineProperty(input,'type',{get(){document.querySelector('header button').setAttribute('aria-label','Turn on temporary chat');return 'file';}});",
-    ] {
-        mount(page, ACTIVE, "/", "").await?;
-        page.evaluate_with_arguments(
-            &format!(
-                "(cfg)=>{{sessionStorage.removeItem('oracle:target-claim');{setup}return true;}}"
-            ),
-            &json!([{}]),
-            SHORT,
-            &cancel,
-        )
-        .await?;
-        let mut failed = RendererReservation::acquire(
-            page.clone(),
-            uuid::Uuid::new_v4().to_string(),
-            SHORT,
-            &cancel,
-        )
-        .await?;
-        let mut upload = browser_dom::UploadFile::open(file)?;
-        let nav = browser_dom::navigation("https://chatgpt.com/")?;
-        assert!(
-            browser_dom::upload(&mut failed, &mut upload, &nav, SHORT, &cancel)
-                .await
-                .is_err()
-        );
-        let retained=page.evaluate_with_arguments("(cfg)=>({guards:Object.keys(window.__oracleFileInputGuards??{}).length,evidence:window.__oracleAttachmentEvidence?.size??0,state:JSON.parse(sessionStorage.getItem('oracle:target-claim')).submission.state,files:Array.from(document.querySelectorAll('input[type=file]')).reduce((n,input)=>n+input.files.length,0)})",&json!([{}]),SHORT,&cancel).await?;
-        assert_eq!(
-            retained,
-            json!({"guards":0,"evidence":0,"state":"quarantined","files":0})
-        );
-    }
     Ok(())
 }
 
@@ -1670,58 +1701,100 @@ async fn answerless_tracker_cases(page: &Cdp) -> Result<()> {
     Ok(())
 }
 
+/// The failed-turn fixture's conversation view, its user turn, a load-failure notice and
+/// ChatGPT's Regenerate control.
+const FAILED_VIEW: &str = "()=>{const root={return:null,stateNode:{}};root.stateNode.current=root;document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:{scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}};}";
+const FAILED_USER: &str = "<article data-turn-key='PUBLIC-user-turn'><div data-message-author-role='user' data-message-id='PUBLIC-user'>PUBLIC prompt</div></article>";
+const FAILED_NOTICE: &str = "This response couldn\u{2019}t load";
+const FAILED_REGENERATE: &str =
+    "<button aria-label='Regenerate response' aria-haspopup='menu'>PUBLIC</button>";
+/// The fixture's assistant turn holding `text`, followed by `controls`.
+fn failed_assistant(text: &str, controls: &str) -> String {
+    format!(
+        "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><div class='markdown'>{text}</div></div>{controls}</article>"
+    )
+}
+/// A result read for the fixture's claim that refuses a failed turn.
+fn failed_refusing() -> Value {
+    json!({"owner":{"claimId":"PUBLIC-claim","reservationId":"PUBLIC-reservation"},
+        "receipt":{"messageId":"PUBLIC-user","conversation":{"origin":"https://chatgpt.com","conversationId":"PUBLIC-id"}},
+        "cleanup":true,"native":true})
+}
+/// A result read that reports a failed turn instead of refusing it.
+fn failed_reporting() -> Value {
+    let mut reporting = failed_refusing();
+    reporting["uiErrors"] = json!(true);
+    reporting
+}
+/// Mounts the fixture conversation holding `turns`, with the run's claim saved.
+async fn failed_open(page: &Cdp, turns: &str) -> Result<()> {
+    mount(
+        page,
+        &ACTIVE.replace("</main>", &format!("{turns}</main>")),
+        "/c/PUBLIC-id",
+        FAILED_VIEW,
+    )
+    .await?;
+    page.evaluate_with_arguments(
+        "(cfg)=>{sessionStorage.setItem('oracle:target-claim',JSON.stringify(cfg.claim));return true;}",
+        &json!([{"claim":{"id":"PUBLIC-claim","retiring":false}}]),
+        SHORT,
+        &CancellationToken::new(),
+    )
+    .await?;
+    Ok(())
+}
+/// The live result read of the fixture page.
+async fn failed_live(page: &Cdp, cfg: &Value) -> Result<Value> {
+    page.evaluate_with_arguments(
+        &crate::browser_runner::result_expression(),
+        &json!([cfg]),
+        SHORT,
+        &CancellationToken::new(),
+    )
+    .await
+}
+/// Historical inspection of the fixture page.
+async fn failed_historical(page: &Cdp) -> Result<Value> {
+    page.evaluate_with_arguments(
+        crate::browser_tabs::INSPECT,
+        &json!([{"expectedConversationId":"PUBLIC-id","expectedOrigin":"https://chatgpt.com"}]),
+        SHORT,
+        &CancellationToken::new(),
+    )
+    .await
+}
+/// The page's own retry control: found and hit-tested here, clicked only by Rust.
+async fn failed_retry(page: &Cdp, cfg: &Value) -> Result<Value> {
+    page.evaluate_with_arguments(
+        &crate::browser_runner::turn_retry::expression(),
+        &json!([cfg]),
+        SHORT,
+        &CancellationToken::new(),
+    )
+    .await
+}
 /// A terminal failed turn is refused with or without Retry, by the live read and by historical
 /// inspection, as in the reference's failure proof. Prose that quotes it, active generation and
 /// earlier turns are not failures of the submitted turn.
 async fn failed_turn_cases(page: &Cdp) -> Result<()> {
-    let cancel = CancellationToken::new();
-    let view = "()=>{const root={return:null,stateNode:{}};root.stateNode.current=root;document.querySelector('#view').__reactFiber$PUBLIC={return:root,memoizedProps:{scrollStateConversationId:'PUBLIC-id',isChatConversation:true,isTemporaryChat:true,isWorkConversation:false,isSharedConversation:false}};}";
-    let user = "<article data-turn-key='PUBLIC-user-turn'><div data-message-author-role='user' data-message-id='PUBLIC-user'>PUBLIC prompt</div></article>";
-    let assistant = |text: &str, controls: &str| {
-        format!(
-            "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><div class='markdown'>{text}</div></div>{controls}</article>"
-        )
-    };
-    let refusing = json!({"owner":{"claimId":"PUBLIC-claim","reservationId":"PUBLIC-reservation"},
-        "receipt":{"messageId":"PUBLIC-user","conversation":{"origin":"https://chatgpt.com","conversationId":"PUBLIC-id"}},
-        "cleanup":true,"native":true});
-    let mut reporting = refusing.clone();
-    reporting["uiErrors"] = json!(true);
-    let open = async |turns: &str| -> Result<()> {
-        mount(
-            page,
-            &ACTIVE.replace("</main>", &format!("{turns}</main>")),
-            "/c/PUBLIC-id",
-            view,
-        )
-        .await?;
-        page.evaluate_with_arguments(
-            "(cfg)=>{sessionStorage.setItem('oracle:target-claim',JSON.stringify(cfg.claim));return true;}",
-            &json!([{"claim":{"id":"PUBLIC-claim","retiring":false}}]),
-            SHORT,
-            &cancel,
-        )
-        .await?;
-        Ok(())
-    };
-    let live = async |cfg: &Value| {
-        page.evaluate_with_arguments(
-            &crate::browser_runner::result_expression(),
-            &json!([cfg]),
-            SHORT,
-            &cancel,
-        )
-        .await
-    };
-    let historical = async || {
-        page.evaluate_with_arguments(
-            crate::browser_tabs::INSPECT,
-            &json!([{"expectedConversationId":"PUBLIC-id","expectedOrigin":"https://chatgpt.com"}]),
-            SHORT,
-            &cancel,
-        )
-        .await
-    };
+    failed_turn_refusal_cases(page).await?;
+    failed_turn_retry_control_cases(page).await?;
+    failed_turn_banner_cases(page).await
+}
+/// A failed turn is refused by the live read and historical inspection, and its Regenerate
+/// control and Try again item are found.
+async fn failed_turn_refusal_cases(page: &Cdp) -> Result<()> {
+    let user = FAILED_USER;
+    let assistant = failed_assistant;
+    let refusing = failed_refusing();
+    let reporting = failed_reporting();
+    let open = async |turns: &str| failed_open(page, turns).await;
+    let live = async |cfg: &Value| failed_live(page, cfg).await;
+    let historical = async || failed_historical(page).await;
+    let retry = async |cfg: &Value| failed_retry(page, cfg).await;
+    let notice = FAILED_NOTICE;
+    let regenerate = FAILED_REGENERATE;
     for (case, text, controls, refused) in [
         ("without Retry", "Thinking failed", "", true),
         (
@@ -1802,19 +1875,6 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
         inspected["assistantFollowsLatestUser"] == false,
         "Historical inspection, earlier turn: {inspected}"
     );
-    // The page's own retry control: found and hit-tested here, clicked only by Rust.
-    let retry = async |cfg: &Value| {
-        page.evaluate_with_arguments(
-            &crate::browser_runner::turn_retry::expression(),
-            &json!([cfg]),
-            SHORT,
-            &cancel,
-        )
-        .await
-    };
-    let notice = "This response couldn\u{2019}t load";
-    let regenerate =
-        "<button aria-label='Regenerate response' aria-haspopup='menu'>PUBLIC</button>";
     open(&format!("{user}{}", assistant(notice, regenerate))).await?;
     let found = retry(&reporting).await?;
     anyhow::ensure!(
@@ -1835,6 +1895,19 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
             && item["label"] == "Try again \u{2022} 6 Thinking",
         "Try again item: {item}"
     );
+    Ok(())
+}
+/// Retry controls inside a shared turn, beside the notice or behind an activity summary, and
+/// a restarted turn's detection.
+async fn failed_turn_retry_control_cases(page: &Cdp) -> Result<()> {
+    let user = FAILED_USER;
+    let assistant = failed_assistant;
+    let reporting = failed_reporting();
+    let open = async |turns: &str| failed_open(page, turns).await;
+    let live = async |cfg: &Value| failed_live(page, cfg).await;
+    let retry = async |cfg: &Value| failed_retry(page, cfg).await;
+    let notice = FAILED_NOTICE;
+    let regenerate = FAILED_REGENERATE;
     // A turn can hold the user's message too, and nothing before the assistant's may be pressed,
     // wrapped as the user's or not, nor make a good answer look failed.
     let shared = |before: &str, text: &str, after: &str| {
@@ -1944,6 +2017,19 @@ async fn failed_turn_cases(page: &Cdp) -> Result<()> {
     .await?;
     let generating = retry(&waiting).await?;
     anyhow::ensure!(generating["started"] == true, "Stop control: {generating}");
+    Ok(())
+}
+/// ChatGPT's failed-reply banner outside the assistant's turn.
+async fn failed_turn_banner_cases(page: &Cdp) -> Result<()> {
+    let user = FAILED_USER;
+    let cancel = CancellationToken::new();
+    let assistant = failed_assistant;
+    let refusing = failed_refusing();
+    let reporting = failed_reporting();
+    let open = async |turns: &str| failed_open(page, turns).await;
+    let live = async |cfg: &Value| failed_live(page, cfg).await;
+    let retry = async |cfg: &Value| failed_retry(page, cfg).await;
+    let regenerate = FAILED_REGENERATE;
     // ChatGPT's failed reply: its error line and a Retry, outside the assistant's turn, before any
     // assistant message or beside a turn still marked as thinking. Answer text, an earlier turn's
     // failure and the line without a Retry are not the submitted turn's failure. No Retry is offered
@@ -3052,10 +3138,11 @@ async fn retirement_marker_cases(page: &Cdp) -> Result<()> {
     .await?;
     Ok(())
 }
+/// The message ID of the witness fixtures' submitted turn.
+const MESSAGE: &str = "11111111-2222-4333-8444-555555555555";
 
 async fn witness_cases(page: &Cdp) -> Result<()> {
     let cancel = CancellationToken::new();
-    const MESSAGE: &str = "11111111-2222-4333-8444-555555555555";
     // The trace says whether the fetch below the hook looked like the browser's own: the fixture's
     // stub transport reads as wrapped (checked in the cases below), the untouched fetch as native.
     mount(page, ACTIVE, "/", "").await?;
@@ -3117,368 +3204,395 @@ async fn witness_cases(page: &Cdp) -> Result<()> {
         "literal-link",
         "literal-link-incomplete",
     ] {
-        let checked: Result<()> = async {
-        mount(page, ACTIVE, "/", "").await?;
-        // ChatGPT stores a prompt holding a web address or link syntax as escaped Markdown, the
-        // address made a link (browser_commit.rs). The witness takes only that rewriting of this
-        // prompt as the prompt; another address, a link whose label differs, added text, escapes
-        // with no link, or link syntax left incomplete are not.
-        let (prompt, sent) = match case {
-            "unicode" => ("PUBLIC e\u{301} prompt", None),
-            "autolink" => (
-                "PUBLIC see https://public.example/a_b.",
-                Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\."),
-            ),
-            "autolink-other" => (
-                "PUBLIC see https://public.example/a_b.",
-                Some(r"PUBLIC see [https://other.example/a\_b](https://other.example/a\_b)\."),
-            ),
-            "autolink-mislabelled" => (
-                "PUBLIC see https://public.example/a_b.",
-                Some(r"PUBLIC see [https://public.example/a\_b](https://other.example/a\_b)\."),
-            ),
-            "autolink-extra" => (
-                "PUBLIC see https://public.example/a_b.",
-                Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\. More"),
-            ),
-            "escaped-unlinked" => ("PUBLIC witness prompt.", Some(r"PUBLIC witness prompt\.")),
-            "literal-link" => (
-                "PUBLIC type [label](target).",
-                Some(r"PUBLIC type \[label\]\(target\)\."),
-            ),
-            "literal-link-incomplete" => ("PUBLIC type [label]( now", Some(r"PUBLIC type [label]\( now")),
-            _ => ("PUBLIC witness prompt", None),
+        witness_case(page, case, &cancel)
+            .await
+            .with_context(|| format!("Witness case {case}"))?;
+    }
+    Ok(())
+}
+/// One submission witness case: the witness takes only its own request's prompt and
+/// message, and cleans up after itself.
+async fn witness_case(page: &Cdp, case: &str, cancel: &CancellationToken) -> Result<()> {
+    mount(page, ACTIVE, "/", "").await?;
+    // ChatGPT stores a prompt holding a web address or link syntax as escaped Markdown, the
+    // address made a link (browser_commit.rs). The witness takes only that rewriting of this
+    // prompt as the prompt; another address, a link whose label differs, added text, escapes
+    // with no link, or link syntax left incomplete are not.
+    let (prompt, sent) = match case {
+        "unicode" => ("PUBLIC e\u{301} prompt", None),
+        "autolink" => (
+            "PUBLIC see https://public.example/a_b.",
+            Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\."),
+        ),
+        "autolink-other" => (
+            "PUBLIC see https://public.example/a_b.",
+            Some(r"PUBLIC see [https://other.example/a\_b](https://other.example/a\_b)\."),
+        ),
+        "autolink-mislabelled" => (
+            "PUBLIC see https://public.example/a_b.",
+            Some(r"PUBLIC see [https://public.example/a\_b](https://other.example/a\_b)\."),
+        ),
+        "autolink-extra" => (
+            "PUBLIC see https://public.example/a_b.",
+            Some(r"PUBLIC see [https://public.example/a\_b](https://public.example/a\_b)\. More"),
+        ),
+        "escaped-unlinked" => ("PUBLIC witness prompt.", Some(r"PUBLIC witness prompt\.")),
+        "literal-link" => (
+            "PUBLIC type [label](target).",
+            Some(r"PUBLIC type \[label\]\(target\)\."),
+        ),
+        "literal-link-incomplete" => (
+            "PUBLIC type [label]( now",
+            Some(r"PUBLIC type [label]\( now"),
+        ),
+        _ => ("PUBLIC witness prompt", None),
+    };
+    mount_witness_fixture(page, case, prompt, sent, cancel).await?;
+    let mut reservation =
+        RendererReservation::acquire(page.clone(), "PUBLIC-witness-claim".into(), SHORT, cancel)
+            .await?;
+    let image_names: &[&str] = if case == "multimodal-two-images" {
+        &["PUBLIC.png", "PUBLIC-second.png"]
+    } else if case.starts_with("multimodal-") && case != "multimodal-unexpected-image" {
+        &["PUBLIC.png"]
+    } else {
+        &[]
+    };
+    let expectations = fixture_uploads(page, &reservation, image_names).await?;
+    let (_, nav) = browser_dom::capture_navigation(&reservation, SHORT, cancel).await?;
+    let mut prepared =
+        PreparedPrompt::stage(&mut reservation, prompt, &nav, &expectations, SHORT, cancel).await?;
+    if case.starts_with("search-") && case != "search-unselected" {
+        prepared.expect_web_search();
+    }
+    prepared.arm_send(&mut reservation, SHORT, cancel).await?;
+    // A same-source background call before admission is not creation evidence.
+    page.evaluate_with_arguments("(cfg)=>{window.fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({action:'next',history_and_training_disabled:true,messages:[{id:cfg.id,author:{role:'user'},content:{content_type:'text',parts:[cfg.prompt]}}]})});return window.__oracleSubmissionWitness.read().state;}",&json!([{"id":MESSAGE,"prompt":prompt}]),SHORT,cancel).await?;
+    let pending = page
+        .evaluate_with_arguments(
+            "()=>window.__oracleSubmissionWitness.read()",
+            &json!([]),
+            SHORT,
+            cancel,
+        )
+        .await?;
+    assert_eq!(
+        pending["state"], "pending",
+        "Unadmitted request captured: {case}"
+    );
+    reservation.dispatch_started(SHORT, cancel).await?;
+    prepared.send_once(&mut reservation, SHORT, cancel).await?;
+    prepared.cleanup(&mut reservation, SHORT).await?;
+    if !matches!(case, "immediate" | "unicode" | "probe-conflict") {
+        page.evaluate_with_arguments("(cfg)=>{if(cfg.case==='expired'){window.PUBLIC_realNow=Date.now;Date.now=()=>window.PUBLIC_realNow()+120001;}window.PUBLIC_pending();if(window.PUBLIC_realNow){Date.now=window.PUBLIC_realNow;delete window.PUBLIC_realNow;}return true;}",&json!([{"case":case}]),SHORT,cancel).await?;
+    }
+    if case == "probe-conflict" {
+        // Invalidate the collector while the original-source probe runs. The
+        // receipt must read the final state in this same renderer task.
+        page.evaluate_with_arguments(r#"(cfg)=>{
+            const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
+            turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
+            const user=turn.querySelector('[data-message-author-role]');
+            user.parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:[null,{props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}}]}}]};
+            const original=user.getAttribute;let checked=false;
+            user.getAttribute=function(name){if(!checked&&name==='data-message-id'){checked=true;window.PUBLIC_pending();}return original.call(this,name);};
+            document.querySelector('main').append(turn);return true;
+        }"#,&json!([{"id":MESSAGE,"prompt":prompt}]),SHORT,cancel).await?;
+        let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+            &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":prepared.submission_intent(),"saved":null}]),SHORT,cancel).await?;
+        assert_eq!(
+            receipt["probe"]["messages"][0]["matches"], true,
+            "Source fixture was not complete: {receipt}"
+        );
+        assert_eq!(
+            receipt["submission"]["state"], "invalid",
+            "Stale witness survived source inspection: {receipt}"
+        );
+    }
+    let observed=page.evaluate_with_arguments("()=>({state:window.__oracleSubmissionWitness.read?.()??window.__oracleSubmissionWitness.result,calls:window.PUBLIC_fetchCalls,receiver:window.PUBLIC_actualReceiver===window.PUBLIC_fetchReceiver,requestUntouched:window.PUBLIC_request?.bodyUsed===false})",&json!([]),SHORT,cancel).await?;
+    let valid = matches!(
+        case,
+        "immediate"
+            | "delayed"
+            | "replaced-fetch"
+            | "unicode"
+            | "multimodal-image"
+            | "multimodal-reordered"
+            | "multimodal-two-images"
+            | "search-inline"
+            | "search-suffix"
+            | "autolink"
+            | "literal-link"
+    );
+    if case == "privacy" || case == "privacy-view" {
+        assert_eq!(
+            observed["state"]["failureDetail"],
+            if case == "privacy" {
+                "history-disabled-not-true"
+            } else {
+                "temporary-refused"
+            }
+        );
+    }
+    // A message whose text differs from the prompt is told apart from one with a bad ID.
+    if case == "identity" || case == "source" || !valid && sent.is_some() {
+        assert_eq!(
+            observed["state"]["failureDetail"],
+            if case == "identity" {
+                "unqualified-identity"
+            } else {
+                "unqualified-content"
+            },
+            "{case}: {observed}"
+        );
+    }
+    anyhow::ensure!(
+        (observed["state"]["state"] == "captured") == valid,
+        "{case}: {observed}"
+    );
+    // The stream-end trace takes a Resource Timing entry only for the request the witness
+    // matched: same endpoint, started within that fetch call. A later same-endpoint request
+    // that finishes first, or another path, leaves it pending; a second entry inside the call
+    // makes it unavailable. It keeps exactly a version, the witness ID, a state and whole ms.
+    if valid {
+        stream_end_trace_cases(page, case, cancel).await?;
+    }
+    if matches!(case, "search-inline" | "search-suffix") {
+        // The committed user turn stores the pill token where the witness saw it; only a
+        // verified Web search intent lets the original-source probe accept it.
+        let source = if case == "search-inline" {
+            format!("@Web search {prompt}")
+        } else {
+            format!("{prompt}@Web search")
         };
         page.evaluate_with_arguments(r#"(cfg)=>{
-            sessionStorage.removeItem('oracle:target-claim');
-            window.PUBLIC_nativeFetch ??= window.fetch;
-            window.PUBLIC_fetchCalls=0;
-            window.PUBLIC_observers=[];
-            window.PerformanceObserver=class{constructor(callback){this.callback=callback;this.resource=false;window.PUBLIC_observers.push(this);}observe(options){this.resource=options?.type==='resource';}disconnect(){this.resource=false;}};
-            window.PUBLIC_fetchReceiver={public:true};
-            window.PUBLIC_transport=function(){window.PUBLIC_fetchStart=performance.now();window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
-            window.fetch=window.PUBLIC_transport;
-            document.querySelector('form').onsubmit=e=>{
-                e.preventDefault();
-                const payload={action:'next',history_and_training_disabled:cfg.case!=='privacy',messages:[{id:cfg.case==='identity'?'PUBLIC unqualified':cfg.messageId,author:{role:'user'},content:{content_type:'text',parts:[cfg.sent??(cfg.case==='source'?'PUBLIC wrong source':cfg.case==='unicode'?cfg.prompt.normalize('NFC'):cfg.prompt)]}}]};
-                if(cfg.case.startsWith('multimodal-')){
-                    const image={content_type:'image_asset_pointer',asset_pointer:'file-service://PUBLIC-image',width:1,height:1,size_bytes:68};
-                    let parts=[image,cfg.prompt];
-                    if(cfg.case==='multimodal-reordered')parts=[cfg.prompt,image];
-                    if(cfg.case==='multimodal-two-images'||cfg.case==='multimodal-excess-image')parts=[image,{...image,asset_pointer:'file-service://PUBLIC-second'},cfg.prompt];
-                    if(cfg.case==='multimodal-missing-text')parts=[image];
-                    if(cfg.case==='multimodal-duplicate-text')parts.push(cfg.prompt);
-                    if(cfg.case==='multimodal-unknown-part')parts.unshift({content_type:'audio_asset_pointer',asset_pointer:'PUBLIC-audio'});
-                    if(cfg.case==='multimodal-unknown-field')image.unqualified='PUBLIC';
-                    if(cfg.case==='multimodal-empty-pointer')image.asset_pointer='';
-                    if(cfg.case==='multimodal-invalid-width')image.width=0;
-                    if(cfg.case==='multimodal-invalid-height')image.height=0.5;
-                    if(cfg.case==='multimodal-invalid-size')image.size_bytes='68';
-                    if(cfg.case==='multimodal-no-image')parts=[cfg.prompt];
-                    if(cfg.case==='multimodal-wrong-source')parts=[image,'PUBLIC wrong source'];
-                    payload.messages[0].content={content_type:'multimodal_text',parts};
-                }
-                if(cfg.case.startsWith('search-')){
-                    payload.messages[0].content.parts=[cfg.case==='search-plain'?cfg.prompt:cfg.case==='search-suffix'?cfg.prompt+'@Web search':cfg.case==='search-suffix-spaced'?cfg.prompt+' @Web search':'@Web search '+cfg.prompt];
-                    if(cfg.case!=='search-unhinted'){payload.system_hints=['search'];payload.messages[0].metadata={system_hints:['search']};}
-                }
-                window.PUBLIC_pending=()=>{
-                    if(cfg.case==='privacy-view')document.querySelector('header button').setAttribute('aria-label','Turn on temporary chat');
-                    const body=JSON.stringify(payload);
-                    if(cfg.case==='request-body'){
-                        const request=new Request('https://chatgpt.com/backend-api/f/conversation',{method:'POST',body});
-                        window.PUBLIC_request=request;
-                        window.fetch.call(window.PUBLIC_fetchReceiver,request);
-                    }else{
-                        const endpoint=cfg.case==='query-endpoint'?'/backend-api/f/conversation?unqualified=1':cfg.case==='credential-endpoint'?'https://PUBLIC@chatgpt.com/backend-api/f/conversation':'/backend-api/f/conversation';
-                        window.fetch.call(window.PUBLIC_fetchReceiver,endpoint,{method:'POST',body});
-                        if(cfg.case==='duplicate')window.fetch('/backend-api/f/conversation',{method:'POST',body});
-                    }
-                };
-                if(cfg.case==='immediate'||cfg.case==='unicode'||cfg.case==='probe-conflict')window.PUBLIC_pending();
-            };
-            return true;
-        }"#,&json!([{"case":case,"prompt":prompt,"sent":sent,"messageId":MESSAGE}]),SHORT,&cancel).await?;
-        let mut reservation = RendererReservation::acquire(
-            page.clone(),
-            "PUBLIC-witness-claim".into(),
-            SHORT,
-            &cancel,
-        )
-        .await?;
-        let image_names: &[&str] = if case == "multimodal-two-images" {
-            &["PUBLIC.png", "PUBLIC-second.png"]
-        } else if case.starts_with("multimodal-") && case != "multimodal-unexpected-image" {
-            &["PUBLIC.png"]
-        } else {
-            &[]
-        };
-        let expectations = fixture_uploads(page, &reservation, image_names).await?;
-        let (_, nav) = browser_dom::capture_navigation(&reservation, SHORT, &cancel).await?;
-        let mut prepared = PreparedPrompt::stage(
-            &mut reservation,
-            prompt,
-            &nav,
-            &expectations,
-            SHORT,
-            &cancel,
-        )
-        .await?;
-        if case.starts_with("search-") && case != "search-unselected" {
-            prepared.expect_web_search();
+            const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
+            turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
+            turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:[null,{props:{item:{type:'user-message',messageId:cfg.id,message:cfg.source}}}]}}]};
+            document.querySelector('main').append(turn);return true;
+        }"#,&json!([{"id":MESSAGE,"source":source}]),SHORT,cancel).await?;
+        for web_search in [true, false] {
+            let mut intent = json!(prepared.submission_intent());
+            intent["webSearch"] = json!(web_search);
+            let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+                &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":intent,"saved":null}]),SHORT,cancel).await?;
+            anyhow::ensure!(
+                receipt["probe"]["messages"][0]["matches"] == web_search,
+                "{case} source with Web search {web_search}: {receipt}"
+            );
         }
-        prepared.arm_send(&mut reservation, SHORT, &cancel).await?;
-        // A same-source background call before admission is not creation evidence.
-        page.evaluate_with_arguments("(cfg)=>{window.fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({action:'next',history_and_training_disabled:true,messages:[{id:cfg.id,author:{role:'user'},content:{content_type:'text',parts:[cfg.prompt]}}]})});return window.__oracleSubmissionWitness.read().state;}",&json!([{"id":MESSAGE,"prompt":prompt}]),SHORT,&cancel).await?;
-        let pending = page
+    }
+    if case == "immediate" {
+        // On 7 November 2026 ChatGPT put a sibling before the message element, moving the
+        // item from child 1 to child 2. Two children that carry an item stay ambiguous. The
+        // children's length is page data: one far past the bound, or one a getter misreports to
+        // hide a second item, is ambiguous too, and neither may stall the walk. No item is
+        // reported apart from a stored text that differs, so a page change does not read as a
+        // prompt mismatch.
+        for (layout, complete, invalid, unavailable) in [
+            ("sibling", true, false, false),
+            ("two-items", false, true, false),
+            ("getter-length", false, true, false),
+            ("huge-length", false, true, false),
+            ("no-item", false, false, true),
+            ("other-text", false, false, false),
+        ] {
+            page.evaluate_with_arguments(r#"(cfg)=>{
+                document.querySelector('[data-turn-key="PUBLIC-user-turn"]')?.remove();
+                const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
+                turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
+                const message={props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}};
+                const sibling={props:{conversationId:'PUBLIC-conversation',messageIds:[cfg.id]}};
+                const children=cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:
+                    cfg.layout==='two-items'?[undefined,message,message]:
+                    cfg.layout==='huge-length'?Object.assign([undefined,sibling,message],{length:2**32-1}):
+                    cfg.layout==='no-item'?[undefined,sibling,null]:
+                    cfg.layout==='other-text'?[undefined,{props:{item:{...message.props.item,message:'PUBLIC other prompt'}}}]:
+                    new Proxy([undefined,message,sibling,message],{get:(target,key)=>key==='length'?2:target[key]});
+                turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children}}]};
+                document.querySelector('main').append(turn);return true;
+            }"#,&json!([{"id":MESSAGE,"prompt":prompt,"layout":layout}]),SHORT,cancel).await?;
+            let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
+                &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":prepared.submission_intent(),"saved":null}]),SHORT,cancel).await?;
+            anyhow::ensure!(
+                receipt["probe"]["messages"][0]["matches"] == complete
+                    && receipt["probe"]["invalid"] == invalid
+                    && receipt["probe"]["messages"][0]["sourceUnavailable"]
+                        == if unavailable {
+                            json!(true)
+                        } else {
+                            json!(null)
+                        },
+                "{layout} layout: {receipt}"
+            );
+        }
+    }
+    assert_eq!(
+        observed["calls"],
+        if matches!(case, "duplicate" | "probe-conflict") {
+            3
+        } else {
+            2
+        },
+        "Transport changed: {case}"
+    );
+    if !matches!(case, "duplicate" | "probe-conflict") {
+        assert_eq!(observed["receiver"], true, "Fetch receiver changed: {case}");
+    }
+    if case == "request-body" {
+        assert_eq!(observed["requestUntouched"], true);
+    }
+    if valid {
+        assert_eq!(observed["state"]["witness"]["messageId"], MESSAGE);
+        assert_eq!(
+            observed["state"]["witness"]["owner"],
+            json!(reservation.owner())
+        );
+        assert!(observed["state"]["witness"].get("prompt").is_none());
+        prepared.cleanup_witness(&reservation, true, SHORT).await?;
+        let retained = page
             .evaluate_with_arguments(
-                "()=>window.__oracleSubmissionWitness.read()",
+                "()=>({detached:typeof window.__oracleSubmissionWitness.read==='undefined'&&typeof window.__oracleSubmissionWitness.stop==='undefined'&&typeof window.__oracleSubmissionWitness.cleanup==='undefined',...window.__oracleSubmissionWitness.result})",
                 &json!([]),
                 SHORT,
-                &cancel,
+                cancel,
             )
             .await?;
         assert_eq!(
-            pending["state"], "pending",
-            "Unadmitted request captured: {case}"
+            retained["detached"], true,
+            "Collector closures were retained"
         );
-        reservation.dispatch_started(SHORT, &cancel).await?;
-        prepared.send_once(&mut reservation, SHORT, &cancel).await?;
-        prepared.cleanup(&mut reservation, SHORT).await?;
-        if !matches!(case, "immediate" | "unicode" | "probe-conflict") {
-            page.evaluate_with_arguments("(cfg)=>{if(cfg.case==='expired'){window.PUBLIC_realNow=Date.now;Date.now=()=>window.PUBLIC_realNow()+120001;}window.PUBLIC_pending();if(window.PUBLIC_realNow){Date.now=window.PUBLIC_realNow;delete window.PUBLIC_realNow;}return true;}",&json!([{"case":case}]),SHORT,&cancel).await?;
-        }
-        if case == "probe-conflict" {
-            // Invalidate the collector while the original-source probe runs. The
-            // receipt must read the final state in this same renderer task.
-            page.evaluate_with_arguments(r#"(cfg)=>{
-                const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
-                turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
-                const user=turn.querySelector('[data-message-author-role]');
-                user.parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:[null,{props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}}]}}]};
-                const original=user.getAttribute;let checked=false;
-                user.getAttribute=function(name){if(!checked&&name==='data-message-id'){checked=true;window.PUBLIC_pending();}return original.call(this,name);};
-                document.querySelector('main').append(turn);return true;
-            }"#,&json!([{"id":MESSAGE,"prompt":prompt}]),SHORT,&cancel).await?;
-            let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
-                &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":prepared.submission_intent(),"saved":null}]),SHORT,&cancel).await?;
-            assert_eq!(
-                receipt["probe"]["messages"][0]["matches"], true,
-                "Source fixture was not complete: {receipt}"
-            );
-            assert_eq!(
-                receipt["submission"]["state"], "invalid",
-                "Stale witness survived source inspection: {receipt}"
-            );
-        }
-            let observed=page.evaluate_with_arguments("()=>({state:window.__oracleSubmissionWitness.read?.()??window.__oracleSubmissionWitness.result,calls:window.PUBLIC_fetchCalls,receiver:window.PUBLIC_actualReceiver===window.PUBLIC_fetchReceiver,requestUntouched:window.PUBLIC_request?.bodyUsed===false})",&json!([]),SHORT,&cancel).await?;
-        let valid = matches!(
-            case,
-            "immediate"
-                | "delayed"
-                | "replaced-fetch"
-                | "unicode"
-                | "multimodal-image"
-                | "multimodal-reordered"
-                | "multimodal-two-images"
-                | "search-inline"
-                | "search-suffix"
-                | "autolink"
-                | "literal-link"
-        );
-        if case == "privacy" || case == "privacy-view" {
-            assert_eq!(
-                observed["state"]["failureDetail"],
-                if case == "privacy" {
-                    "history-disabled-not-true"
-                } else {
-                    "temporary-refused"
-                }
-            );
-        }
-        // A message whose text differs from the prompt is told apart from one with a bad ID.
-        if case == "identity" || case == "source" || !valid && sent.is_some() {
-            assert_eq!(
-                observed["state"]["failureDetail"],
-                if case == "identity" {
-                    "unqualified-identity"
-                } else {
-                    "unqualified-content"
-                },
-                "{case}: {observed}"
-            );
-        }
-        anyhow::ensure!(
-            (observed["state"]["state"] == "captured") == valid,
-            "{case}: {observed}"
-        );
-        // The stream-end trace takes a Resource Timing entry only for the request the witness
-        // matched: same endpoint, started within that fetch call. A later same-endpoint request
-        // that finishes first, or another path, leaves it pending; a second entry inside the call
-        // makes it unavailable. It keeps exactly a version, the witness ID, a state and whole ms.
-        if valid {
-            let feed = |path: &'static str, own: bool, ms: u64| {
-                let args = json!([{"path":path,"own":own,"ms":ms}]);
-                let cancel = &cancel;
-                async move {
-                    page.evaluate_with_arguments("(cfg)=>{const url='https://chatgpt.com/backend-api/f/'+cfg.path;const start=cfg.own?window.PUBLIC_fetchStart:performance.now();const list={getEntries:()=>[{initiatorType:'fetch',name:url,startTime:start,responseEnd:start+cfg.ms}]};for(const observer of window.PUBLIC_observers.filter(item=>item.resource))observer.callback(list);const r=window.__oracleStreamEnd;return r&&r.witnessId===window.__oracleSubmissionWitness?.witnessId?{keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,text:JSON.stringify(r)}:null;}", &args, SHORT, cancel)
-                        .await
-                }
-            };
-            for (path, own) in [("conversation", false), ("other", true)] {
-                let trace = feed(path, own, 5).await?;
-                anyhow::ensure!(
-                    trace["record"]["state"] == "pending" && trace["record"]["ms"].is_null(),
-                    "{case} stream-end trace took a foreign entry ({path}, own {own}): {trace}"
-                );
-            }
-            let trace = feed("conversation", true, 1234).await?;
-            anyhow::ensure!(
-                trace["keys"] == json!(["fetch", "ms", "state", "version", "witnessId"])
-                    && trace["record"]["fetch"] == "wrapped"
-                    && trace["frozen"] == true
-                    && trace["record"]["version"] == 1
-                    && trace["record"]["state"] == "ended"
-                    && trace["record"]["ms"] == 1234,
-                "{case} stream-end trace: {trace}"
-            );
-            let text = trace["text"].as_str().unwrap_or_default();
-            anyhow::ensure!(
-                // The fixture's prompt and response body both carry the PUBLIC marker.
-                !text.contains("PUBLIC"),
-                "{case} stream-end trace kept content: {text}"
-            );
-            // The runner's read returns this record only for its own witness.
-            let witness = trace["record"]["witnessId"].clone();
-            for (id, expected) in [
-                (witness, json!({"state":"ended","ms":1234,"fetch":"wrapped"})),
-                (json!("PUBLIC-other-witness"), Value::Null),
-            ] {
-                let read = page.evaluate_with_arguments(crate::browser_runner::STREAM_END,&json!([{"witnessId":id}]),SHORT,&cancel).await?;
-                anyhow::ensure!(read == expected, "{case} stream-end read: {read}");
-            }
-            let trace = feed("conversation", true, 9).await?;
-            anyhow::ensure!(
-                trace["record"]["state"] == "unavailable" && trace["record"]["ms"].is_null(),
-                "{case} stream-end trace kept an ambiguous entry: {trace}"
-            );
-        }
-        if matches!(case, "search-inline" | "search-suffix") {
-            // The committed user turn stores the pill token where the witness saw it; only a
-            // verified Web search intent lets the original-source probe accept it.
-            let source = if case == "search-inline" {
-                format!("@Web search {prompt}")
-            } else {
-                format!("{prompt}@Web search")
-            };
-            page.evaluate_with_arguments(r#"(cfg)=>{
-                const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
-                turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
-                turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children:[null,{props:{item:{type:'user-message',messageId:cfg.id,message:cfg.source}}}]}}]};
-                document.querySelector('main').append(turn);return true;
-            }"#,&json!([{"id":MESSAGE,"source":source}]),SHORT,&cancel).await?;
-            for web_search in [true, false] {
-                let mut intent = json!(prepared.submission_intent());
-                intent["webSearch"] = json!(web_search);
-                let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
-                    &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":intent,"saved":null}]),SHORT,&cancel).await?;
-                anyhow::ensure!(
-                    receipt["probe"]["messages"][0]["matches"] == web_search,
-                    "{case} source with Web search {web_search}: {receipt}"
-                );
-            }
-        }
-        if case == "immediate" {
-            // On 7 November 2026 ChatGPT put a sibling before the message element, moving the
-            // item from child 1 to child 2. Two children that carry an item stay ambiguous. The
-            // children's length is page data: one far past the bound, or one a getter misreports to
-            // hide a second item, is ambiguous too, and neither may stall the walk. No item is
-            // reported apart from a stored text that differs, so a page change does not read as a
-            // prompt mismatch.
-            for (layout, complete, invalid, unavailable) in [
-                ("sibling", true, false, false),
-                ("two-items", false, true, false),
-                ("getter-length", false, true, false),
-                ("huge-length", false, true, false),
-                ("no-item", false, false, true),
-                ("other-text", false, false, false),
-            ] {
-                page.evaluate_with_arguments(r#"(cfg)=>{
-                    document.querySelector('[data-turn-key="PUBLIC-user-turn"]')?.remove();
-                    const turn=document.createElement('article');turn.setAttribute('data-turn-key','PUBLIC-user-turn');
-                    turn.innerHTML='<div><div data-message-author-role="user" data-message-id="'+cfg.id+'">PUBLIC rendered source</div></div>';
-                    const message={props:{item:{type:'user-message',messageId:cfg.id,message:cfg.prompt}}};
-                    const sibling={props:{conversationId:'PUBLIC-conversation',messageIds:[cfg.id]}};
-                    const children=cfg.layout==='sibling'?[undefined,sibling,message,sibling,null]:
-                        cfg.layout==='two-items'?[undefined,message,message]:
-                        cfg.layout==='huge-length'?Object.assign([undefined,sibling,message],{length:2**32-1}):
-                        cfg.layout==='no-item'?[undefined,sibling,null]:
-                        cfg.layout==='other-text'?[undefined,{props:{item:{...message.props.item,message:'PUBLIC other prompt'}}}]:
-                        new Proxy([undefined,message,sibling,message],{get:(target,key)=>key==='length'?2:target[key]});
-                    turn.querySelector('[data-message-author-role]').parentElement.__reactProps$PUBLIC={children:[null,null,{props:{children}}]};
-                    document.querySelector('main').append(turn);return true;
-                }"#,&json!([{"id":MESSAGE,"prompt":prompt,"layout":layout}]),SHORT,&cancel).await?;
-                let receipt=page.evaluate_with_arguments(&crate::browser_commit::receipt_probe(),
-                    &json!([{"owner":reservation.owner(),"ids":[],"prompt":prompt,"intent":prepared.submission_intent(),"saved":null}]),SHORT,&cancel).await?;
-                anyhow::ensure!(
-                    receipt["probe"]["messages"][0]["matches"] == complete
-                        && receipt["probe"]["invalid"] == invalid
-                        && receipt["probe"]["messages"][0]["sourceUnavailable"]
-                            == if unavailable { json!(true) } else { json!(null) },
-                    "{layout} layout: {receipt}"
-                );
-            }
-        }
         assert_eq!(
-            observed["calls"],
-            if matches!(case, "duplicate" | "probe-conflict") {
-                3
-            } else {
-                2
-            },
-            "Transport changed: {case}"
+            retained["witness"], observed["state"]["witness"],
+            "Lost settled recovery witness"
         );
-        if !matches!(case, "duplicate" | "probe-conflict") {
-            assert_eq!(observed["receiver"], true, "Fetch receiver changed: {case}");
-        }
-        if case == "request-body" {
-            assert_eq!(observed["requestUntouched"], true);
-        }
-        if valid {
-            assert_eq!(observed["state"]["witness"]["messageId"], MESSAGE);
-            assert_eq!(
-                observed["state"]["witness"]["owner"],
-                json!(reservation.owner())
-            );
-            assert!(observed["state"]["witness"].get("prompt").is_none());
-            prepared.cleanup_witness(&reservation, true, SHORT).await?;
-            let retained = page
-                .evaluate_with_arguments(
-                    "()=>({detached:typeof window.__oracleSubmissionWitness.read==='undefined'&&typeof window.__oracleSubmissionWitness.stop==='undefined'&&typeof window.__oracleSubmissionWitness.cleanup==='undefined',...window.__oracleSubmissionWitness.result})",
-                    &json!([]),
-                    SHORT,
-                    &cancel,
-                )
-                .await?;
-            assert_eq!(
-                retained["detached"], true,
-                "Collector closures were retained"
-            );
-            assert_eq!(
-                retained["witness"], observed["state"]["witness"],
-                "Lost settled recovery witness"
-            );
-        }
-        if case == "replaced-fetch" {
-            page.evaluate_with_arguments("()=>{window.PUBLIC_foreignFetch=()=>Promise.resolve(new Response());window.fetch=window.PUBLIC_foreignFetch;return true;}",&json!([]),SHORT,&cancel).await?;
-        }
-        prepared.cleanup_witness(&reservation, false, SHORT).await?;
-        let cleaned=page.evaluate_with_arguments("(cfg)=>{const result={absent:!window.__oracleSubmissionWitness,restored:window.fetch===(cfg.case==='replaced-fetch'?window.PUBLIC_foreignFetch:window.PUBLIC_transport)};window.fetch=window.PUBLIC_nativeFetch;sessionStorage.removeItem('oracle:target-claim');delete window.PUBLIC_request;return result;}",&json!([{"case":case}]),SHORT,&cancel).await?;
-        assert_eq!(cleaned, json!({"absent":true,"restored":true}), "{case}");
-        Ok(())
-        }.await;
-        checked.with_context(|| format!("Witness case {case}"))?;
     }
+    if case == "replaced-fetch" {
+        page.evaluate_with_arguments("()=>{window.PUBLIC_foreignFetch=()=>Promise.resolve(new Response());window.fetch=window.PUBLIC_foreignFetch;return true;}",&json!([]),SHORT,cancel).await?;
+    }
+    prepared.cleanup_witness(&reservation, false, SHORT).await?;
+    let cleaned=page.evaluate_with_arguments("(cfg)=>{const result={absent:!window.__oracleSubmissionWitness,restored:window.fetch===(cfg.case==='replaced-fetch'?window.PUBLIC_foreignFetch:window.PUBLIC_transport)};window.fetch=window.PUBLIC_nativeFetch;sessionStorage.removeItem('oracle:target-claim');delete window.PUBLIC_request;return result;}",&json!([{"case":case}]),SHORT,cancel).await?;
+    assert_eq!(cleaned, json!({"absent":true,"restored":true}), "{case}");
+    Ok(())
+}
+/// Mounts the witness fixture page for `case`, its request stub answering with `sent` or
+/// `prompt`.
+async fn mount_witness_fixture(
+    page: &Cdp,
+    case: &str,
+    prompt: &str,
+    sent: Option<&str>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    page.evaluate_with_arguments(r#"(cfg)=>{
+        sessionStorage.removeItem('oracle:target-claim');
+        window.PUBLIC_nativeFetch ??= window.fetch;
+        window.PUBLIC_fetchCalls=0;
+        window.PUBLIC_observers=[];
+        window.PerformanceObserver=class{constructor(callback){this.callback=callback;this.resource=false;window.PUBLIC_observers.push(this);}observe(options){this.resource=options?.type==='resource';}disconnect(){this.resource=false;}};
+        window.PUBLIC_fetchReceiver={public:true};
+        window.PUBLIC_transport=function(){window.PUBLIC_fetchStart=performance.now();window.PUBLIC_fetchCalls++;window.PUBLIC_actualReceiver=this;window.PUBLIC_actualInput=arguments[0];return Promise.resolve(new Response('PUBLIC response'));};
+        window.fetch=window.PUBLIC_transport;
+        document.querySelector('form').onsubmit=e=>{
+            e.preventDefault();
+            const payload={action:'next',history_and_training_disabled:cfg.case!=='privacy',messages:[{id:cfg.case==='identity'?'PUBLIC unqualified':cfg.messageId,author:{role:'user'},content:{content_type:'text',parts:[cfg.sent??(cfg.case==='source'?'PUBLIC wrong source':cfg.case==='unicode'?cfg.prompt.normalize('NFC'):cfg.prompt)]}}]};
+            if(cfg.case.startsWith('multimodal-')){
+                const image={content_type:'image_asset_pointer',asset_pointer:'file-service://PUBLIC-image',width:1,height:1,size_bytes:68};
+                let parts=[image,cfg.prompt];
+                if(cfg.case==='multimodal-reordered')parts=[cfg.prompt,image];
+                if(cfg.case==='multimodal-two-images'||cfg.case==='multimodal-excess-image')parts=[image,{...image,asset_pointer:'file-service://PUBLIC-second'},cfg.prompt];
+                if(cfg.case==='multimodal-missing-text')parts=[image];
+                if(cfg.case==='multimodal-duplicate-text')parts.push(cfg.prompt);
+                if(cfg.case==='multimodal-unknown-part')parts.unshift({content_type:'audio_asset_pointer',asset_pointer:'PUBLIC-audio'});
+                if(cfg.case==='multimodal-unknown-field')image.unqualified='PUBLIC';
+                if(cfg.case==='multimodal-empty-pointer')image.asset_pointer='';
+                if(cfg.case==='multimodal-invalid-width')image.width=0;
+                if(cfg.case==='multimodal-invalid-height')image.height=0.5;
+                if(cfg.case==='multimodal-invalid-size')image.size_bytes='68';
+                if(cfg.case==='multimodal-no-image')parts=[cfg.prompt];
+                if(cfg.case==='multimodal-wrong-source')parts=[image,'PUBLIC wrong source'];
+                payload.messages[0].content={content_type:'multimodal_text',parts};
+            }
+            if(cfg.case.startsWith('search-')){
+                payload.messages[0].content.parts=[cfg.case==='search-plain'?cfg.prompt:cfg.case==='search-suffix'?cfg.prompt+'@Web search':cfg.case==='search-suffix-spaced'?cfg.prompt+' @Web search':'@Web search '+cfg.prompt];
+                if(cfg.case!=='search-unhinted'){payload.system_hints=['search'];payload.messages[0].metadata={system_hints:['search']};}
+            }
+            window.PUBLIC_pending=()=>{
+                if(cfg.case==='privacy-view')document.querySelector('header button').setAttribute('aria-label','Turn on temporary chat');
+                const body=JSON.stringify(payload);
+                if(cfg.case==='request-body'){
+                    const request=new Request('https://chatgpt.com/backend-api/f/conversation',{method:'POST',body});
+                    window.PUBLIC_request=request;
+                    window.fetch.call(window.PUBLIC_fetchReceiver,request);
+                }else{
+                    const endpoint=cfg.case==='query-endpoint'?'/backend-api/f/conversation?unqualified=1':cfg.case==='credential-endpoint'?'https://PUBLIC@chatgpt.com/backend-api/f/conversation':'/backend-api/f/conversation';
+                    window.fetch.call(window.PUBLIC_fetchReceiver,endpoint,{method:'POST',body});
+                    if(cfg.case==='duplicate')window.fetch('/backend-api/f/conversation',{method:'POST',body});
+                }
+            };
+            if(cfg.case==='immediate'||cfg.case==='unicode'||cfg.case==='probe-conflict')window.PUBLIC_pending();
+        };
+        return true;
+    }"#,&json!([{"case":case,"prompt":prompt,"sent":sent,"messageId":MESSAGE}]),SHORT,cancel).await?;
+    Ok(())
+}
+/// The stream-end trace takes a Resource Timing entry only for the request the witness
+/// matched.
+async fn stream_end_trace_cases(page: &Cdp, case: &str, cancel: &CancellationToken) -> Result<()> {
+    let feed = |path: &'static str, own: bool, ms: u64| {
+        let args = json!([{"path":path,"own":own,"ms":ms}]);
+        async move {
+            page.evaluate_with_arguments("(cfg)=>{const url='https://chatgpt.com/backend-api/f/'+cfg.path;const start=cfg.own?window.PUBLIC_fetchStart:performance.now();const list={getEntries:()=>[{initiatorType:'fetch',name:url,startTime:start,responseEnd:start+cfg.ms}]};for(const observer of window.PUBLIC_observers.filter(item=>item.resource))observer.callback(list);const r=window.__oracleStreamEnd;return r&&r.witnessId===window.__oracleSubmissionWitness?.witnessId?{keys:Object.keys(r).sort(),frozen:Object.isFrozen(r),record:r,text:JSON.stringify(r)}:null;}", &args, SHORT, cancel)
+                .await
+        }
+    };
+    for (path, own) in [("conversation", false), ("other", true)] {
+        let trace = feed(path, own, 5).await?;
+        anyhow::ensure!(
+            trace["record"]["state"] == "pending" && trace["record"]["ms"].is_null(),
+            "{case} stream-end trace took a foreign entry ({path}, own {own}): {trace}"
+        );
+    }
+    let trace = feed("conversation", true, 1234).await?;
+    anyhow::ensure!(
+        trace["keys"] == json!(["fetch", "ms", "state", "version", "witnessId"])
+            && trace["record"]["fetch"] == "wrapped"
+            && trace["frozen"] == true
+            && trace["record"]["version"] == 1
+            && trace["record"]["state"] == "ended"
+            && trace["record"]["ms"] == 1234,
+        "{case} stream-end trace: {trace}"
+    );
+    let text = trace["text"].as_str().unwrap_or_default();
+    anyhow::ensure!(
+        // The fixture's prompt and response body both carry the PUBLIC marker.
+        !text.contains("PUBLIC"),
+        "{case} stream-end trace kept content: {text}"
+    );
+    // The runner's read returns this record only for its own witness.
+    let witness = trace["record"]["witnessId"].clone();
+    for (id, expected) in [
+        (
+            witness,
+            json!({"state":"ended","ms":1234,"fetch":"wrapped"}),
+        ),
+        (json!("PUBLIC-other-witness"), Value::Null),
+    ] {
+        let read = page
+            .evaluate_with_arguments(
+                crate::browser_runner::STREAM_END,
+                &json!([{"witnessId":id}]),
+                SHORT,
+                cancel,
+            )
+            .await?;
+        anyhow::ensure!(read == expected, "{case} stream-end read: {read}");
+    }
+    let trace = feed("conversation", true, 9).await?;
+    anyhow::ensure!(
+        trace["record"]["state"] == "unavailable" && trace["record"]["ms"].is_null(),
+        "{case} stream-end trace kept an ambiguous entry: {trace}"
+    );
     Ok(())
 }
 
