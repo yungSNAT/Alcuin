@@ -155,6 +155,7 @@ fn actual_cli_perf_summary_json_and_failure_output_match_the_read_contract() {
     let run = |path: &std::path::Path| {
         Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", root.path())
             .env("USERPROFILE", root.path())
@@ -200,6 +201,7 @@ fn cli_perf_trace_writes_sanitised_complete_traces_and_skips_perf_summary() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_alcuin"));
         command
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", root.path())
             .env("USERPROFILE", root.path())

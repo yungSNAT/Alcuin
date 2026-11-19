@@ -19,6 +19,7 @@ const NOT_SUPPORTED: &str = "is not supported in this build";
 fn cli(home: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home)
         .env("USERPROFILE", home)

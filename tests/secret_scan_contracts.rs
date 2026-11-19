@@ -25,6 +25,7 @@ fn secret_file(root: &Path, name: &str) {
 fn cli(root: &Path, args: &[&str], stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", root)
         .env("USERPROFILE", root)

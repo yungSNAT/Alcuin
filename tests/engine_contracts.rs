@@ -89,6 +89,7 @@ fn legacy_browser_and_explicit_provider_flags_keep_their_cli_priority() {
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())

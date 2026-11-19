@@ -1149,6 +1149,7 @@ mod tests {
                 "--nocapture",
             ])
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env(
                 "ALCUIN_PUBLIC_TUNNEL_MARKER",
                 std::env::var_os("ALCUIN_PUBLIC_TUNNEL_MARKER").unwrap(),
@@ -1181,6 +1182,7 @@ mod tests {
                 "--nocapture",
             ])
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ALCUIN_PUBLIC_TUNNEL_MARKER", &marker)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1321,6 +1323,7 @@ mod tests {
                 "--nocapture",
             ])
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ALCUIN_PUBLIC_TUNNEL_MARKER", &marker)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
