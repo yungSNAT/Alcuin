@@ -4536,6 +4536,14 @@ fn commit_fallback(
                 .collect::<Vec<_>>()
         ),
     );
+    // An older request's raw media is its staged upload, which `staged` replaces: keep it
+    // as the fallback's raw source so the run's cleanup still deletes it.
+    if let Some(fallback) = next.fallback.as_mut()
+        && fallback.remote_source.is_none()
+        && fallback.raw_source.is_none()
+    {
+        fallback.raw_source = request.staged_uploads.clone();
+    }
     next.staged_uploads = Some(staged);
     next.fallback_used = true;
     let attempt =
