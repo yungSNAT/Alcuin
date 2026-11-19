@@ -606,64 +606,8 @@ pub(super) async fn check_native_saved(
     }
     let mut borrowed = None;
     if case == "saved-borrowed-ack" {
-        // A borrowed remote run's answer tab holds the launcher's idle browser open
-        // until acknowledgement retires it; the profile hint then retries the launcher.
-        connection.record_idle_owner(&id);
-        let answer = connection
-            .browser
-            .call(
-                "Target.createTarget",
-                json!({"url":"about:blank"}),
-                timeout,
-                &cancel,
-            )
-            .await?;
-        let answer = answer["targetId"]
-            .as_str()
-            .context("No fixture answer tab")?
-            .to_owned();
-        crate::browser_runner::settle_saved_idle(store, &id).await;
-        ensure!(
-            identity.liveness() == Liveness::Alive
-                && store.stored_for_update(&id)?["browser"]["runtime"]["persistentBrowserDisposal"]
-                    ["disposition"]
-                    == "retained",
-            "Borrowed answer tab did not retain the idle browser"
-        );
-        let profile = connection.profile.as_ref().unwrap().path().to_owned();
-        let created = store.create(
-            json!({"prompt":"PUBLIC borrowed remote run","model":"gpt-6-pro","engine":"browser"}),
-            &profile,
-            None,
-        )?;
-        let created = created["id"].as_str().unwrap().to_owned();
-        store.update(&created, |current| {
-            Ok(Some(
-                json!({"browser":merge_object(&current["browser"],&json!({"runtime":
-                {"ownedRecoveryTarget":{"creator":{"lease":{"profileDir":profile}}}}}))}),
-            ))
-        })?;
-        connection
-            .browser
-            .close_owned_target(&answer, timeout, &cancel)
-            .await?;
-        let deadline = Instant::now() + timeout;
-        while connection
-            .browser
-            .call("Target.getTargets", json!({}), timeout, &cancel)
-            .await?["targetInfos"]
-            .as_array()
-            .context("No fixture target inventory")?
-            .iter()
-            .any(|row| row["targetId"] == answer)
-        {
-            ensure!(
-                Instant::now() < deadline,
-                "Retired fixture answer tab stayed in the inventory"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        borrowed = Some(created);
+        borrowed =
+            Some(saved_borrowed_ack(connection, store, &id, &identity, timeout, &cancel).await?);
     }
     let mut failed_borrower = None;
     if case == "saved-borrowed-failed" {
@@ -765,63 +709,7 @@ pub(super) async fn check_native_saved(
         .disconnect_and_wait(Duration::from_secs(1))
         .await?;
     if let Some((remote, record, creator, target)) = remote_ack {
-        // The host replies after the commit; retirement and the launcher retry follow.
-        let acknowledgement = crate::remote_result::commit_acknowledgement(store, &record)?;
-        let journal = crate::browser_disposition::TargetJournal::open(store)?;
-        let committed = journal.read(&creator["allocationId"])?;
-        ensure!(
-            committed["commit"].is_object()
-                && committed["finalisedAt"].is_string()
-                && committed["disposition"]["decision"] == "pending"
-                && identity.liveness() == Liveness::Alive,
-            "Remote ACK commit closed or retired before its reply: {}",
-            committed["disposition"]
-        );
-        let completed = store.stored_for_update(&remote)?;
-        let warning = acknowledgement.finish(store, &record).await?;
-        ensure!(
-            warning.is_none(),
-            "Remote ACK cleanup warned: {warning:?}; journal {}",
-            journal.read(&creator["allocationId"])?["disposition"]
-        );
-        let retired = journal.read(&creator["allocationId"])?;
-        ensure!(
-            retired["disposition"]["decision"] == "retired"
-                && retired["disposition"]["absence"] == "confirmed-absent"
-                && retired["commit"] == committed["commit"],
-            "Remote answer tab retirement differs: {}",
-            retired["disposition"]
-        );
-        let disposal =
-            &store.stored_for_update(&id)?["browser"]["runtime"]["persistentBrowserDisposal"];
-        ensure!(
-            identity.liveness() == Liveness::Dead
-                && disposal["disposition"] == "exited"
-                && disposal["naturalExit"] == true,
-            "Acknowledged remote run did not retry the idle launcher: {disposal}"
-        );
-        let settled = store.stored_for_update(&remote)?;
-        ensure!(
-            settled["browser"]["runtime"]["targetDispositionPending"] == false
-                && settled["browser"]["runtime"]["targetRetiredAt"].is_string()
-                && settled["recoveryRequired"] == false
-                && target.lease().profile().records()?["leases"]
-                    .as_array()
-                    .is_some_and(Vec::is_empty),
-            "Remote ACK retirement was not settled or its lease released"
-        );
-        for key in ["status", "completedAt", "dispatch"] {
-            ensure!(
-                settled[key] == completed[key],
-                "Remote ACK cleanup changed {key}"
-            );
-        }
-        ensure!(
-            settled["browser"]["capturedAnswer"] == completed["browser"]["capturedAnswer"]
-                && settled["browser"]["remoteDelivery"] == completed["browser"]["remoteDelivery"],
-            "Remote ACK cleanup changed the delivered capture"
-        );
-        drop(target);
+        check_remote_ack(store, &id, &identity, &remote, &record, &creator, target).await?;
     }
     if let Some((created, mut borrower)) = failed_borrower {
         crate::browser_runner::settle_borrowed_run(store, &created, &mut borrower, true, false)
@@ -884,6 +772,144 @@ pub(super) async fn check_native_saved(
     if let Some(mut child) = connection.child.take() {
         tokio::task::spawn_blocking(move || child.wait()).await??;
     }
+    Ok(())
+}
+/// A borrowed remote run's answer tab holds the launcher's idle browser open until
+/// acknowledgement retires it; the profile hint then retries the launcher. Returns the
+/// borrowed run's session ID.
+#[cfg(all(test, any(target_os = "linux", windows)))]
+async fn saved_borrowed_ack(
+    connection: &ChromeConnection,
+    store: &SessionStore,
+    id: &str,
+    identity: &ProcessIdentity,
+    timeout: Duration,
+    cancel: &CancellationToken,
+) -> Result<String> {
+    connection.record_idle_owner(id);
+    let answer = connection
+        .browser
+        .call(
+            "Target.createTarget",
+            json!({"url":"about:blank"}),
+            timeout,
+            cancel,
+        )
+        .await?;
+    let answer = answer["targetId"]
+        .as_str()
+        .context("No fixture answer tab")?
+        .to_owned();
+    crate::browser_runner::settle_saved_idle(store, id).await;
+    ensure!(
+        identity.liveness() == Liveness::Alive
+            && store.stored_for_update(id)?["browser"]["runtime"]["persistentBrowserDisposal"]["disposition"]
+                == "retained",
+        "Borrowed answer tab did not retain the idle browser"
+    );
+    let profile = connection.profile.as_ref().unwrap().path().to_owned();
+    let created = store.create(
+        json!({"prompt":"PUBLIC borrowed remote run","model":"gpt-6-pro","engine":"browser"}),
+        &profile,
+        None,
+    )?;
+    let created = created["id"].as_str().unwrap().to_owned();
+    store.update(&created, |current| {
+        Ok(Some(
+            json!({"browser":merge_object(&current["browser"],&json!({"runtime":
+            {"ownedRecoveryTarget":{"creator":{"lease":{"profileDir":profile}}}}}))}),
+        ))
+    })?;
+    connection
+        .browser
+        .close_owned_target(&answer, timeout, cancel)
+        .await?;
+    let deadline = Instant::now() + timeout;
+    while connection
+        .browser
+        .call("Target.getTargets", json!({}), timeout, cancel)
+        .await?["targetInfos"]
+        .as_array()
+        .context("No fixture target inventory")?
+        .iter()
+        .any(|row| row["targetId"] == answer)
+    {
+        ensure!(
+            Instant::now() < deadline,
+            "Retired fixture answer tab stayed in the inventory"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    Ok(created)
+}
+/// The client's acknowledgement commits a remote run's result, then retires its answer tab
+/// and retries the idle launcher, leaving the delivered capture unchanged.
+#[cfg(all(test, any(target_os = "linux", windows)))]
+async fn check_remote_ack(
+    store: &SessionStore,
+    id: &str,
+    identity: &ProcessIdentity,
+    remote: &str,
+    record: &crate::remote_result::RemoteRecord,
+    creator: &Value,
+    target: crate::browser_target::OwnedTarget,
+) -> Result<()> {
+    // The host replies after the commit; retirement and the launcher retry follow.
+    let acknowledgement = crate::remote_result::commit_acknowledgement(store, record)?;
+    let journal = crate::browser_disposition::TargetJournal::open(store)?;
+    let committed = journal.read(&creator["allocationId"])?;
+    ensure!(
+        committed["commit"].is_object()
+            && committed["finalisedAt"].is_string()
+            && committed["disposition"]["decision"] == "pending"
+            && identity.liveness() == Liveness::Alive,
+        "Remote ACK commit closed or retired before its reply: {}",
+        committed["disposition"]
+    );
+    let completed = store.stored_for_update(remote)?;
+    let warning = acknowledgement.finish(store, record).await?;
+    ensure!(
+        warning.is_none(),
+        "Remote ACK cleanup warned: {warning:?}; journal {}",
+        journal.read(&creator["allocationId"])?["disposition"]
+    );
+    let retired = journal.read(&creator["allocationId"])?;
+    ensure!(
+        retired["disposition"]["decision"] == "retired"
+            && retired["disposition"]["absence"] == "confirmed-absent"
+            && retired["commit"] == committed["commit"],
+        "Remote answer tab retirement differs: {}",
+        retired["disposition"]
+    );
+    let disposal = &store.stored_for_update(id)?["browser"]["runtime"]["persistentBrowserDisposal"];
+    ensure!(
+        identity.liveness() == Liveness::Dead
+            && disposal["disposition"] == "exited"
+            && disposal["naturalExit"] == true,
+        "Acknowledged remote run did not retry the idle launcher: {disposal}"
+    );
+    let settled = store.stored_for_update(remote)?;
+    ensure!(
+        settled["browser"]["runtime"]["targetDispositionPending"] == false
+            && settled["browser"]["runtime"]["targetRetiredAt"].is_string()
+            && settled["recoveryRequired"] == false
+            && target.lease().profile().records()?["leases"]
+                .as_array()
+                .is_some_and(Vec::is_empty),
+        "Remote ACK retirement was not settled or its lease released"
+    );
+    for key in ["status", "completedAt", "dispatch"] {
+        ensure!(
+            settled[key] == completed[key],
+            "Remote ACK cleanup changed {key}"
+        );
+    }
+    ensure!(
+        settled["browser"]["capturedAnswer"] == completed["browser"]["capturedAnswer"]
+            && settled["browser"]["remoteDelivery"] == completed["browser"]["remoteDelivery"],
+        "Remote ACK cleanup changed the delivered capture"
+    );
+    drop(target);
     Ok(())
 }
 

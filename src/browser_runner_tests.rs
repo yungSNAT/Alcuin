@@ -623,96 +623,10 @@ impl Exchange {
             return value;
         }
         if expression.contains("alcuin-dom:pending-retirement") {
-            if matches!(
-                self.fault,
-                Fault::RecoveryRetryParentCancelledAtRetirement
-                    | Fault::RecoveryRetryModelCancelledAtRetirement
-                    | Fault::RecoveryRetryObserverCancelledAtRetirement
-            ) {
-                let child = self.store.require(&self.id).unwrap();
-                let parent_id = child["browser"]["attempt"]["parentId"].as_str().unwrap();
-                let parent = self.store.require(parent_id).unwrap();
-                if !parent["cleanupWarning"].is_string() {
-                    return json!("foreign");
-                }
-                match self.fault {
-                    Fault::RecoveryRetryParentCancelledAtRetirement => {
-                        self.store
-                            .update(parent_id, |_| Ok(Some(json!({"status":"cancelled"}))))
-                            .unwrap();
-                    }
-                    Fault::RecoveryRetryModelCancelledAtRetirement => {
-                        self.store
-                            .update_session_and_model(
-                                parent_id,
-                                parent["model"].as_str().unwrap(),
-                                |_, _| Ok(Some((json!({}), Some(json!({"status":"cancelled"}))))),
-                            )
-                            .unwrap();
-                    }
-                    _ => self.cancel.cancel(),
-                }
-            }
-            if matches!(self.fault, Fault::RecoveryParentCancelledAtRetirement) {
-                let child = self.store.require(&self.id).unwrap();
-                self.store
-                    .update(
-                        child["browser"]["attempt"]["parentId"].as_str().unwrap(),
-                        |_| Ok(Some(json!({"status":"cancelled"}))),
-                    )
-                    .unwrap();
-            }
-            if matches!(self.fault, Fault::RecoveryObserverCancelledAtRetirement) {
-                self.cancel.cancel();
-            }
-            self.pending_retirement_read = true;
-            return json!(if self.retirement_marker.is_none() {
-                "unmarked"
-            } else if matches!(self.fault, Fault::CloseRefusedForeignMarker)
-                || self.retirement_marker.as_ref() != Some(&cfg["retirementId"])
-            {
-                "foreign"
-            } else {
-                "marked"
-            });
+            return self.reply_pending_retirement(cfg);
         }
         if expression.contains("alcuin-dom:submission-receipt") {
-            if matches!(self.fault, Fault::RecoveryParentCancelledAtReceipt) {
-                let child = self.store.require(&self.id).unwrap();
-                self.store
-                    .update(
-                        child["browser"]["attempt"]["parentId"].as_str().unwrap(),
-                        |_| Ok(Some(json!({"status":"cancelled"}))),
-                    )
-                    .unwrap();
-            }
-            self.prompt = cfg["prompt"].as_str().unwrap().into();
-            let probe = self.probe(false);
-            if matches!(
-                self.fault,
-                Fault::ProviderLateCommit
-                    | Fault::ProviderLateCommitPendingAnswer
-                    | Fault::ProviderLateCommitStalledBeforeAnswer
-                    | Fault::ProviderLateCommitLostAck
-                    | Fault::ProviderLateCommitChangedOwner
-            ) && !self.provider_recovery_started()
-            {
-                return json!({"probe":probe,"submission":{"state":"pending"}});
-            }
-            let submission = if !cfg["saved"].is_null() {
-                json!({"state":"captured","witness":cfg["saved"]})
-            } else if matches!(self.fault, Fault::MissingWitness) {
-                json!({"state":"unavailable"})
-            } else if matches!(self.fault, Fault::ConflictingWitness) {
-                json!({"state":"invalid","reason":"multiple-submission-requests"})
-            } else {
-                json!({"state":"captured","witness":{"version":1,
-                    "owner":if matches!(self.fault, Fault::ForeignWitness){json!({"claimId":"PUBLIC-foreign","reservationId":"PUBLIC-foreign"})}else{cfg["owner"].clone()},
-                    "witnessId":cfg["intent"]["witnessId"],"dispatchGuardId":cfg["intent"]["dispatchGuardId"],
-                    "promptSha256":cfg["intent"]["promptSha256"],"messageId":probe["messages"].as_array().unwrap().last().unwrap()["id"],
-                    "source":"chatgpt-fetch-v1","requestPath":"/backend-api/f/conversation","historyDisabled":true}})
-            };
-            return json!({"probe":probe,"submission":submission});
+            return self.reply_submission_receipt(cfg);
         }
         if expression.contains("const previousIds = ids") {
             self.prompt = args[2].as_str().unwrap().into();
@@ -731,73 +645,10 @@ impl Exchange {
             return json!({"state":"ended","ms":1234});
         }
         if expression.contains("alcuin-dom:image-buttons") {
-            if matches!(self.fault, Fault::SequentialNamedFirstThenFile) && self.turns.len() == 2 {
-                return json!([{"url":"https://chatgpt.com/backend-api/files/file_public/download","candidateId":"3:0","filename":"PUBLIC.txt","label":"Download PUBLIC.txt","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}]);
-            }
-            if matches!(self.fault, Fault::SequentialNamedDelayed) && self.turns.len() == 3 {
-                self.delayed_image_visible = true;
-            }
-            let present = matches!(
-                self.fault,
-                Fault::ButtonImage
-                    | Fault::MultiButtonImage
-                    | Fault::MultiButtonLostImage
-                    | Fault::NonImageButton
-                    | Fault::NonImageThenImage
-                    | Fault::InvalidDirectButtonImage
-                    | Fault::ButtonOutputFailure
-                    | Fault::SequentialNamedButtons
-                    | Fault::SequentialNamedBadButtons
-            ) || matches!(self.fault, Fault::LateButtonImage)
-                && self.result_reads >= 6;
-            if !present {
-                return json!([]);
-            }
-            let mut buttons = vec![
-                json!({"url":"browser-download","candidateId":"1:0","filename":"Download","label":"Download","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}),
-            ];
-            if matches!(
-                self.fault,
-                Fault::MultiButtonImage | Fault::MultiButtonLostImage
-            ) && self.download_count < 2
-            {
-                buttons.push(json!({"url":"browser-download","candidateId":"1:1","filename":"Download 2","label":"Download 2","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}));
-            }
-            return json!(buttons);
+            return self.reply_image_buttons(cfg);
         }
         if expression.contains("alcuin-dom:copy-markdown") {
-            if matches!(self.fault, Fault::CopyMissing) {
-                return json!({"success":false,"status":"missing-button"});
-            }
-            if matches!(self.fault, Fault::CopyTimeout) {
-                return json!({"success":false,"status":"timeout"});
-            }
-            if self.sequential() {
-                return json!({"success":true,"markdown":format!("PUBLIC owned answer {}",self.turns.len())});
-            }
-            if matches!(self.fault, Fault::ReplacedOutcomeTarget) {
-                self.store.update(&self.id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"runtime":merge_object(&current["browser"]["runtime"],&json!({"chromeTargetId":"REPLACED-PUBLIC","ownedRecoveryTarget":merge_object(&current["browser"]["runtime"]["ownedRecoveryTarget"],&json!({"targetId":"REPLACED-PUBLIC"}))}))}))})))).unwrap();
-            } else if matches!(self.fault, Fault::ChangedOutcomeOptions) {
-                self.store.update(&self.id,|current|Ok(Some(json!({"options":merge_object(&current["options"],&json!({"writeOutputPath":std::path::Path::new(current["cwd"].as_str().unwrap()).join("PUBLIC-foreign-output.md")}))})))).unwrap();
-            } else if matches!(self.fault, Fault::StoppedOutcomeModel) {
-                let model = self.store.require(&self.id).unwrap()["model"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
-                self.store
-                    .update_model(
-                        &self.id,
-                        &model,
-                        &json!({"status":"partial","marker":"PUBLIC winning model outcome"}),
-                    )
-                    .unwrap();
-            } else if matches!(self.fault, Fault::CancelOutcome) {
-                self.cancel.cancel();
-            }
-            if matches!(self.fault, Fault::ImageOnly) {
-                return json!({"success":true,"markdown":""});
-            }
-            return json!({"success":true,"markdown":if matches!(self.fault,Fault::FileExportFormatted | Fault::FormattedMarkdown | Fault::FormattedImage){"**PUBLIC exact owned answer**\n\nEnd\n".to_owned()}else{self.answer()}});
+            return self.reply_copy_markdown();
         }
         if expression.contains("return claim.submission.commitReceipt;") {
             return self.commit.clone();
@@ -809,65 +660,10 @@ impl Exchange {
             return self.turn_retry(cfg);
         }
         if expression.contains("alcuin-dom:submission") {
-            self.owner = cfg["owner"].clone();
-            if cfg["action"] == "dispatch" && matches!(self.fault, Fault::AttemptParentBeforeSend) {
-                let child = self.store.require(&self.id).unwrap();
-                let parent = child["browser"]["attempt"]["parentId"].as_str().unwrap();
-                self.store
-                    .update(parent, |_| Ok(Some(json!({"status":"cancelled"}))))
-                    .unwrap();
-            }
-            if cfg["action"] == "acquire" && matches!(self.fault, Fault::BorrowedClaimed) {
-                return json!(false);
-            }
-            if cfg["action"] == "quarantine"
-                && matches!(self.fault, Fault::PreDispatchQuarantineFailed)
-            {
-                return json!(false);
-            }
-            if cfg["action"] == "release" && matches!(self.fault, Fault::BorrowedReleaseFailed) {
-                return json!(false);
-            }
-            if cfg["action"] == "acknowledge" {
-                self.commit = cfg["receipt"].clone();
-                if matches!(self.fault, Fault::ProviderLateCommitStalledBeforeAnswer) {
-                    hold_session_lock(&self.store, &self.id, RECOVERY_BUDGET);
-                }
-            }
-            return json!(true);
+            return self.reply_submission(cfg);
         }
         if expression.contains("alcuin-dom:predispatch-marker") {
-            assert_eq!(cfg["owner"], self.owner);
-            let creator =
-                self.store.require(&self.id).unwrap()["browser"]["runtime"]["ownedRecoveryTarget"]
-                    ["creator"]
-                    .clone();
-            let record = TargetJournal::open(&self.store)
-                .unwrap()
-                .read(&creator["allocationId"])
-                .unwrap();
-            assert_eq!(
-                record["disposition"]["reason"],
-                "settled-pre-dispatch-close-pending"
-            );
-            assert_eq!(record["disposition"]["absence"], "unknown");
-            assert_eq!(record["preDispatchRetirement"]["id"], cfg["retirementId"]);
-            if let Some(previous) = &self.retirement_marker {
-                assert_eq!(
-                    *previous, cfg["retirementId"],
-                    "A retry must resume its saved marker"
-                );
-            }
-            self.retirement_marker = Some(cfg["retirementId"].clone());
-            if matches!(self.fault, Fault::PreDispatchLeaseReplacement) {
-                let path = std::path::Path::new(creator["lease"]["profileDir"].as_str().unwrap())
-                    .join("oracle-tab-leases.json");
-                let mut registry: Value =
-                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-                registry["leases"][0]["sessionId"] = json!("PUBLIC replacement lease");
-                crate::storage::atomic_json(&path, &registry).unwrap();
-            }
-            return json!(true);
+            return self.reply_predispatch_marker(cfg);
         }
         if expression.contains("alcuin-dom:predispatch-inspect") {
             assert_eq!(cfg["owner"], self.owner);
@@ -890,133 +686,13 @@ impl Exchange {
             return json!({"token":cfg["token"],"parentReservationId":cfg["owner"]["reservationId"],"rendererId":"renderer-public","acknowledged":true});
         }
         if expression.contains("alcuin-dom:inspection-finish") {
-            if matches!(
-                self.fault,
-                Fault::CancelPickerDefault
-                    | Fault::CancelPickerKeep
-                    | Fault::CancelPickerKeepClose
-                    | Fault::CancelPickerRefuse
-            ) {
-                self.cancel.cancel();
-            }
-            if matches!(self.fault, Fault::CleanupFailed) {
-                return json!({"token":cfg["token"],"parentReservationId":cfg["owner"]["reservationId"],"rendererId":cfg["rendererId"],"acknowledged":true,"cleanupComplete":false,"cleanupState":"menu-visible advanced-open"});
-            }
-            return json!({"token":cfg["token"],"parentReservationId":cfg["owner"]["reservationId"],"rendererId":cfg["rendererId"],"acknowledged":true,"cleanupComplete":true});
+            return self.reply_inspection_finish(cfg);
         }
         if expression.contains("alcuin-dom:model") {
-            if cfg["strategy"] == "select" {
-                let first = self
-                    .trace
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|r| {
-                        r["params"]["expression"]
-                            .as_str()
-                            .is_some_and(|s| s.contains("alcuin-dom:model"))
-                    })
-                    .count()
-                    == 1;
-                match self.fault {
-                    Fault::ModelThrottled | Fault::ModelsNotLoaded => {
-                        return json!({"status":"option-not-found"});
-                    }
-                    Fault::ModelPending if first => return json!({"status":"pending"}),
-                    _ => {}
-                }
-            }
-            if self.sequential() && self.sends.load(Ordering::SeqCst) > 0 {
-                assert_eq!(
-                    cfg["inspectCurrent"], "evidence",
-                    "Sequential turn selected a model"
-                );
-                if matches!(self.fault, Fault::SequentialWrongModel) {
-                    return json!({"status":"already-selected","label":"GPT-5.6 Sol","checkedCount":1,"ownerKey":"model-trigger-public"});
-                }
-            }
-            if self.borrowed()
-                || matches!(
-                    self.fault,
-                    Fault::Followup
-                        | Fault::LegacyFollowup
-                        | Fault::FollowupExtraHigh
-                        | Fault::FollowupWrongModel
-                        | Fault::FollowupWrongTier
-                )
-            {
-                assert_eq!(
-                    cfg["inspectCurrent"], "evidence",
-                    "Follow-up selected a model"
-                );
-            }
-            if matches!(self.fault, Fault::ChangedModelOwner)
-                && self.trace.lock().unwrap().iter().any(|r| {
-                    r["params"]["expression"].as_str().is_some_and(|s| {
-                        s.contains("alcuin-dom:thinking") && s.contains("\"inspectionOnly\":false")
-                    })
-                })
-            {
-                return json!({"status":"already-selected","label":"GPT-6","checkedCount":1,"ownerKey":"model-trigger-replaced"});
-            }
-            if self.pro_model_checked() {
-                return json!({"status":"already-selected","label":"Pro","checkedCount":1,"ownerKey":"model-trigger-public"});
-            }
-            return json!({"status":"already-selected","label":if matches!(self.fault, Fault::WrongModel|Fault::FollowupWrongModel|Fault::PreDispatchForeignMarker|Fault::PreDispatchLeaseReplacement|Fault::PreDispatchQuarantineFailed|Fault::PreDispatchCloseRefused|Fault::CancelPickerDefault|Fault::CancelPickerKeep|Fault::CancelPickerKeepClose|Fault::CancelPickerRefuse) {"GPT-5.6 Sol"} else {"GPT-6"},"checkedCount":1,"ownerKey":"model-trigger-public"});
+            return self.reply_model(cfg);
         }
         if expression.contains("alcuin-dom:thinking") {
-            if self.sequential() && self.sends.load(Ordering::SeqCst) > 0 {
-                assert_eq!(
-                    cfg["inspectionOnly"], true,
-                    "Sequential turn selected a thinking effort"
-                );
-                if matches!(self.fault, Fault::SequentialWrongTier) {
-                    return json!({"status":"ready","selectedLevel":"extra-high","ownerKey":"model-trigger-public","basis":"checked-tier-row"});
-                }
-            }
-            if self.borrowed()
-                || matches!(
-                    self.fault,
-                    Fault::Followup
-                        | Fault::LegacyFollowup
-                        | Fault::FollowupExtraHigh
-                        | Fault::FollowupWrongModel
-                        | Fault::FollowupWrongTier
-                )
-            {
-                assert_eq!(
-                    cfg["inspectionOnly"], true,
-                    "Follow-up selected a thinking effort"
-                );
-            }
-            if cfg["inspectionOnly"] == true {
-                return json!({"status":"ready","selectedLevel":if matches!(self.fault, Fault::WrongTier | Fault::BorrowedWrongTier) {json!("extended")}else if matches!(self.fault,Fault::FollowupWrongTier){json!("extra-high")} else {cfg["level"].clone()},"ownerKey":"model-trigger-public","basis":if cfg["level"] == "pro" && !matches!(self.fault, Fault::ProModelLegacyRow | Fault::LegacyRowPro) {"slider-label-and-index"} else {"checked-tier-row"}});
-            }
-            if cfg["level"] == "pro"
-                && matches!(
-                    self.fault,
-                    Fault::DisabledPro
-                        | Fault::SequentialExtraHigh
-                        | Fault::DisabledExtraHigh
-                        | Fault::ProModelExtraHigh
-                        | Fault::SequentialExtraHighProModel
-                )
-            {
-                return json!({"status":"option-disabled","label":"Pro","unavailableModel":"GPT-6","notice":"PUBLIC disabled row"});
-            }
-            if matches!(self.fault, Fault::DisabledProForeign) {
-                return json!({"status":"option-disabled","label":"Pro","notice":"PUBLIC weekly limit"});
-            }
-            if matches!(self.fault, Fault::DisabledExtraHigh) {
-                return json!({"status":"option-disabled","label":"Extra High","notice":"PUBLIC disabled row"});
-            }
-            if matches!(self.fault, Fault::GenericUnavailable) {
-                return json!({"status":"option-not-found"});
-            }
-            if cfg["level"] == "pro" {
-                return json!({"status":"switched","label":"Pro"});
-            }
-            return json!({"status":"switched","label":"Extra High","modelKind":"thinking"});
+            return self.reply_thinking(cfg);
         }
         if expression.contains("alcuin-dom:temporary-chat") {
             let state = self.sequential_privacy().unwrap_or_else(|| {
@@ -1047,25 +723,7 @@ impl Exchange {
             return json!({"ready":true,"blocked":null,"convertedToFile":false,"sawInput":true});
         }
         if expression.contains("guard.fallback(cfg.prompt)") {
-            if matches!(self.fault, Fault::BorrowedPartialPrompt) {
-                return json!({"ready":true,"complete":false,"sawInput":true,"blocked":null,"convertedToFile":false,"length":10});
-            }
-            if cfg["prompt"]
-                .as_str()
-                .is_some_and(|prompt| prompt.len() >= 50_000)
-                && matches!(
-                    self.fault,
-                    Fault::TruncatedComposer
-                        | Fault::RemoteTruncatedComposer
-                        | Fault::SmallComposerMismatch
-                        | Fault::PromptCleanupFailed
-                        | Fault::PromptRollbackFailed
-                )
-            {
-                let length = cfg["prompt"].as_str().unwrap().encode_utf16().count();
-                return json!({"ready":true,"complete":false,"sawInput":true,"blocked":null,"convertedToFile":false,"length":if matches!(self.fault,Fault::SmallComposerMismatch){length-1000}else{30_000}});
-            }
-            return json!({"ready":true,"complete":true,"sawInput":true,"blocked":null,"convertedToFile":false});
+            return self.reply_guard_fallback_cfg_prompt(cfg);
         }
         if expression.contains("?.seal?.()") {
             return json!({"ready":true,"complete":true,"blocked":null,"convertedToFile":false,"guardId":cfg["guardId"],"listenersDetached":true,"guardRetained":true});
@@ -1077,42 +735,13 @@ impl Exchange {
             return json!({"baseline":0});
         }
         if expression.contains("alcuin-dom:send-focus") {
-            let calls = self
-                .trace
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|r| {
-                    r["params"]["expression"]
-                        .as_str()
-                        .is_some_and(|s| s.contains("alcuin-dom:send-focus"))
-                })
-                .count();
-            return match self.fault {
-                Fault::SendSettling if calls <= 2 => json!({"status":"unavailable"}),
-                Fault::SendNeverReady | Fault::SendAttachmentsNeverReady => {
-                    json!({"status":"unavailable"})
-                }
-                _ => json!({"status":"focused"}),
-            };
+            return self.reply_send_focus();
         }
         if expression.contains("alcuin-dom:chat-list-rate-limit") {
             return json!(matches!(self.fault, Fault::ChatListLimited));
         }
         if expression.contains("alcuin-dom:send-prepare") {
-            if matches!(self.fault, Fault::AttemptParentBeforeIntent) {
-                let child = self.store.require(&self.id).unwrap();
-                let parent = child["browser"]["attempt"]["parentId"].as_str().unwrap();
-                self.store
-                    .update(parent, |_| Ok(Some(json!({"status":"cancelled"}))))
-                    .unwrap();
-            }
-            if matches!(self.fault, Fault::SequentialChangedPrior)
-                && self.sends.load(Ordering::SeqCst) == 1
-            {
-                self.store.update(&self.id,|current|Ok(Some(json!({"dispatch":merge_object(&current["dispatch"],&json!({"promptSha256":"PUBLIC changed prior dispatch"}))})))).unwrap();
-            }
-            return json!({"guardInstalled":true,"focused":true,"attachmentsReady":true,"promptReady":true,"preparationReady":true,"contextMatches":true});
+            return self.reply_send_prepare();
         }
         if expression.contains("const summary={cleaned:true,sawKeyDown:") {
             return json!({"cleaned":true,"sawKeyDown":true,"sawClick":true,"admitted":true,"blocked":null});
@@ -1124,236 +753,10 @@ impl Exchange {
             return json!({"restored":!matches!(self.fault,Fault::PromptRollbackFailed)});
         }
         if expression.contains("alcuin-dom:result") {
-            if matches!(self.fault, Fault::RecoveryParentCancelledAtAnswer) {
-                let child = self.store.require(&self.id).unwrap();
-                self.store
-                    .update(
-                        child["browser"]["attempt"]["parentId"].as_str().unwrap(),
-                        |_| Ok(Some(json!({"status":"cancelled"}))),
-                    )
-                    .unwrap();
-            }
-            if self.recovery_observed && matches!(self.fault, Fault::CancelOutcome) {
-                self.cancel.cancel();
-                self.fault = Fault::None;
-            }
-            if self.download_count > 0 {
-                match self.fault {
-                    Fault::TargetDuringDownload => {
-                        self.store.update(&self.id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"runtime":merge_object(&current["browser"]["runtime"],&json!({"chromeTargetId":"REPLACED-PUBLIC","ownedRecoveryTarget":merge_object(&current["browser"]["runtime"]["ownedRecoveryTarget"],&json!({"targetId":"REPLACED-PUBLIC"}))}))}))})))).unwrap();
-                    }
-                    Fault::ModelDuringDownload => {
-                        let model = self.store.require(&self.id).unwrap()["model"]
-                            .as_str()
-                            .unwrap()
-                            .to_owned();
-                        self.store.update_model(&self.id,&model,&json!({"status":"partial","marker":"PUBLIC winning model outcome"})).unwrap();
-                    }
-                    Fault::PartialDuringDownload | Fault::CancelledDuringDownload => {
-                        self.store.update(&self.id,|_|Ok(Some(json!({"status":if matches!(self.fault,Fault::PartialDuringDownload){"partial"}else{"cancelled"},"completedAt":"PUBLIC winning terminal time","marker":"PUBLIC winning session outcome"})))).unwrap();
-                    }
-                    Fault::OptionsDuringDownload => {
-                        self.store.update(&self.id,|current|Ok(Some(json!({"options":merge_object(&current["options"],&json!({"writeOutputPath":std::path::Path::new(current["cwd"].as_str().unwrap()).join("PUBLIC-foreign-output.md")}))})))).unwrap();
-                    }
-                    Fault::CancelDuringDownload => self.cancel.cancel(),
-                    _ => {}
-                }
-            }
-            self.result_reads += 1;
-            let mut result = self.result();
-            match self.fault {
-                Fault::ContentWithheld => {
-                    result["text"] = json!("This content can't be shown");
-                    result["withheld"] = json!(true);
-                    result["unloaded"] = json!(false);
-                }
-                Fault::ResponseLoadFailedBesideImage => {
-                    result["text"] = json!("This response couldn\u{2019}t load");
-                    result["images"] = json!([{"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public","alt":"Generated image","width":12,"height":12}]);
-                }
-                Fault::RetryOffered if cfg["uiErrors"] == true => {
-                    return json!({"uiError":"temporary_unavailable"});
-                }
-                Fault::StreamFailed if cfg["uiErrors"] == true => {
-                    return json!({"uiError":"temporary_unavailable","uiErrorText":"Error in message stream"});
-                }
-                Fault::GenerationFailedThenRetry
-                | Fault::GenerationFailedThenMarked
-                | Fault::GeneratedThenUnloaded
-                    if cfg["uiErrors"] == true && !self.turn_retried() =>
-                {
-                    return json!({"uiError":"temporary_unavailable"});
-                }
-                Fault::RetryAuthorityLost if cfg["uiErrors"] == true => {
-                    patch_runtime(
-                        &self.store,
-                        &self.id,
-                        json!({"submissionOwner":"PUBLIC another owner"}),
-                    );
-                    return json!({"uiError":"temporary_unavailable"});
-                }
-                Fault::UnloadedRetrySpent if !self.turn_retried() => {
-                    if self.result_reads == 1 {
-                        runtime_marker(&self.store, &self.id);
-                    }
-                    result = unloaded(result);
-                }
-                Fault::UnloadedThenTryAgain
-                | Fault::UnloadedRateLimited
-                | Fault::UnloadedConnectionLost
-                | Fault::UnloadedBorrowed
-                | Fault::UnloadedSequential
-                | Fault::RetryNeverStarts
-                | Fault::RetriedThenTimesOut
-                | Fault::RetriedThenGenerationFails
-                    if !self.turn_retried() =>
-                {
-                    result = unloaded(result);
-                }
-                Fault::RetriedThenTimesOut | Fault::ConnectionLost => {
-                    return json!({"pending":true,"stopExists":false,"strongThinkingActive":false});
-                }
-                Fault::RetriedThenGenerationFails => {
-                    return json!({"uiError":"temporary_unavailable"});
-                }
-                Fault::UnloadedAfterTryAgain => result = unloaded(result),
-                Fault::GeneratedThenUnloaded if self.turn_retried() => result = unloaded(result),
-                Fault::UnloadedHealed if self.retry_read() => {
-                    return json!({"pending":true,"stopExists":false,"strongThinkingActive":false});
-                }
-                Fault::UnloadedHealed => result = unloaded(result),
-                Fault::AnswerlessComplete => {
-                    return json!({"pending":true,"stopExists":false,"strongThinkingActive":false,"answerless":true});
-                }
-                Fault::AnswerlessBriefly if self.result_reads <= 3 => {
-                    return json!({"pending":true,"stopExists":false,"strongThinkingActive":false,"answerless":true});
-                }
-                _ => {}
-            }
-            let recovering = self.provider_recovery_started();
-            if matches!(
-                self.fault,
-                Fault::ProviderLateCommitPendingAnswer
-                    | Fault::ProviderLateCommitStalledBeforeAnswer
-                    | Fault::ProviderLateCommitChangedOwner
-                    | Fault::AnswerNeverCompletes
-            ) || matches!(self.fault, Fault::ProviderLateAnswerDeadline) && !recovering
-            {
-                result["completionVisible"] = json!(false);
-            }
-            if !recovering
-                && matches!(
-                    self.fault,
-                    Fault::ProviderLateAnswer
-                        | Fault::ProviderRecoveryWrongSource
-                        | Fault::ProviderRecoveryChangedRequest
-                        | Fault::ProviderRecoveryChangedOwner
-                        | Fault::ProviderRecoveryCancelled
-                        | Fault::ProviderRecoveryPrivacy
-                )
-            {
-                result["text"] = json!("This response couldn’t load");
-            }
-            if recovering {
-                match self.fault {
-                    Fault::ProviderRecoveryWrongSource => {
-                        result["lastUserOriginalSourceText"] =
-                            json!("PUBLIC changed recovery source")
-                    }
-                    Fault::ProviderRecoveryChangedOwner | Fault::ProviderLateCommitChangedOwner => {
-                        self.store.update(&self.id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"runtime":merge_object(&current["browser"]["runtime"],&json!({"controllerPid":0}))}))})))).unwrap();
-                    }
-                    Fault::ProviderRecoveryChangedRequest => {
-                        let mut request = request(&self.store, &self.id).unwrap();
-                        request.prompt = "PUBLIC changed committed recovery request".into();
-                        request.prompt_sha256 = sha256(request.prompt.as_bytes());
-                        atomic_json(
-                            &self
-                                .store
-                                .directory(&self.id)
-                                .unwrap()
-                                .join("browser-request.json"),
-                            &request,
-                        )
-                        .unwrap();
-                    }
-                    Fault::ProviderRecoveryCancelled => self.cancel.cancel(),
-                    _ => {}
-                }
-            }
-            if self.pending_retirement_read
-                && matches!(self.fault, Fault::CloseRefusedChangedSource)
-            {
-                result["lastUserOriginalSourceText"] = json!("PUBLIC changed pending source");
-            }
-            if self.pending_retirement_read
-                && matches!(self.fault, Fault::CloseRefusedActiveThinking)
-            {
-                result["strongThinkingActive"] = json!(true);
-            }
-            if self.pending_retirement_read
-                && matches!(self.fault, Fault::CloseRefusedMissingCompletion)
-            {
-                result["completionVisible"] = json!(false);
-            }
-            if matches!(self.fault, Fault::TwoFilePartial)
-                && self.download_count == 2
-                && !self.recovery_observed
-            {
-                result["lastAssistantTurnId"] = json!("PUBLIC interrupted second file publication");
-            }
-            if cfg["retirementId"].is_string() {
-                if matches!(self.fault, Fault::AnswerDuringRetirement)
-                    || self.recovery_observed
-                        && matches!(self.fault, Fault::RecoveryAnswerDuringRetirement)
-                {
-                    result["text"] = json!("PUBLIC changed completed answer");
-                }
-                if matches!(self.fault, Fault::SourceDuringRetirement)
-                    || self.recovery_observed
-                        && matches!(self.fault, Fault::RecoverySourceDuringRetirement)
-                {
-                    result["lastUserOriginalSourceText"] = json!("PUBLIC changed original source");
-                }
-            }
-            if matches!(
-                self.fault,
-                Fault::DelayedImage | Fault::NonImageThenImage | Fault::DelayedBadImage
-            ) && self.result_reads >= 6
-            {
-                result["images"] = json!([{"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public","alt":"Generated image","width":12,"height":12}]);
-            }
-            if matches!(
-                self.fault,
-                Fault::MultiImage | Fault::PartialImage | Fault::FirstBadMultiImage
-            ) {
-                result["images"].as_array_mut().unwrap().push(json!({"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public_2","alt":"Generated image 2","width":12,"height":12}));
-            }
-            if matches!(self.fault, Fault::DuplicateImage) {
-                result["images"].as_array_mut().unwrap().push(json!({"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public&preview=large","alt":"Generated larger image","width":24,"height":24}));
-            }
-            return result;
+            return self.reply_result(cfg);
         }
         if expression.contains("alcuin-dom:recovery") {
-            self.recovery_observed = true;
-            if matches!(self.fault, Fault::OrphanModelError) {
-                let model = self.store.require(&self.id).unwrap()["model"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
-                self.store
-                    .update_model(
-                        &self.id,
-                        &model,
-                        &json!({"status":"error","marker":"PUBLIC concurrent terminal model"}),
-                    )
-                    .unwrap();
-            }
-            return json!(if matches!(self.fault, Fault::CleanupCleanRetry) {
-                "clean"
-            } else {
-                "submission"
-            });
+            return self.reply_recovery();
         }
         if expression.contains("alcuin-dom:cancelled-settle") {
             return json!(matches!(self.fault, Fault::CancelSendGenerating));
@@ -1385,35 +788,7 @@ impl Exchange {
             return json!(true);
         }
         if expression.contains("alcuin-dom:retire") {
-            let accepted = !matches!(self.fault, Fault::ForeignRetirement)
-                && (!matches!(
-                    self.fault,
-                    Fault::CleanupRetry | Fault::SequentialNamedDelayed
-                ) || expression.contains("alcuin-dom:retire-quarantine"))
-                && (!matches!(
-                    self.fault,
-                    Fault::CleanupCleanRetry
-                        | Fault::RecoveryAnswerDuringRetirement
-                        | Fault::RecoverySourceDuringRetirement
-                ) || self.recovery_observed);
-            if accepted {
-                self.retirement_marker = Some(cfg["retirementId"].clone());
-            }
-            // Marking a completed target comes just before its last authority check.
-            if matches!(self.fault, Fault::CrowdedRetirement) {
-                for index in 0..50 {
-                    let id = format!("public-unrelated-{index}");
-                    let directory = self.store.root().join(&id);
-                    std::fs::create_dir_all(&directory).unwrap();
-                    crate::storage::atomic_json(
-                        &directory.join("meta.json"),
-                        &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
-                    )
-                    .unwrap();
-                }
-                crate::sessions::READ_SESSIONS.take();
-            }
-            return json!(accepted);
+            return self.reply_retire(expression, cfg);
         }
         if expression.contains("alcuin-dom:attachment-evidence") {
             return json!(true);
@@ -1422,28 +797,7 @@ impl Exchange {
             return json!({"complete":true,"removed":cfg["uploads"].as_array().unwrap().len(),"originalInputsCleared":true});
         }
         if expression.contains("alcuin-dom:file-input-prepare") {
-            if matches!(self.fault, Fault::BorrowedUploadAckFailed) {
-                return Value::Null;
-            }
-            let prepares = self
-                .trace
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|r| {
-                    r["params"]["expression"]
-                        .as_str()
-                        .is_some_and(|e| e.contains("alcuin-dom:file-input-prepare"))
-                })
-                .count();
-            if matches!(
-                self.fault,
-                Fault::BorrowedSecondUploadPrepareFailed | Fault::SecondUploadFailed
-            ) && prepares > 1
-            {
-                return json!({"ready":false});
-            }
-            return json!({"ready":true,"blocked":null});
+            return self.reply_file_input_prepare();
         }
         if expression.contains("alcuin-dom:web-search")
             && expression.contains("const candidates = Array.from(context.form.querySelectorAll")
@@ -1487,6 +841,714 @@ impl Exchange {
             "Unaccounted DOM operation: {}",
             expression.chars().take(100).collect::<String>()
         );
+    }
+    /// The fake page's reply to `alcuin-dom:pending-retirement`.
+    fn reply_pending_retirement(&mut self, cfg: &Value) -> Value {
+        if matches!(
+            self.fault,
+            Fault::RecoveryRetryParentCancelledAtRetirement
+                | Fault::RecoveryRetryModelCancelledAtRetirement
+                | Fault::RecoveryRetryObserverCancelledAtRetirement
+        ) {
+            let child = self.store.require(&self.id).unwrap();
+            let parent_id = child["browser"]["attempt"]["parentId"].as_str().unwrap();
+            let parent = self.store.require(parent_id).unwrap();
+            if !parent["cleanupWarning"].is_string() {
+                return json!("foreign");
+            }
+            match self.fault {
+                Fault::RecoveryRetryParentCancelledAtRetirement => {
+                    self.store
+                        .update(parent_id, |_| Ok(Some(json!({"status":"cancelled"}))))
+                        .unwrap();
+                }
+                Fault::RecoveryRetryModelCancelledAtRetirement => {
+                    self.store
+                        .update_session_and_model(
+                            parent_id,
+                            parent["model"].as_str().unwrap(),
+                            |_, _| Ok(Some((json!({}), Some(json!({"status":"cancelled"}))))),
+                        )
+                        .unwrap();
+                }
+                _ => self.cancel.cancel(),
+            }
+        }
+        if matches!(self.fault, Fault::RecoveryParentCancelledAtRetirement) {
+            let child = self.store.require(&self.id).unwrap();
+            self.store
+                .update(
+                    child["browser"]["attempt"]["parentId"].as_str().unwrap(),
+                    |_| Ok(Some(json!({"status":"cancelled"}))),
+                )
+                .unwrap();
+        }
+        if matches!(self.fault, Fault::RecoveryObserverCancelledAtRetirement) {
+            self.cancel.cancel();
+        }
+        self.pending_retirement_read = true;
+        json!(if self.retirement_marker.is_none() {
+            "unmarked"
+        } else if matches!(self.fault, Fault::CloseRefusedForeignMarker)
+            || self.retirement_marker.as_ref() != Some(&cfg["retirementId"])
+        {
+            "foreign"
+        } else {
+            "marked"
+        })
+    }
+    /// The fake page's reply to `alcuin-dom:submission-receipt`.
+    fn reply_submission_receipt(&mut self, cfg: &Value) -> Value {
+        if matches!(self.fault, Fault::RecoveryParentCancelledAtReceipt) {
+            let child = self.store.require(&self.id).unwrap();
+            self.store
+                .update(
+                    child["browser"]["attempt"]["parentId"].as_str().unwrap(),
+                    |_| Ok(Some(json!({"status":"cancelled"}))),
+                )
+                .unwrap();
+        }
+        self.prompt = cfg["prompt"].as_str().unwrap().into();
+        let probe = self.probe(false);
+        if matches!(
+            self.fault,
+            Fault::ProviderLateCommit
+                | Fault::ProviderLateCommitPendingAnswer
+                | Fault::ProviderLateCommitStalledBeforeAnswer
+                | Fault::ProviderLateCommitLostAck
+                | Fault::ProviderLateCommitChangedOwner
+        ) && !self.provider_recovery_started()
+        {
+            return json!({"probe":probe,"submission":{"state":"pending"}});
+        }
+        let submission = if !cfg["saved"].is_null() {
+            json!({"state":"captured","witness":cfg["saved"]})
+        } else if matches!(self.fault, Fault::MissingWitness) {
+            json!({"state":"unavailable"})
+        } else if matches!(self.fault, Fault::ConflictingWitness) {
+            json!({"state":"invalid","reason":"multiple-submission-requests"})
+        } else {
+            json!({"state":"captured","witness":{"version":1,
+                "owner":if matches!(self.fault, Fault::ForeignWitness){json!({"claimId":"PUBLIC-foreign","reservationId":"PUBLIC-foreign"})}else{cfg["owner"].clone()},
+                "witnessId":cfg["intent"]["witnessId"],"dispatchGuardId":cfg["intent"]["dispatchGuardId"],
+                "promptSha256":cfg["intent"]["promptSha256"],"messageId":probe["messages"].as_array().unwrap().last().unwrap()["id"],
+                "source":"chatgpt-fetch-v1","requestPath":"/backend-api/f/conversation","historyDisabled":true}})
+        };
+        json!({"probe":probe,"submission":submission})
+    }
+    /// The fake page's reply to `alcuin-dom:image-buttons`.
+    fn reply_image_buttons(&mut self, cfg: &Value) -> Value {
+        if matches!(self.fault, Fault::SequentialNamedFirstThenFile) && self.turns.len() == 2 {
+            return json!([{"url":"https://chatgpt.com/backend-api/files/file_public/download","candidateId":"3:0","filename":"PUBLIC.txt","label":"Download PUBLIC.txt","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}]);
+        }
+        if matches!(self.fault, Fault::SequentialNamedDelayed) && self.turns.len() == 3 {
+            self.delayed_image_visible = true;
+        }
+        let present = matches!(
+            self.fault,
+            Fault::ButtonImage
+                | Fault::MultiButtonImage
+                | Fault::MultiButtonLostImage
+                | Fault::NonImageButton
+                | Fault::NonImageThenImage
+                | Fault::InvalidDirectButtonImage
+                | Fault::ButtonOutputFailure
+                | Fault::SequentialNamedButtons
+                | Fault::SequentialNamedBadButtons
+        ) || matches!(self.fault, Fault::LateButtonImage) && self.result_reads >= 6;
+        if !present {
+            return json!([]);
+        }
+        let mut buttons = vec![
+            json!({"url":"browser-download","candidateId":"1:0","filename":"Download","label":"Download","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}),
+        ];
+        if matches!(
+            self.fault,
+            Fault::MultiButtonImage | Fault::MultiButtonLostImage
+        ) && self.download_count < 2
+        {
+            buttons.push(json!({"url":"browser-download","candidateId":"1:1","filename":"Download 2","label":"Download 2","imageButton":true,"buttonReceiptId":cfg["buttonReceiptId"]}));
+        }
+        json!(buttons)
+    }
+    /// The fake page's reply to `alcuin-dom:copy-markdown`.
+    fn reply_copy_markdown(&mut self) -> Value {
+        if matches!(self.fault, Fault::CopyMissing) {
+            return json!({"success":false,"status":"missing-button"});
+        }
+        if matches!(self.fault, Fault::CopyTimeout) {
+            return json!({"success":false,"status":"timeout"});
+        }
+        if self.sequential() {
+            return json!({"success":true,"markdown":format!("PUBLIC owned answer {}",self.turns.len())});
+        }
+        if matches!(self.fault, Fault::ReplacedOutcomeTarget) {
+            self.store.update(&self.id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"runtime":merge_object(&current["browser"]["runtime"],&json!({"chromeTargetId":"REPLACED-PUBLIC","ownedRecoveryTarget":merge_object(&current["browser"]["runtime"]["ownedRecoveryTarget"],&json!({"targetId":"REPLACED-PUBLIC"}))}))}))})))).unwrap();
+        } else if matches!(self.fault, Fault::ChangedOutcomeOptions) {
+            self.store.update(&self.id,|current|Ok(Some(json!({"options":merge_object(&current["options"],&json!({"writeOutputPath":std::path::Path::new(current["cwd"].as_str().unwrap()).join("PUBLIC-foreign-output.md")}))})))).unwrap();
+        } else if matches!(self.fault, Fault::StoppedOutcomeModel) {
+            let model = self.store.require(&self.id).unwrap()["model"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            self.store
+                .update_model(
+                    &self.id,
+                    &model,
+                    &json!({"status":"partial","marker":"PUBLIC winning model outcome"}),
+                )
+                .unwrap();
+        } else if matches!(self.fault, Fault::CancelOutcome) {
+            self.cancel.cancel();
+        }
+        if matches!(self.fault, Fault::ImageOnly) {
+            return json!({"success":true,"markdown":""});
+        }
+        json!({"success":true,"markdown":if matches!(self.fault,Fault::FileExportFormatted | Fault::FormattedMarkdown | Fault::FormattedImage){"**PUBLIC exact owned answer**\n\nEnd\n".to_owned()}else{self.answer()}})
+    }
+    /// The fake page's reply to `alcuin-dom:submission`.
+    fn reply_submission(&mut self, cfg: &Value) -> Value {
+        self.owner = cfg["owner"].clone();
+        if cfg["action"] == "dispatch" && matches!(self.fault, Fault::AttemptParentBeforeSend) {
+            let child = self.store.require(&self.id).unwrap();
+            let parent = child["browser"]["attempt"]["parentId"].as_str().unwrap();
+            self.store
+                .update(parent, |_| Ok(Some(json!({"status":"cancelled"}))))
+                .unwrap();
+        }
+        if cfg["action"] == "acquire" && matches!(self.fault, Fault::BorrowedClaimed) {
+            return json!(false);
+        }
+        if cfg["action"] == "quarantine" && matches!(self.fault, Fault::PreDispatchQuarantineFailed)
+        {
+            return json!(false);
+        }
+        if cfg["action"] == "release" && matches!(self.fault, Fault::BorrowedReleaseFailed) {
+            return json!(false);
+        }
+        if cfg["action"] == "acknowledge" {
+            self.commit = cfg["receipt"].clone();
+            if matches!(self.fault, Fault::ProviderLateCommitStalledBeforeAnswer) {
+                hold_session_lock(&self.store, &self.id, RECOVERY_BUDGET);
+            }
+        }
+        json!(true)
+    }
+    /// The fake page's reply to `alcuin-dom:predispatch-marker`.
+    fn reply_predispatch_marker(&mut self, cfg: &Value) -> Value {
+        assert_eq!(cfg["owner"], self.owner);
+        let creator =
+            self.store.require(&self.id).unwrap()["browser"]["runtime"]["ownedRecoveryTarget"]
+                ["creator"]
+                .clone();
+        let record = TargetJournal::open(&self.store)
+            .unwrap()
+            .read(&creator["allocationId"])
+            .unwrap();
+        assert_eq!(
+            record["disposition"]["reason"],
+            "settled-pre-dispatch-close-pending"
+        );
+        assert_eq!(record["disposition"]["absence"], "unknown");
+        assert_eq!(record["preDispatchRetirement"]["id"], cfg["retirementId"]);
+        if let Some(previous) = &self.retirement_marker {
+            assert_eq!(
+                *previous, cfg["retirementId"],
+                "A retry must resume its saved marker"
+            );
+        }
+        self.retirement_marker = Some(cfg["retirementId"].clone());
+        if matches!(self.fault, Fault::PreDispatchLeaseReplacement) {
+            let path = std::path::Path::new(creator["lease"]["profileDir"].as_str().unwrap())
+                .join("oracle-tab-leases.json");
+            let mut registry: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            registry["leases"][0]["sessionId"] = json!("PUBLIC replacement lease");
+            crate::storage::atomic_json(&path, &registry).unwrap();
+        }
+        json!(true)
+    }
+    /// The fake page's reply to `alcuin-dom:inspection-finish`.
+    fn reply_inspection_finish(&mut self, cfg: &Value) -> Value {
+        if matches!(
+            self.fault,
+            Fault::CancelPickerDefault
+                | Fault::CancelPickerKeep
+                | Fault::CancelPickerKeepClose
+                | Fault::CancelPickerRefuse
+        ) {
+            self.cancel.cancel();
+        }
+        if matches!(self.fault, Fault::CleanupFailed) {
+            return json!({"token":cfg["token"],"parentReservationId":cfg["owner"]["reservationId"],"rendererId":cfg["rendererId"],"acknowledged":true,"cleanupComplete":false,"cleanupState":"menu-visible advanced-open"});
+        }
+        json!({"token":cfg["token"],"parentReservationId":cfg["owner"]["reservationId"],"rendererId":cfg["rendererId"],"acknowledged":true,"cleanupComplete":true})
+    }
+    /// The fake page's reply to `alcuin-dom:model`.
+    fn reply_model(&mut self, cfg: &Value) -> Value {
+        if cfg["strategy"] == "select" {
+            let first = self
+                .trace
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| {
+                    r["params"]["expression"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("alcuin-dom:model"))
+                })
+                .count()
+                == 1;
+            match self.fault {
+                Fault::ModelThrottled | Fault::ModelsNotLoaded => {
+                    return json!({"status":"option-not-found"});
+                }
+                Fault::ModelPending if first => return json!({"status":"pending"}),
+                _ => {}
+            }
+        }
+        if self.sequential() && self.sends.load(Ordering::SeqCst) > 0 {
+            assert_eq!(
+                cfg["inspectCurrent"], "evidence",
+                "Sequential turn selected a model"
+            );
+            if matches!(self.fault, Fault::SequentialWrongModel) {
+                return json!({"status":"already-selected","label":"GPT-5.6 Sol","checkedCount":1,"ownerKey":"model-trigger-public"});
+            }
+        }
+        if self.borrowed()
+            || matches!(
+                self.fault,
+                Fault::Followup
+                    | Fault::LegacyFollowup
+                    | Fault::FollowupExtraHigh
+                    | Fault::FollowupWrongModel
+                    | Fault::FollowupWrongTier
+            )
+        {
+            assert_eq!(
+                cfg["inspectCurrent"], "evidence",
+                "Follow-up selected a model"
+            );
+        }
+        if matches!(self.fault, Fault::ChangedModelOwner)
+            && self.trace.lock().unwrap().iter().any(|r| {
+                r["params"]["expression"].as_str().is_some_and(|s| {
+                    s.contains("alcuin-dom:thinking") && s.contains("\"inspectionOnly\":false")
+                })
+            })
+        {
+            return json!({"status":"already-selected","label":"GPT-6","checkedCount":1,"ownerKey":"model-trigger-replaced"});
+        }
+        if self.pro_model_checked() {
+            return json!({"status":"already-selected","label":"Pro","checkedCount":1,"ownerKey":"model-trigger-public"});
+        }
+        json!({"status":"already-selected","label":if matches!(self.fault, Fault::WrongModel|Fault::FollowupWrongModel|Fault::PreDispatchForeignMarker|Fault::PreDispatchLeaseReplacement|Fault::PreDispatchQuarantineFailed|Fault::PreDispatchCloseRefused|Fault::CancelPickerDefault|Fault::CancelPickerKeep|Fault::CancelPickerKeepClose|Fault::CancelPickerRefuse) {"GPT-5.6 Sol"} else {"GPT-6"},"checkedCount":1,"ownerKey":"model-trigger-public"})
+    }
+    /// The fake page's reply to `alcuin-dom:thinking`.
+    fn reply_thinking(&mut self, cfg: &Value) -> Value {
+        if self.sequential() && self.sends.load(Ordering::SeqCst) > 0 {
+            assert_eq!(
+                cfg["inspectionOnly"], true,
+                "Sequential turn selected a thinking effort"
+            );
+            if matches!(self.fault, Fault::SequentialWrongTier) {
+                return json!({"status":"ready","selectedLevel":"extra-high","ownerKey":"model-trigger-public","basis":"checked-tier-row"});
+            }
+        }
+        if self.borrowed()
+            || matches!(
+                self.fault,
+                Fault::Followup
+                    | Fault::LegacyFollowup
+                    | Fault::FollowupExtraHigh
+                    | Fault::FollowupWrongModel
+                    | Fault::FollowupWrongTier
+            )
+        {
+            assert_eq!(
+                cfg["inspectionOnly"], true,
+                "Follow-up selected a thinking effort"
+            );
+        }
+        if cfg["inspectionOnly"] == true {
+            return json!({"status":"ready","selectedLevel":if matches!(self.fault, Fault::WrongTier | Fault::BorrowedWrongTier) {json!("extended")}else if matches!(self.fault,Fault::FollowupWrongTier){json!("extra-high")} else {cfg["level"].clone()},"ownerKey":"model-trigger-public","basis":if cfg["level"] == "pro" && !matches!(self.fault, Fault::ProModelLegacyRow | Fault::LegacyRowPro) {"slider-label-and-index"} else {"checked-tier-row"}});
+        }
+        if cfg["level"] == "pro"
+            && matches!(
+                self.fault,
+                Fault::DisabledPro
+                    | Fault::SequentialExtraHigh
+                    | Fault::DisabledExtraHigh
+                    | Fault::ProModelExtraHigh
+                    | Fault::SequentialExtraHighProModel
+            )
+        {
+            return json!({"status":"option-disabled","label":"Pro","unavailableModel":"GPT-6","notice":"PUBLIC disabled row"});
+        }
+        if matches!(self.fault, Fault::DisabledProForeign) {
+            return json!({"status":"option-disabled","label":"Pro","notice":"PUBLIC weekly limit"});
+        }
+        if matches!(self.fault, Fault::DisabledExtraHigh) {
+            return json!({"status":"option-disabled","label":"Extra High","notice":"PUBLIC disabled row"});
+        }
+        if matches!(self.fault, Fault::GenericUnavailable) {
+            return json!({"status":"option-not-found"});
+        }
+        if cfg["level"] == "pro" {
+            return json!({"status":"switched","label":"Pro"});
+        }
+        json!({"status":"switched","label":"Extra High","modelKind":"thinking"})
+    }
+    /// The fake page's reply to `guard.fallback(cfg.prompt)`.
+    fn reply_guard_fallback_cfg_prompt(&mut self, cfg: &Value) -> Value {
+        if matches!(self.fault, Fault::BorrowedPartialPrompt) {
+            return json!({"ready":true,"complete":false,"sawInput":true,"blocked":null,"convertedToFile":false,"length":10});
+        }
+        if cfg["prompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.len() >= 50_000)
+            && matches!(
+                self.fault,
+                Fault::TruncatedComposer
+                    | Fault::RemoteTruncatedComposer
+                    | Fault::SmallComposerMismatch
+                    | Fault::PromptCleanupFailed
+                    | Fault::PromptRollbackFailed
+            )
+        {
+            let length = cfg["prompt"].as_str().unwrap().encode_utf16().count();
+            return json!({"ready":true,"complete":false,"sawInput":true,"blocked":null,"convertedToFile":false,"length":if matches!(self.fault,Fault::SmallComposerMismatch){length-1000}else{30_000}});
+        }
+        json!({"ready":true,"complete":true,"sawInput":true,"blocked":null,"convertedToFile":false})
+    }
+    /// The fake page's reply to `alcuin-dom:send-focus`.
+    fn reply_send_focus(&mut self) -> Value {
+        let calls = self
+            .trace
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r["params"]["expression"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("alcuin-dom:send-focus"))
+            })
+            .count();
+        match self.fault {
+            Fault::SendSettling if calls <= 2 => json!({"status":"unavailable"}),
+            Fault::SendNeverReady | Fault::SendAttachmentsNeverReady => {
+                json!({"status":"unavailable"})
+            }
+            _ => json!({"status":"focused"}),
+        }
+    }
+    /// The fake page's reply to `alcuin-dom:send-prepare`.
+    fn reply_send_prepare(&mut self) -> Value {
+        if matches!(self.fault, Fault::AttemptParentBeforeIntent) {
+            let child = self.store.require(&self.id).unwrap();
+            let parent = child["browser"]["attempt"]["parentId"].as_str().unwrap();
+            self.store
+                .update(parent, |_| Ok(Some(json!({"status":"cancelled"}))))
+                .unwrap();
+        }
+        if matches!(self.fault, Fault::SequentialChangedPrior)
+            && self.sends.load(Ordering::SeqCst) == 1
+        {
+            self.store.update(&self.id,|current|Ok(Some(json!({"dispatch":merge_object(&current["dispatch"],&json!({"promptSha256":"PUBLIC changed prior dispatch"}))})))).unwrap();
+        }
+        json!({"guardInstalled":true,"focused":true,"attachmentsReady":true,"promptReady":true,"preparationReady":true,"contextMatches":true})
+    }
+    /// The fake page's reply to `alcuin-dom:result`.
+    fn reply_result(&mut self, cfg: &Value) -> Value {
+        if matches!(self.fault, Fault::RecoveryParentCancelledAtAnswer) {
+            let child = self.store.require(&self.id).unwrap();
+            self.store
+                .update(
+                    child["browser"]["attempt"]["parentId"].as_str().unwrap(),
+                    |_| Ok(Some(json!({"status":"cancelled"}))),
+                )
+                .unwrap();
+        }
+        if self.recovery_observed && matches!(self.fault, Fault::CancelOutcome) {
+            self.cancel.cancel();
+            self.fault = Fault::None;
+        }
+        if self.download_count > 0 {
+            match self.fault {
+                Fault::TargetDuringDownload => {
+                    self.store.update(&self.id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"runtime":merge_object(&current["browser"]["runtime"],&json!({"chromeTargetId":"REPLACED-PUBLIC","ownedRecoveryTarget":merge_object(&current["browser"]["runtime"]["ownedRecoveryTarget"],&json!({"targetId":"REPLACED-PUBLIC"}))}))}))})))).unwrap();
+                }
+                Fault::ModelDuringDownload => {
+                    let model = self.store.require(&self.id).unwrap()["model"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
+                    self.store
+                        .update_model(
+                            &self.id,
+                            &model,
+                            &json!({"status":"partial","marker":"PUBLIC winning model outcome"}),
+                        )
+                        .unwrap();
+                }
+                Fault::PartialDuringDownload | Fault::CancelledDuringDownload => {
+                    self.store.update(&self.id,|_|Ok(Some(json!({"status":if matches!(self.fault,Fault::PartialDuringDownload){"partial"}else{"cancelled"},"completedAt":"PUBLIC winning terminal time","marker":"PUBLIC winning session outcome"})))).unwrap();
+                }
+                Fault::OptionsDuringDownload => {
+                    self.store.update(&self.id,|current|Ok(Some(json!({"options":merge_object(&current["options"],&json!({"writeOutputPath":std::path::Path::new(current["cwd"].as_str().unwrap()).join("PUBLIC-foreign-output.md")}))})))).unwrap();
+                }
+                Fault::CancelDuringDownload => self.cancel.cancel(),
+                _ => {}
+            }
+        }
+        self.result_reads += 1;
+        let mut result = self.result();
+        match self.fault {
+            Fault::ContentWithheld => {
+                result["text"] = json!("This content can't be shown");
+                result["withheld"] = json!(true);
+                result["unloaded"] = json!(false);
+            }
+            Fault::ResponseLoadFailedBesideImage => {
+                result["text"] = json!("This response couldn\u{2019}t load");
+                result["images"] = json!([{"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public","alt":"Generated image","width":12,"height":12}]);
+            }
+            Fault::RetryOffered if cfg["uiErrors"] == true => {
+                return json!({"uiError":"temporary_unavailable"});
+            }
+            Fault::StreamFailed if cfg["uiErrors"] == true => {
+                return json!({"uiError":"temporary_unavailable","uiErrorText":"Error in message stream"});
+            }
+            Fault::GenerationFailedThenRetry
+            | Fault::GenerationFailedThenMarked
+            | Fault::GeneratedThenUnloaded
+                if cfg["uiErrors"] == true && !self.turn_retried() =>
+            {
+                return json!({"uiError":"temporary_unavailable"});
+            }
+            Fault::RetryAuthorityLost if cfg["uiErrors"] == true => {
+                patch_runtime(
+                    &self.store,
+                    &self.id,
+                    json!({"submissionOwner":"PUBLIC another owner"}),
+                );
+                return json!({"uiError":"temporary_unavailable"});
+            }
+            Fault::UnloadedRetrySpent if !self.turn_retried() => {
+                if self.result_reads == 1 {
+                    runtime_marker(&self.store, &self.id);
+                }
+                result = unloaded(result);
+            }
+            Fault::UnloadedThenTryAgain
+            | Fault::UnloadedRateLimited
+            | Fault::UnloadedConnectionLost
+            | Fault::UnloadedBorrowed
+            | Fault::UnloadedSequential
+            | Fault::RetryNeverStarts
+            | Fault::RetriedThenTimesOut
+            | Fault::RetriedThenGenerationFails
+                if !self.turn_retried() =>
+            {
+                result = unloaded(result);
+            }
+            Fault::RetriedThenTimesOut | Fault::ConnectionLost => {
+                return json!({"pending":true,"stopExists":false,"strongThinkingActive":false});
+            }
+            Fault::RetriedThenGenerationFails => {
+                return json!({"uiError":"temporary_unavailable"});
+            }
+            Fault::UnloadedAfterTryAgain => result = unloaded(result),
+            Fault::GeneratedThenUnloaded if self.turn_retried() => result = unloaded(result),
+            Fault::UnloadedHealed if self.retry_read() => {
+                return json!({"pending":true,"stopExists":false,"strongThinkingActive":false});
+            }
+            Fault::UnloadedHealed => result = unloaded(result),
+            Fault::AnswerlessComplete => {
+                return json!({"pending":true,"stopExists":false,"strongThinkingActive":false,"answerless":true});
+            }
+            Fault::AnswerlessBriefly if self.result_reads <= 3 => {
+                return json!({"pending":true,"stopExists":false,"strongThinkingActive":false,"answerless":true});
+            }
+            _ => {}
+        }
+        let recovering = self.provider_recovery_started();
+        if matches!(
+            self.fault,
+            Fault::ProviderLateCommitPendingAnswer
+                | Fault::ProviderLateCommitStalledBeforeAnswer
+                | Fault::ProviderLateCommitChangedOwner
+                | Fault::AnswerNeverCompletes
+        ) || matches!(self.fault, Fault::ProviderLateAnswerDeadline) && !recovering
+        {
+            result["completionVisible"] = json!(false);
+        }
+        if !recovering
+            && matches!(
+                self.fault,
+                Fault::ProviderLateAnswer
+                    | Fault::ProviderRecoveryWrongSource
+                    | Fault::ProviderRecoveryChangedRequest
+                    | Fault::ProviderRecoveryChangedOwner
+                    | Fault::ProviderRecoveryCancelled
+                    | Fault::ProviderRecoveryPrivacy
+            )
+        {
+            result["text"] = json!("This response couldn’t load");
+        }
+        if recovering {
+            match self.fault {
+                Fault::ProviderRecoveryWrongSource => {
+                    result["lastUserOriginalSourceText"] = json!("PUBLIC changed recovery source")
+                }
+                Fault::ProviderRecoveryChangedOwner | Fault::ProviderLateCommitChangedOwner => {
+                    self.store.update(&self.id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"runtime":merge_object(&current["browser"]["runtime"],&json!({"controllerPid":0}))}))})))).unwrap();
+                }
+                Fault::ProviderRecoveryChangedRequest => {
+                    let mut request = request(&self.store, &self.id).unwrap();
+                    request.prompt = "PUBLIC changed committed recovery request".into();
+                    request.prompt_sha256 = sha256(request.prompt.as_bytes());
+                    atomic_json(
+                        &self
+                            .store
+                            .directory(&self.id)
+                            .unwrap()
+                            .join("browser-request.json"),
+                        &request,
+                    )
+                    .unwrap();
+                }
+                Fault::ProviderRecoveryCancelled => self.cancel.cancel(),
+                _ => {}
+            }
+        }
+        if self.pending_retirement_read && matches!(self.fault, Fault::CloseRefusedChangedSource) {
+            result["lastUserOriginalSourceText"] = json!("PUBLIC changed pending source");
+        }
+        if self.pending_retirement_read && matches!(self.fault, Fault::CloseRefusedActiveThinking) {
+            result["strongThinkingActive"] = json!(true);
+        }
+        if self.pending_retirement_read
+            && matches!(self.fault, Fault::CloseRefusedMissingCompletion)
+        {
+            result["completionVisible"] = json!(false);
+        }
+        if matches!(self.fault, Fault::TwoFilePartial)
+            && self.download_count == 2
+            && !self.recovery_observed
+        {
+            result["lastAssistantTurnId"] = json!("PUBLIC interrupted second file publication");
+        }
+        if cfg["retirementId"].is_string() {
+            if matches!(self.fault, Fault::AnswerDuringRetirement)
+                || self.recovery_observed
+                    && matches!(self.fault, Fault::RecoveryAnswerDuringRetirement)
+            {
+                result["text"] = json!("PUBLIC changed completed answer");
+            }
+            if matches!(self.fault, Fault::SourceDuringRetirement)
+                || self.recovery_observed
+                    && matches!(self.fault, Fault::RecoverySourceDuringRetirement)
+            {
+                result["lastUserOriginalSourceText"] = json!("PUBLIC changed original source");
+            }
+        }
+        if matches!(
+            self.fault,
+            Fault::DelayedImage | Fault::NonImageThenImage | Fault::DelayedBadImage
+        ) && self.result_reads >= 6
+        {
+            result["images"] = json!([{"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public","alt":"Generated image","width":12,"height":12}]);
+        }
+        if matches!(
+            self.fault,
+            Fault::MultiImage | Fault::PartialImage | Fault::FirstBadMultiImage
+        ) {
+            result["images"].as_array_mut().unwrap().push(json!({"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public_2","alt":"Generated image 2","width":12,"height":12}));
+        }
+        if matches!(self.fault, Fault::DuplicateImage) {
+            result["images"].as_array_mut().unwrap().push(json!({"url":"https://chatgpt.com/backend-api/estuary/content?id=file_public&preview=large","alt":"Generated larger image","width":24,"height":24}));
+        }
+        result
+    }
+    /// The fake page's reply to `alcuin-dom:recovery`.
+    fn reply_recovery(&mut self) -> Value {
+        self.recovery_observed = true;
+        if matches!(self.fault, Fault::OrphanModelError) {
+            let model = self.store.require(&self.id).unwrap()["model"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            self.store
+                .update_model(
+                    &self.id,
+                    &model,
+                    &json!({"status":"error","marker":"PUBLIC concurrent terminal model"}),
+                )
+                .unwrap();
+        }
+        json!(if matches!(self.fault, Fault::CleanupCleanRetry) {
+            "clean"
+        } else {
+            "submission"
+        })
+    }
+    /// The fake page's reply to `alcuin-dom:retire`.
+    fn reply_retire(&mut self, expression: &str, cfg: &Value) -> Value {
+        let accepted = !matches!(self.fault, Fault::ForeignRetirement)
+            && (!matches!(
+                self.fault,
+                Fault::CleanupRetry | Fault::SequentialNamedDelayed
+            ) || expression.contains("alcuin-dom:retire-quarantine"))
+            && (!matches!(
+                self.fault,
+                Fault::CleanupCleanRetry
+                    | Fault::RecoveryAnswerDuringRetirement
+                    | Fault::RecoverySourceDuringRetirement
+            ) || self.recovery_observed);
+        if accepted {
+            self.retirement_marker = Some(cfg["retirementId"].clone());
+        }
+        // Marking a completed target comes just before its last authority check.
+        if matches!(self.fault, Fault::CrowdedRetirement) {
+            for index in 0..50 {
+                let id = format!("public-unrelated-{index}");
+                let directory = self.store.root().join(&id);
+                std::fs::create_dir_all(&directory).unwrap();
+                crate::storage::atomic_json(
+                    &directory.join("meta.json"),
+                    &json!({"id":id,"status":"completed","createdAt":"PUBLIC earlier"}),
+                )
+                .unwrap();
+            }
+            crate::sessions::READ_SESSIONS.take();
+        }
+        json!(accepted)
+    }
+    /// The fake page's reply to `alcuin-dom:file-input-prepare`.
+    fn reply_file_input_prepare(&mut self) -> Value {
+        if matches!(self.fault, Fault::BorrowedUploadAckFailed) {
+            return Value::Null;
+        }
+        let prepares = self
+            .trace
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r["params"]["expression"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("alcuin-dom:file-input-prepare"))
+            })
+            .count();
+        if matches!(
+            self.fault,
+            Fault::BorrowedSecondUploadPrepareFailed | Fault::SecondUploadFailed
+        ) && prepares > 1
+        {
+            return json!({"ready":false});
+        }
+        json!({"ready":true,"blocked":null})
     }
     async fn run<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
         mut self,
@@ -1590,20 +1652,7 @@ impl Exchange {
                 continue;
             }
             let result = match request["method"].as_str().unwrap() {
-                "Network.setCookie" => {
-                    assert_eq!(self.url, "about:blank");
-                    assert!(matches!(
-                        self.fault,
-                        Fault::CookieBootstrap
-                            | Fault::CookieRejected
-                            | Fault::CookieCancelled
-                            | Fault::CookieJournalFailure
-                    ));
-                    if matches!(self.fault, Fault::CookieCancelled) {
-                        self.cancel.cancel();
-                    }
-                    json!({"success":matches!(self.fault,Fault::CookieBootstrap)})
-                }
+                "Network.setCookie" => self.cdp_set_cookie(),
                 "Target.createTarget" => {
                     assert!(!self.borrowed(), "A borrowed tab run created a target");
                     assert_eq!(request["params"]["url"], "about:blank");
@@ -1616,33 +1665,8 @@ impl Exchange {
                 "Target.getTargetInfo" => {
                     json!({"targetInfo":{"targetId":if matches!(self.fault,Fault::InitialTargetInspection){"PUBLIC foreign target"}else{"TARGET-PUBLIC"},"type":"page","url":self.url}})
                 }
-                "Page.navigate" => {
-                    let loads = self
-                        .trace
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .filter(|r| r["method"] == "Page.navigate")
-                        .count();
-                    if matches!(self.fault, Fault::NavigationFails)
-                        || matches!(self.fault, Fault::NavigationFailsOnce) && loads == 1
-                    {
-                        json!({"frameId":"FRAME-PUBLIC","errorText":"net::ERR_CONNECTION_RESET"})
-                    } else {
-                        self.url = request["params"]["url"].as_str().unwrap().into();
-                        json!({"frameId":"FRAME-PUBLIC"})
-                    }
-                }
-                "Input.dispatchMouseEvent" => {
-                    let x = &request["params"]["x"];
-                    if request["params"]["type"] == "mousePressed" && (*x == 2 || *x == 3) {
-                        let meta = self.store.require(&self.id).unwrap();
-                        let marked = meta["browser"]["runtime"]["providerRetry"].is_object();
-                        let click = json!({"method":"PUBLIC retry click","marked":marked});
-                        self.trace.lock().unwrap().push(click);
-                    }
-                    json!({})
-                }
+                "Page.navigate" => self.cdp_navigate(&request),
+                "Input.dispatchMouseEvent" => self.cdp_mouse_event(&request),
                 "Page.enable" => json!({}),
                 "Emulation.setFocusEmulationEnabled" => {
                     assert_eq!(request["params"], json!({"enabled":true}));
@@ -1651,119 +1675,13 @@ impl Exchange {
                 "Page.getFrameTree" => {
                     json!({"frameTree":{"frame":{"id":"FRAME-PUBLIC","url":self.url}}})
                 }
-                "Browser.setDownloadBehavior" => {
-                    if request["params"]["behavior"] == "default"
-                        && matches!(
-                            self.fault,
-                            Fault::FileExportChangedSource | Fault::FileExportFormatted
-                        )
-                        && !self.recovery_observed
-                    {
-                        let current = self.store.require(&self.id).unwrap();
-                        let file = current["artifacts"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .find(|artifact| artifact["kind"] == "file")
-                            .unwrap();
-                        fs::write(
-                            file["path"].as_str().unwrap(),
-                            b"PUBLIC changed captured file bytes",
-                        )
-                        .unwrap();
-                    }
-                    if request["params"]["behavior"] == "allowAndName" {
-                        let path = std::path::PathBuf::from(
-                            request["params"]["downloadPath"].as_str().unwrap(),
-                        );
-                        assert!(path.starts_with(
-                            self.store.directory(&self.id).unwrap().join("artifacts")
-                        ));
-                        self.download_stage = Some(path);
-                    }
-                    if request["params"]["behavior"] == "default"
-                        && matches!(self.fault, Fault::NewerReceipt)
-                    {
-                        self.store.update(&self.id,|current|{
-                            let mut artifacts=current["artifacts"].clone();
-                            artifacts[0]["extension"]=json!("PUBLIC newer receipt");
-                            Ok(Some(json!({"artifacts":artifacts,"browser":merge_object(&current["browser"],&json!({"harvest":{"marker":"PUBLIC newer harvest"}})),"dispatch":merge_object(&current["dispatch"],&json!({"marker":"PUBLIC newer dispatch"}))})))
-                        }).unwrap();
-                    }
-                    json!({})
-                }
+                "Browser.setDownloadBehavior" => self.cdp_set_download_behavior(&request),
                 "Browser.cancelDownload" => json!({}),
                 "Runtime.evaluate" => {
                     let expression = request["params"]["expression"].as_str().unwrap();
                     let value = self.evaluate(expression);
                     if expression.contains("alcuin-dom:download-click") {
-                        let guid = if self.download_count == 0 {
-                            "33333333-3333-4333-8333-333333333333"
-                        } else if self.download_count == 1 {
-                            "33333333-3333-4333-8333-333333333334"
-                        } else {
-                            "33333333-3333-4333-8333-333333333335"
-                        };
-                        self.download_count += 1;
-                        let bytes: &[u8] = if matches!(
-                            self.fault,
-                            Fault::Image
-                                | Fault::FormattedImage
-                                | Fault::SequentialImage
-                                | Fault::SequentialNamedAll
-                                | Fault::SequentialNamedFirst
-                                | Fault::SequentialNamedLast
-                                | Fault::SequentialNamedButtons
-                                | Fault::SequentialNamedDelayed
-                                | Fault::ImageOnly
-                                | Fault::NamedImage
-                                | Fault::OutputImage
-                                | Fault::MultiImage
-                                | Fault::DuplicateImage
-                                | Fault::ExistingImage
-                                | Fault::DelayedImage
-                                | Fault::ButtonImage
-                                | Fault::LateButtonImage
-                                | Fault::MultiButtonImage
-                                | Fault::MultiButtonLostImage
-                                | Fault::ButtonOutputFailure
-                                | Fault::TargetDuringDownload
-                                | Fault::ModelDuringDownload
-                                | Fault::PartialDuringDownload
-                                | Fault::CancelledDuringDownload
-                                | Fault::OptionsDuringDownload
-                                | Fault::CancelDuringDownload
-                                | Fault::NewerReceipt
-                        ) || matches!(
-                            self.fault,
-                            Fault::SequentialNamedBad
-                                | Fault::SequentialNamedBadButtons
-                                | Fault::SequentialNamedFirstThenFile
-                        ) && self.download_count == 1
-                            || matches!(
-                                self.fault,
-                                Fault::NonImageThenImage
-                                    | Fault::InvalidDirectButtonImage
-                                    | Fault::FirstBadMultiImage
-                            ) && self.download_count > 1
-                            || matches!(self.fault, Fault::PartialImage) && self.download_count != 2
-                        {
-                            b"\x89PNG\r\n\x1a\nPUBLIC synthetic image bytes"
-                        } else {
-                            b"PUBLIC downloaded file bytes"
-                        };
-                        // Chrome on Windows fails the final rename into a download directory
-                        // with forward slashes or a verbatim prefix and reports it as canceled.
-                        let renamed =
-                            !cfg!(windows)
-                                || self.download_stage.as_ref().unwrap().to_str().is_some_and(
-                                    |path| !path.contains('/') && !path.starts_with(r"\\?\"),
-                                );
-                        if renamed {
-                            fs::write(self.download_stage.as_ref().unwrap().join(guid), bytes)
-                                .unwrap();
-                        }
-                        let begin = json!({"method":"Browser.downloadWillBegin","params":{"frameId":if matches!(self.fault,Fault::ForeignDownloadFrame){"FOREIGN-FRAME"}else{"FRAME-PUBLIC"},"guid":guid,"suggestedFilename":if matches!(self.fault,Fault::Image|Fault::FormattedImage|Fault::BadImage|Fault::ImageOnly){"PUBLIC.png"}else{"PUBLIC.txt"}}});
+                        let (guid, renamed, begin) = self.start_download();
                         if socket
                             .send(Message::Text(begin.to_string().into()))
                             .await
@@ -1847,79 +1765,9 @@ impl Exchange {
                     }
                     json!({})
                 }
-                "Target.closeTarget" => {
-                    assert!(!self.borrowed(), "A borrowed tab run closed the user's tab");
-                    if matches!(self.fault, Fault::CrowdedRetirement) {
-                        RETIREMENT_READS.set(Some(crate::sessions::READ_SESSIONS.take()));
-                    }
-                    assert_eq!(request["params"]["targetId"], "TARGET-PUBLIC");
-                    self.closes.fetch_add(1, Ordering::SeqCst);
-                    self.closed = !matches!(
-                        self.fault,
-                        Fault::CloseRefusedOnce
-                            | Fault::PreDispatchCloseRefused
-                            | Fault::CloseRefusedThenLockedSettlement
-                            | Fault::CloseRefusedTwice
-                            | Fault::CloseRefusedForeignMarker
-                            | Fault::CloseRefusedChangedSource
-                            | Fault::CloseRefusedActiveThinking
-                            | Fault::CloseRefusedMissingCompletion
-                    ) || self.closes.load(Ordering::SeqCst)
-                        > if matches!(self.fault, Fault::CloseRefusedTwice) {
-                            2
-                        } else {
-                            1
-                        };
-                    if matches!(self.fault, Fault::CloseRefusedThenLockedSettlement)
-                        && self.closes.load(Ordering::SeqCst) == 2
-                    {
-                        self.cleanup_lock = Some(
-                            DirectoryLock::acquire(
-                                &self
-                                    .store
-                                    .home()
-                                    .join("sessions-write-locks")
-                                    .join(format!("{}.lock", self.id)),
-                                Duration::from_secs(1),
-                            )
-                            .unwrap(),
-                        );
-                    }
-                    if matches!(self.fault, Fault::CookieJournalFailure) {
-                        let meta = self.store.require(&self.id).unwrap();
-                        let creator = &meta["browser"]["runtime"]["ownedRecoveryTarget"]["creator"];
-                        let journal = TargetJournal::open(&self.store).unwrap();
-                        assert_eq!(
-                            journal.read(&creator["allocationId"]).unwrap()["disposition"]["reason"],
-                            "settled-pre-dispatch-close-pending"
-                        );
-                        let path = self.store.home().join("target-dispositions").join(format!(
-                            "{}.json",
-                            creator["allocationId"].as_str().unwrap()
-                        ));
-                        fs::rename(&path, path.with_extension("PUBLIC-pending")).unwrap();
-                        fs::create_dir(&path).unwrap();
-                    }
-                    json!({"success":true})
-                }
-                "Network.getAllCookies" => {
-                    if matches!(self.fault, Fault::StaleConversationCookie) {
-                        json!({"cookies":[
-                            {"name":"conv_key_PUBLIC-stale","value":"PUBLIC-cookie-value-sentinel","domain":".chatgpt.com","path":"/"},
-                            {"name":"PUBLIC-session","value":"PUBLIC-cookie-value-sentinel","domain":".chatgpt.com","path":"/"}
-                        ]})
-                    } else {
-                        json!({"cookies":[]})
-                    }
-                }
-                "Network.deleteCookies" => {
-                    assert!(matches!(self.fault, Fault::StaleConversationCookie));
-                    assert_eq!(
-                        request["params"],
-                        json!({"name":"conv_key_PUBLIC-stale","domain":".chatgpt.com","path":"/"})
-                    );
-                    json!({})
-                }
+                "Target.closeTarget" => self.cdp_close_target(&request),
+                "Network.getAllCookies" => self.cdp_get_all_cookies(),
+                "Network.deleteCookies" => self.cdp_delete_cookies(&request),
                 "Target.getTargets" => {
                     if self.closed && matches!(self.fault, Fault::UncertainClose) {
                         break;
@@ -1946,6 +1794,237 @@ impl Exchange {
                 break;
             }
         }
+    }
+    /// The fake browser's reply to `Network.setCookie`.
+    fn cdp_set_cookie(&mut self) -> Value {
+        assert_eq!(self.url, "about:blank");
+        assert!(matches!(
+            self.fault,
+            Fault::CookieBootstrap
+                | Fault::CookieRejected
+                | Fault::CookieCancelled
+                | Fault::CookieJournalFailure
+        ));
+        if matches!(self.fault, Fault::CookieCancelled) {
+            self.cancel.cancel();
+        }
+        json!({"success":matches!(self.fault,Fault::CookieBootstrap)})
+    }
+    /// The fake browser's reply to `Page.navigate`.
+    fn cdp_navigate(&mut self, request: &Value) -> Value {
+        let loads = self
+            .trace
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r["method"] == "Page.navigate")
+            .count();
+        if matches!(self.fault, Fault::NavigationFails)
+            || matches!(self.fault, Fault::NavigationFailsOnce) && loads == 1
+        {
+            json!({"frameId":"FRAME-PUBLIC","errorText":"net::ERR_CONNECTION_RESET"})
+        } else {
+            self.url = request["params"]["url"].as_str().unwrap().into();
+            json!({"frameId":"FRAME-PUBLIC"})
+        }
+    }
+    /// The fake browser's reply to `Input.dispatchMouseEvent`.
+    fn cdp_mouse_event(&mut self, request: &Value) -> Value {
+        let x = &request["params"]["x"];
+        if request["params"]["type"] == "mousePressed" && (*x == 2 || *x == 3) {
+            let meta = self.store.require(&self.id).unwrap();
+            let marked = meta["browser"]["runtime"]["providerRetry"].is_object();
+            let click = json!({"method":"PUBLIC retry click","marked":marked});
+            self.trace.lock().unwrap().push(click);
+        }
+        json!({})
+    }
+    /// The fake browser's reply to `Browser.setDownloadBehavior`.
+    fn cdp_set_download_behavior(&mut self, request: &Value) -> Value {
+        if request["params"]["behavior"] == "default"
+            && matches!(
+                self.fault,
+                Fault::FileExportChangedSource | Fault::FileExportFormatted
+            )
+            && !self.recovery_observed
+        {
+            let current = self.store.require(&self.id).unwrap();
+            let file = current["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|artifact| artifact["kind"] == "file")
+                .unwrap();
+            fs::write(
+                file["path"].as_str().unwrap(),
+                b"PUBLIC changed captured file bytes",
+            )
+            .unwrap();
+        }
+        if request["params"]["behavior"] == "allowAndName" {
+            let path =
+                std::path::PathBuf::from(request["params"]["downloadPath"].as_str().unwrap());
+            assert!(path.starts_with(self.store.directory(&self.id).unwrap().join("artifacts")));
+            self.download_stage = Some(path);
+        }
+        if request["params"]["behavior"] == "default" && matches!(self.fault, Fault::NewerReceipt) {
+            self.store.update(&self.id,|current|{
+                let mut artifacts=current["artifacts"].clone();
+                artifacts[0]["extension"]=json!("PUBLIC newer receipt");
+                Ok(Some(json!({"artifacts":artifacts,"browser":merge_object(&current["browser"],&json!({"harvest":{"marker":"PUBLIC newer harvest"}})),"dispatch":merge_object(&current["dispatch"],&json!({"marker":"PUBLIC newer dispatch"}))})))
+            }).unwrap();
+        }
+        json!({})
+    }
+    /// The fake browser's reply to `Target.closeTarget`.
+    fn cdp_close_target(&mut self, request: &Value) -> Value {
+        assert!(!self.borrowed(), "A borrowed tab run closed the user's tab");
+        if matches!(self.fault, Fault::CrowdedRetirement) {
+            RETIREMENT_READS.set(Some(crate::sessions::READ_SESSIONS.take()));
+        }
+        assert_eq!(request["params"]["targetId"], "TARGET-PUBLIC");
+        self.closes.fetch_add(1, Ordering::SeqCst);
+        self.closed = !matches!(
+            self.fault,
+            Fault::CloseRefusedOnce
+                | Fault::PreDispatchCloseRefused
+                | Fault::CloseRefusedThenLockedSettlement
+                | Fault::CloseRefusedTwice
+                | Fault::CloseRefusedForeignMarker
+                | Fault::CloseRefusedChangedSource
+                | Fault::CloseRefusedActiveThinking
+                | Fault::CloseRefusedMissingCompletion
+        ) || self.closes.load(Ordering::SeqCst)
+            > if matches!(self.fault, Fault::CloseRefusedTwice) {
+                2
+            } else {
+                1
+            };
+        if matches!(self.fault, Fault::CloseRefusedThenLockedSettlement)
+            && self.closes.load(Ordering::SeqCst) == 2
+        {
+            self.cleanup_lock = Some(
+                DirectoryLock::acquire(
+                    &self
+                        .store
+                        .home()
+                        .join("sessions-write-locks")
+                        .join(format!("{}.lock", self.id)),
+                    Duration::from_secs(1),
+                )
+                .unwrap(),
+            );
+        }
+        if matches!(self.fault, Fault::CookieJournalFailure) {
+            let meta = self.store.require(&self.id).unwrap();
+            let creator = &meta["browser"]["runtime"]["ownedRecoveryTarget"]["creator"];
+            let journal = TargetJournal::open(&self.store).unwrap();
+            assert_eq!(
+                journal.read(&creator["allocationId"]).unwrap()["disposition"]["reason"],
+                "settled-pre-dispatch-close-pending"
+            );
+            let path = self.store.home().join("target-dispositions").join(format!(
+                "{}.json",
+                creator["allocationId"].as_str().unwrap()
+            ));
+            fs::rename(&path, path.with_extension("PUBLIC-pending")).unwrap();
+            fs::create_dir(&path).unwrap();
+        }
+        json!({"success":true})
+    }
+    /// The fake browser's reply to `Network.getAllCookies`.
+    fn cdp_get_all_cookies(&mut self) -> Value {
+        if matches!(self.fault, Fault::StaleConversationCookie) {
+            json!({"cookies":[
+                {"name":"conv_key_PUBLIC-stale","value":"PUBLIC-cookie-value-sentinel","domain":".chatgpt.com","path":"/"},
+                {"name":"PUBLIC-session","value":"PUBLIC-cookie-value-sentinel","domain":".chatgpt.com","path":"/"}
+            ]})
+        } else {
+            json!({"cookies":[]})
+        }
+    }
+    /// The fake browser's reply to `Network.deleteCookies`.
+    fn cdp_delete_cookies(&mut self, request: &Value) -> Value {
+        assert!(matches!(self.fault, Fault::StaleConversationCookie));
+        assert_eq!(
+            request["params"],
+            json!({"name":"conv_key_PUBLIC-stale","domain":".chatgpt.com","path":"/"})
+        );
+        json!({})
+    }
+    /// A download click's stage file, written unless Windows would refuse the rename, and its
+    /// `Browser.downloadWillBegin` event. Returns the download's GUID, whether the file was
+    /// written, and the event.
+    fn start_download(&mut self) -> (&'static str, bool, Value) {
+        let guid = if self.download_count == 0 {
+            "33333333-3333-4333-8333-333333333333"
+        } else if self.download_count == 1 {
+            "33333333-3333-4333-8333-333333333334"
+        } else {
+            "33333333-3333-4333-8333-333333333335"
+        };
+        self.download_count += 1;
+        let bytes: &[u8] = if matches!(
+            self.fault,
+            Fault::Image
+                | Fault::FormattedImage
+                | Fault::SequentialImage
+                | Fault::SequentialNamedAll
+                | Fault::SequentialNamedFirst
+                | Fault::SequentialNamedLast
+                | Fault::SequentialNamedButtons
+                | Fault::SequentialNamedDelayed
+                | Fault::ImageOnly
+                | Fault::NamedImage
+                | Fault::OutputImage
+                | Fault::MultiImage
+                | Fault::DuplicateImage
+                | Fault::ExistingImage
+                | Fault::DelayedImage
+                | Fault::ButtonImage
+                | Fault::LateButtonImage
+                | Fault::MultiButtonImage
+                | Fault::MultiButtonLostImage
+                | Fault::ButtonOutputFailure
+                | Fault::TargetDuringDownload
+                | Fault::ModelDuringDownload
+                | Fault::PartialDuringDownload
+                | Fault::CancelledDuringDownload
+                | Fault::OptionsDuringDownload
+                | Fault::CancelDuringDownload
+                | Fault::NewerReceipt
+        ) || matches!(
+            self.fault,
+            Fault::SequentialNamedBad
+                | Fault::SequentialNamedBadButtons
+                | Fault::SequentialNamedFirstThenFile
+        ) && self.download_count == 1
+            || matches!(
+                self.fault,
+                Fault::NonImageThenImage
+                    | Fault::InvalidDirectButtonImage
+                    | Fault::FirstBadMultiImage
+            ) && self.download_count > 1
+            || matches!(self.fault, Fault::PartialImage) && self.download_count != 2
+        {
+            b"\x89PNG\r\n\x1a\nPUBLIC synthetic image bytes"
+        } else {
+            b"PUBLIC downloaded file bytes"
+        };
+        // Chrome on Windows fails the final rename into a download directory
+        // with forward slashes or a verbatim prefix and reports it as canceled.
+        let renamed = !cfg!(windows)
+            || self
+                .download_stage
+                .as_ref()
+                .unwrap()
+                .to_str()
+                .is_some_and(|path| !path.contains('/') && !path.starts_with(r"\\?\"));
+        if renamed {
+            fs::write(self.download_stage.as_ref().unwrap().join(guid), bytes).unwrap();
+        }
+        let begin = json!({"method":"Browser.downloadWillBegin","params":{"frameId":if matches!(self.fault,Fault::ForeignDownloadFrame){"FOREIGN-FRAME"}else{"FRAME-PUBLIC"},"guid":guid,"suggestedFilename":if matches!(self.fault,Fault::Image|Fault::FormattedImage|Fault::BadImage|Fault::ImageOnly){"PUBLIC.png"}else{"PUBLIC.txt"}}});
+        (guid, renamed, begin)
     }
 }
 struct Fixture {
@@ -1979,6 +2058,124 @@ async fn fixture_attempt_in(
     options: Value,
 ) -> Fixture {
     let store = SessionStore::new(home.path().join(".oracle"));
+    let input = fixture_input(&home, fault, upload, &options);
+    let meta = fixture_session(&store, &home, fault, upload, &input);
+    let borrowed = fixture_borrows(fault);
+    let mut id = meta["id"].as_str().unwrap().to_owned();
+    let identity = ProcessIdentity::current().unwrap();
+    start_owner(&store, &id, &identity).unwrap();
+    let mut coordinator = None;
+    if attempt
+        || matches!(
+            fault,
+            Fault::AttemptParentBeforeIntent | Fault::AttemptParentBeforeSend
+        )
+    {
+        let mut parent = crate::browser_attempt::Parent::begin(
+            &store,
+            &id,
+            &identity,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        id = parent
+            .reserve_first(&CancellationToken::new())
+            .unwrap()
+            .child_id;
+        start_owner(&store, &id, &identity).unwrap();
+        coordinator = Some(parent);
+    }
+    if coordinator.is_none()
+        && matches!(
+            fault,
+            Fault::RemoteCapture | Fault::RemoteCaptureRejected | Fault::SequentialNamedDelayed
+        )
+    {
+        store.update(&id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"remoteDelivery":{"runId":"12345678-1234-1234-1234-123456789abc","acknowledged":false,"producerFinished":false}}))})))).unwrap();
+    }
+    let profile = ProfileRegistry::open(&home.path().join("synthetic-profile")).unwrap();
+    let (client, server) = tokio::io::duplex(1024 * 1024);
+    let cdp = Cdp::from_socket(
+        WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+        Duration::from_secs(1),
+    );
+    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+    let sends = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    let externally_closed = Arc::new(AtomicBool::new(false));
+    let trace = Arc::new(Mutex::new(vec![]));
+    let cancel = CancellationToken::new();
+    let peer = tokio::spawn(
+        Exchange {
+            fault,
+            prompt: String::new(),
+            url: if borrowed {
+                "https://chatgpt.com/"
+            } else {
+                "about:blank"
+            }
+            .into(),
+            owner: Value::Null,
+            commit: Value::Null,
+            before: true,
+            turns: vec![],
+            sends: sends.clone(),
+            closes: closes.clone(),
+            closed: false,
+            externally_closed: externally_closed.clone(),
+            trace: trace.clone(),
+            cancel: cancel.clone(),
+            store: store.clone(),
+            id: id.clone(),
+            download_stage: None,
+            result_reads: 0,
+            recovery_observed: false,
+            download_count: 0,
+            delayed_image_visible: false,
+            retirement_marker: None,
+            pending_retirement_read: false,
+            cleanup_lock: None,
+        }
+        .run(server),
+    );
+    Fixture {
+        home,
+        store,
+        id,
+        identity,
+        profile,
+        cdp,
+        peer,
+        sends,
+        closes,
+        externally_closed,
+        trace,
+        cancel,
+        endpoint: AttachmentEndpoint {
+            host: "127.0.0.1".into(),
+            port: 9222,
+            browser_ws_endpoint: "ws://127.0.0.1:9222/devtools/browser/PUBLIC".into(),
+        },
+        coordinator,
+    }
+}
+/// Whether the fixture consultation runs in a borrowed tab.
+fn fixture_borrows(fault: Fault) -> bool {
+    matches!(
+        fault,
+        Fault::Borrowed
+            | Fault::BorrowedWork
+            | Fault::BorrowedWrongTier
+            | Fault::BorrowedClaimed
+            | Fault::BorrowedPartialPrompt
+            | Fault::BorrowedSecondUploadPrepareFailed
+            | Fault::BorrowedUploadAckFailed
+            | Fault::BorrowedReleaseFailed
+            | Fault::UnloadedBorrowed
+    )
+}
+/// The fixture consultation's request input for `fault`, with `options` merged last.
+fn fixture_input(home: &tempfile::TempDir, fault: Fault, upload: bool, options: &Value) -> Value {
     let mut input = json!({"prompt":"PUBLIC complete original consultation\n\nwith literal `source` and end.","engine":"browser"});
     if matches!(
         fault,
@@ -2120,10 +2317,20 @@ async fn fixture_attempt_in(
         )
         .unwrap();
     }
-    input = merge_object(&input, &options);
+    input = merge_object(&input, options);
+    input
+}
+/// The fixture consultation's saved session, prepared from `input` for `fault`.
+fn fixture_session(
+    store: &SessionStore,
+    home: &tempfile::TempDir,
+    fault: Fault,
+    upload: bool,
+    input: &Value,
+) -> Value {
     let config = json!({});
     let mut resolved =
-        crate::execution::resolve(&input, &config, &Environment::new(), home.path()).unwrap();
+        crate::execution::resolve(input, &config, &Environment::new(), home.path()).unwrap();
     if matches!(
         fault,
         Fault::Sequential
@@ -2189,18 +2396,7 @@ async fn fixture_attempt_in(
         resolved.browser["remoteChrome"] = json!({"host":"127.0.0.1","port":9});
         resolved.options["browserConfig"] = resolved.browser.clone();
     }
-    let borrowed = matches!(
-        fault,
-        Fault::Borrowed
-            | Fault::BorrowedWork
-            | Fault::BorrowedWrongTier
-            | Fault::BorrowedClaimed
-            | Fault::BorrowedPartialPrompt
-            | Fault::BorrowedSecondUploadPrepareFailed
-            | Fault::BorrowedUploadAckFailed
-            | Fault::BorrowedReleaseFailed
-            | Fault::UnloadedBorrowed
-    );
+    let borrowed = fixture_borrows(fault);
     if borrowed {
         resolved.browser["browserTabRef"] = json!("TARGET-PUBLIC");
         resolved.options["browserConfig"] = resolved.browser.clone();
@@ -2239,7 +2435,7 @@ async fn fixture_attempt_in(
             .unwrap();
         let parent_id = parent["id"].as_str().unwrap();
         store.update(parent_id,|_|Ok(Some(json!({"status":"completed","browser":{"config":resolved.browser,"runtime":{"tabUrl":url,"chromeTargetId":"PARENT-TARGET","ownedRecoveryTarget":{"targetId":"PARENT-TARGET"}}}})))).unwrap();
-        match crate::followup::resolve(&store, parent_id, None).unwrap() {
+        match crate::followup::resolve(store, parent_id, None).unwrap() {
             crate::followup::Followup::Browser {
                 session_id,
                 model,
@@ -2255,7 +2451,7 @@ async fn fixture_attempt_in(
             _ => panic!("browser parent resolved as API"),
         }
     }
-    let meta = if matches!(
+    if matches!(
         fault,
         Fault::RemoteCapture | Fault::RemoteCaptureRejected | Fault::RemoteTruncatedComposer
     ) {
@@ -2290,7 +2486,7 @@ async fn fixture_attempt_in(
         store.require(&id).unwrap()
     } else if matches!(fault, Fault::SequentialNamedDelayed) {
         prepare_with_base(
-            &store,
+            store,
             &resolved,
             home.path(),
             Some(
@@ -2300,104 +2496,7 @@ async fn fixture_attempt_in(
         .unwrap()
     } else {
         // Below the image admission refusal, so the image delivery fixtures still run.
-        prepare_with_base(&store, &resolved, home.path(), None).unwrap()
-    };
-    let mut id = meta["id"].as_str().unwrap().to_owned();
-    let identity = ProcessIdentity::current().unwrap();
-    start_owner(&store, &id, &identity).unwrap();
-    let mut coordinator = None;
-    if attempt
-        || matches!(
-            fault,
-            Fault::AttemptParentBeforeIntent | Fault::AttemptParentBeforeSend
-        )
-    {
-        let mut parent = crate::browser_attempt::Parent::begin(
-            &store,
-            &id,
-            &identity,
-            &CancellationToken::new(),
-        )
-        .unwrap();
-        id = parent
-            .reserve_first(&CancellationToken::new())
-            .unwrap()
-            .child_id;
-        start_owner(&store, &id, &identity).unwrap();
-        coordinator = Some(parent);
-    }
-    if coordinator.is_none()
-        && matches!(
-            fault,
-            Fault::RemoteCapture | Fault::RemoteCaptureRejected | Fault::SequentialNamedDelayed
-        )
-    {
-        store.update(&id,|current|Ok(Some(json!({"browser":merge_object(&current["browser"],&json!({"remoteDelivery":{"runId":"12345678-1234-1234-1234-123456789abc","acknowledged":false,"producerFinished":false}}))})))).unwrap();
-    }
-    let profile = ProfileRegistry::open(&home.path().join("synthetic-profile")).unwrap();
-    let (client, server) = tokio::io::duplex(1024 * 1024);
-    let cdp = Cdp::from_socket(
-        WebSocketStream::from_raw_socket(client, Role::Client, None).await,
-        Duration::from_secs(1),
-    );
-    let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
-    let sends = Arc::new(AtomicUsize::new(0));
-    let closes = Arc::new(AtomicUsize::new(0));
-    let externally_closed = Arc::new(AtomicBool::new(false));
-    let trace = Arc::new(Mutex::new(vec![]));
-    let cancel = CancellationToken::new();
-    let peer = tokio::spawn(
-        Exchange {
-            fault,
-            prompt: String::new(),
-            url: if borrowed {
-                "https://chatgpt.com/"
-            } else {
-                "about:blank"
-            }
-            .into(),
-            owner: Value::Null,
-            commit: Value::Null,
-            before: true,
-            turns: vec![],
-            sends: sends.clone(),
-            closes: closes.clone(),
-            closed: false,
-            externally_closed: externally_closed.clone(),
-            trace: trace.clone(),
-            cancel: cancel.clone(),
-            store: store.clone(),
-            id: id.clone(),
-            download_stage: None,
-            result_reads: 0,
-            recovery_observed: false,
-            download_count: 0,
-            delayed_image_visible: false,
-            retirement_marker: None,
-            pending_retirement_read: false,
-            cleanup_lock: None,
-        }
-        .run(server),
-    );
-    Fixture {
-        home,
-        store,
-        id,
-        identity,
-        profile,
-        cdp,
-        peer,
-        sends,
-        closes,
-        externally_closed,
-        trace,
-        cancel,
-        endpoint: AttachmentEndpoint {
-            host: "127.0.0.1".into(),
-            port: 9222,
-            browser_ws_endpoint: "ws://127.0.0.1:9222/devtools/browser/PUBLIC".into(),
-        },
-        coordinator,
+        prepare_with_base(store, &resolved, home.path(), None).unwrap()
     }
 }
 fn limits() -> RunnerLimits {
@@ -2994,15 +3093,7 @@ async fn assert_parent_recovery_from(
     let child_id = manifest["childId"].as_str().unwrap();
     let parent = store.require(parent_id).unwrap();
     let child = store.require(child_id).unwrap();
-    let capture_files_for = |id: &str| {
-        let mut names = fs::read_dir(store.directory(id).unwrap())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .filter(|name| name.to_string_lossy().starts_with("captured-answer-"))
-            .collect::<Vec<_>>();
-        names.sort();
-        names
-    };
+    let capture_files_for = |id: &str| capture_files_in(&store, id);
     let capture_files = || capture_files_for(child_id);
     let original_capture_files = capture_files();
     let original_parent_files = capture_files_for(parent_id);
@@ -3017,26 +3108,7 @@ async fn assert_parent_recovery_from(
             Some((path, bytes, identity))
         })
         .collect::<Vec<_>>();
-    let pending_artifact_files = || {
-        let path = store.directory(parent_id).unwrap().join("artifacts");
-        let mut files = if path.exists() {
-            fs::read_dir(path)
-                .unwrap()
-                .map(|row| row.unwrap().path())
-                .filter(|path| path.is_file())
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
-        files.sort();
-        files
-            .into_iter()
-            .map(|path| {
-                let entry = crate::native_fs::NativeEntry::open(&path, false).unwrap();
-                (path, entry.identity)
-            })
-            .collect::<Vec<_>>()
-    };
+    let pending_artifact_files = || pending_artifacts_in(&store, parent_id);
     let original_pending_artifacts = pending_artifact_files();
     let original_controller = crate::execution::controller_identity(&parent);
     let original_child_controller = crate::execution::controller_identity(&child);
@@ -3049,45 +3121,7 @@ async fn assert_parent_recovery_from(
     assert_eq!(record["nativeOwnerIdentity"], manifest["identity"]);
     assert!(record["commit"].is_null());
     assert_ne!(record["disposition"]["decision"], "retired");
-    if capture_kind == Some("selected")
-        || capture_kind.is_some_and(|kind| kind.starts_with("remote-"))
-    {
-        crate::browser_attempt::require_selected(&store, parent_id, &CancellationToken::new())
-            .unwrap();
-        assert_eq!(
-            parent["status"],
-            if capture_kind == Some("remote-partial") {
-                "partial"
-            } else {
-                "running"
-            }
-        );
-        if capture_kind == Some("selected") {
-            assert!(home.join("PUBLIC-recovered.md").is_file());
-        }
-    } else if capture_kind.is_some_and(|kind| kind.starts_with("captured")) {
-        assert_eq!(
-            parent["browser"]["consultation"]["adoption"]["phase"],
-            "captured"
-        );
-        assert!(parent["browser"]["capturedAnswer"].is_object());
-        assert_eq!(
-            home.join("PUBLIC-recovered.md").exists(),
-            matches!(
-                capture_kind,
-                Some("captured-existing" | "captured-conflict")
-            )
-        );
-    } else {
-        if capture_kind.is_some_and(|kind| kind.starts_with("reserved")) {
-            assert_eq!(
-                parent["browser"]["consultation"]["adoption"]["phase"],
-                "reserved"
-            );
-        }
-        assert!(parent["browser"]["capturedAnswer"].is_null());
-        assert!(!home.join("PUBLIC-recovered.md").exists());
-    }
+    assert_parent_before_recovery(&store, parent_id, &parent, &home, capture_kind);
     let original_output_identity =
         crate::native_fs::NativeEntry::open(&home.join("PUBLIC-recovered.md"), false)
             .ok()
@@ -3145,41 +3179,10 @@ async fn assert_parent_recovery_from(
         port: 9222,
         browser_ws_endpoint: "ws://127.0.0.1:9222/devtools/browser/PUBLIC".into(),
     };
-    let before_child = store.stored_for_update(child_id).unwrap();
-    let direct = recover_existing(
-        &store,
-        child_id,
-        profile.clone(),
-        browser.clone(),
-        endpoint.clone(),
-        &limits(),
-        &cancel,
+    assert_child_refuses_direct_recovery(
+        &store, child_id, &profile, &browser, &endpoint, &trace, &cancel,
     )
-    .await
-    .unwrap_err();
-    assert!(direct.to_string().contains("original public parent"));
-    let direct_snapshot = crate::browser_sessions::HarvestSnapshot {
-        endpoint: endpoint.clone(),
-        tab: json!({"state":"completed","completionConfirmed":true}),
-        integrity: crate::browser_harvest::HarvestIntegrity {
-            status: "matched".into(),
-            observed_conversation_id: Some("consult-public".into()),
-            captured: vec![],
-            unverified_sources: vec![],
-            explicit_target: false,
-            previous_harvest_conversation_id: None,
-        },
-    };
-    assert!(
-        crate::browser_historical::complete_owned(&store, child_id, &direct_snapshot, &cancel)
-            .await
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("original public parent")
-    );
-    assert_eq!(store.stored_for_update(child_id).unwrap(), before_child);
-    assert!(trace.lock().unwrap().is_empty());
+    .await;
     let mut recovered = recover_existing(
         &store,
         parent_id,
@@ -3219,16 +3222,7 @@ async fn assert_parent_recovery_from(
     }
     if capture_kind == Some("captured-conflict") {
         assert!(recovered.is_err());
-        assert_eq!(closes.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            fs::read(home.join("PUBLIC-recovered.md")).unwrap(),
-            b"PUBLIC external answer"
-        );
-        assert_eq!(
-            store.require(parent_id).unwrap()["browser"]["consultation"]["adoption"]["phase"],
-            "captured"
-        );
-        assert_eq!(store.require(child_id).unwrap()["status"], "running");
+        assert_conflict_refused(&store, parent_id, child_id, &home, &closes);
         fs::rename(
             home.join("PUBLIC-recovered.md"),
             home.join("PUBLIC-external-preserved.md"),
@@ -3246,31 +3240,13 @@ async fn assert_parent_recovery_from(
         .await;
     }
     if capture_kind.is_some_and(|kind| kind.starts_with("remote")) {
-        let pending = recovered.as_ref().unwrap();
-        for (path, bytes, identity) in &original_transport {
-            assert_eq!(
-                &fs::read(path).unwrap(),
-                bytes,
-                "Remote recovery replaced immutable transport bytes"
-            );
-            assert_eq!(
-                &crate::native_fs::NativeEntry::open(path, false)
-                    .unwrap()
-                    .identity,
-                identity
-            );
-        }
-        assert_eq!(pending["status"], "running");
-        assert_eq!(store.require(child_id).unwrap()["status"], "running");
-        assert_eq!(closes.load(Ordering::SeqCst), 0);
-        let record =
-            crate::remote_result::read(&store, "12345678-1234-1234-1234-123456789abc").unwrap();
-        assert_eq!(record.native()["phase"], "result");
-        let (acknowledged, committed) =
-            crate::remote_result::complete_acknowledgement_lossless(&store, &record).unwrap();
-        assert!(committed);
-        assert_eq!(acknowledged["status"], "completed");
-        assert_eq!(closes.load(Ordering::SeqCst), 0);
+        assert_remote_result_pending(
+            &store,
+            child_id,
+            recovered.as_ref().unwrap(),
+            &original_transport,
+            &closes,
+        );
         recovered = recover_existing(
             &store,
             parent_id,
@@ -3329,27 +3305,15 @@ async fn assert_parent_recovery_from(
         )
     {
         assert!(recovered.is_err());
-        let retained = store.stored_for_update(child_id).unwrap();
-        let parent = store.stored_for_update(parent_id).unwrap();
-        assert!(retained["browser"]["capturedAnswer"].is_object());
-        assert_eq!(parent["recoveryRequired"], true);
-        assert_eq!(
-            parent["status"],
-            if matches!(
-                image_fault,
-                Some(
-                    Fault::RecoveryParentCancelledAtRetirement
-                        | Fault::RecoveryRetryParentCancelledAtRetirement
-                )
-            ) {
-                "cancelled"
-            } else {
-                "completed"
-            }
+        assert_retirement_cancelled(
+            &store,
+            child_id,
+            parent_id,
+            image_fault,
+            &home,
+            &sends,
+            &closes,
         );
-        assert!(home.join("PUBLIC-recovered.md").is_file());
-        assert_eq!(sends.load(Ordering::SeqCst), 1);
-        assert_eq!(closes.load(Ordering::SeqCst), 0);
         return;
     }
     if matches!(
@@ -3383,6 +3347,301 @@ async fn assert_parent_recovery_from(
         crate::execution::controller_identity(&recovered),
         original_controller
     );
+    assert_adopted_capture(
+        &recovered,
+        &parent,
+        &home,
+        capture_kind,
+        original_output_identity,
+        &trace,
+    );
+    assert_reserved_resume(
+        &store,
+        parent_id,
+        &trace,
+        capture_kind,
+        &original_pending_artifacts,
+        &original_parent_files,
+    );
+    assert_child_settled(
+        &store,
+        child_id,
+        &child,
+        capture_kind,
+        &original_capture_files,
+        &original_child_controller,
+        &original_link,
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        manifest["sends"].as_u64().unwrap() as usize
+    );
+    assert_eq!(closes.load(Ordering::SeqCst), 1);
+    assert_target_retired(&journal, &creator, &recovered, capture_kind, &trace);
+}
+/// The recovered tab's journal entry is retired with its required output, and recovery never
+/// created, navigated, typed into or uploaded to a tab.
+fn assert_target_retired(
+    journal: &TargetJournal,
+    creator: &Value,
+    recovered: &Value,
+    capture_kind: Option<&str>,
+    trace: &Mutex<Vec<Value>>,
+) {
+    let retired = journal.read(&creator["allocationId"]).unwrap();
+    assert_eq!(retired["creator"], *creator);
+    assert_eq!(retired["disposition"]["decision"], "retired");
+    if !capture_kind.is_some_and(|kind| kind.starts_with("remote")) {
+        assert!(
+            retired["commit"]["requiredOutputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["file"] == recovered["browser"]["requiredTextOutput"]["file"])
+        );
+        assert!(
+            Path::new(
+                recovered["browser"]["requiredTextOutput"]["file"]
+                    .as_str()
+                    .unwrap()
+            )
+            .is_file()
+        );
+    }
+    assert!(trace.lock().unwrap().iter().all(|v| !matches!(
+        v["method"].as_str(),
+        Some(
+            "Target.createTarget"
+                | "Page.navigate"
+                | "Input.dispatchKeyEvent"
+                | "DOM.setFileInputFiles"
+        )
+    )));
+}
+/// A captured parent whose output path holds another answer refuses recovery, leaving that
+/// file, the parent's adoption and the running child in place.
+fn assert_conflict_refused(
+    store: &SessionStore,
+    parent_id: &str,
+    child_id: &str,
+    home: &Path,
+    closes: &AtomicUsize,
+) {
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fs::read(home.join("PUBLIC-recovered.md")).unwrap(),
+        b"PUBLIC external answer"
+    );
+    assert_eq!(
+        store.require(parent_id).unwrap()["browser"]["consultation"]["adoption"]["phase"],
+        "captured"
+    );
+    assert_eq!(store.require(child_id).unwrap()["status"], "running");
+}
+/// A parent or observer cancelled at retirement keeps the child's capture and the parent's
+/// recovery mark, and closes no tab.
+fn assert_retirement_cancelled(
+    store: &SessionStore,
+    child_id: &str,
+    parent_id: &str,
+    image_fault: Option<Fault>,
+    home: &Path,
+    sends: &AtomicUsize,
+    closes: &AtomicUsize,
+) {
+    let retained = store.stored_for_update(child_id).unwrap();
+    let parent = store.stored_for_update(parent_id).unwrap();
+    assert!(retained["browser"]["capturedAnswer"].is_object());
+    assert_eq!(parent["recoveryRequired"], true);
+    assert_eq!(
+        parent["status"],
+        if matches!(
+            image_fault,
+            Some(
+                Fault::RecoveryParentCancelledAtRetirement
+                    | Fault::RecoveryRetryParentCancelledAtRetirement
+            )
+        ) {
+            "cancelled"
+        } else {
+            "completed"
+        }
+    );
+    assert!(home.join("PUBLIC-recovered.md").is_file());
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+}
+/// The names of a session's saved answer captures, sorted.
+fn capture_files_in(store: &SessionStore, id: &str) -> Vec<std::ffi::OsString> {
+    let mut names = fs::read_dir(store.directory(id).unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().starts_with("captured-answer-"))
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+/// A parent session's pending artifact files with their identities, sorted by path.
+fn pending_artifacts_in(
+    store: &SessionStore,
+    parent_id: &str,
+) -> Vec<(PathBuf, crate::native_fs::NativeIdentity)> {
+    let path = store.directory(parent_id).unwrap().join("artifacts");
+    let mut files = if path.exists() {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|row| row.unwrap().path())
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| {
+            let entry = crate::native_fs::NativeEntry::open(&path, false).unwrap();
+            (path, entry.identity)
+        })
+        .collect::<Vec<_>>()
+}
+/// Before recovery, the parent's state matches the recovery stage `capture_kind` names.
+fn assert_parent_before_recovery(
+    store: &SessionStore,
+    parent_id: &str,
+    parent: &Value,
+    home: &Path,
+    capture_kind: Option<&str>,
+) {
+    if capture_kind == Some("selected")
+        || capture_kind.is_some_and(|kind| kind.starts_with("remote-"))
+    {
+        crate::browser_attempt::require_selected(store, parent_id, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(
+            parent["status"],
+            if capture_kind == Some("remote-partial") {
+                "partial"
+            } else {
+                "running"
+            }
+        );
+        if capture_kind == Some("selected") {
+            assert!(home.join("PUBLIC-recovered.md").is_file());
+        }
+    } else if capture_kind.is_some_and(|kind| kind.starts_with("captured")) {
+        assert_eq!(
+            parent["browser"]["consultation"]["adoption"]["phase"],
+            "captured"
+        );
+        assert!(parent["browser"]["capturedAnswer"].is_object());
+        assert_eq!(
+            home.join("PUBLIC-recovered.md").exists(),
+            matches!(
+                capture_kind,
+                Some("captured-existing" | "captured-conflict")
+            )
+        );
+    } else {
+        if capture_kind.is_some_and(|kind| kind.starts_with("reserved")) {
+            assert_eq!(
+                parent["browser"]["consultation"]["adoption"]["phase"],
+                "reserved"
+            );
+        }
+        assert!(parent["browser"]["capturedAnswer"].is_null());
+        assert!(!home.join("PUBLIC-recovered.md").exists());
+    }
+}
+/// A child attempt refuses recovery and historical completion on its own, changing nothing.
+async fn assert_child_refuses_direct_recovery(
+    store: &SessionStore,
+    child_id: &str,
+    profile: &Arc<ProfileRegistry>,
+    browser: &Cdp,
+    endpoint: &AttachmentEndpoint,
+    trace: &Mutex<Vec<Value>>,
+    cancel: &CancellationToken,
+) {
+    let before_child = store.stored_for_update(child_id).unwrap();
+    let direct = recover_existing(
+        store,
+        child_id,
+        profile.clone(),
+        browser.clone(),
+        endpoint.clone(),
+        &limits(),
+        cancel,
+    )
+    .await
+    .unwrap_err();
+    assert!(direct.to_string().contains("original public parent"));
+    let direct_snapshot = crate::browser_sessions::HarvestSnapshot {
+        endpoint: endpoint.clone(),
+        tab: json!({"state":"completed","completionConfirmed":true}),
+        integrity: crate::browser_harvest::HarvestIntegrity {
+            status: "matched".into(),
+            observed_conversation_id: Some("consult-public".into()),
+            captured: vec![],
+            unverified_sources: vec![],
+            explicit_target: false,
+            previous_harvest_conversation_id: None,
+        },
+    };
+    assert!(
+        crate::browser_historical::complete_owned(store, child_id, &direct_snapshot, cancel)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("original public parent")
+    );
+    assert_eq!(store.stored_for_update(child_id).unwrap(), before_child);
+    assert!(trace.lock().unwrap().is_empty());
+}
+/// A remote result stays pending, its transport bytes unchanged, until its acknowledgement
+/// commits; the acknowledgement closes no tab.
+fn assert_remote_result_pending(
+    store: &SessionStore,
+    child_id: &str,
+    pending: &Value,
+    original_transport: &[(PathBuf, Vec<u8>, crate::native_fs::NativeIdentity)],
+    closes: &AtomicUsize,
+) {
+    for (path, bytes, identity) in original_transport {
+        assert_eq!(
+            &fs::read(path).unwrap(),
+            bytes,
+            "Remote recovery replaced immutable transport bytes"
+        );
+        assert_eq!(
+            &crate::native_fs::NativeEntry::open(path, false)
+                .unwrap()
+                .identity,
+            identity
+        );
+    }
+    assert_eq!(pending["status"], "running");
+    assert_eq!(store.require(child_id).unwrap()["status"], "running");
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+    let record = crate::remote_result::read(store, "12345678-1234-1234-1234-123456789abc").unwrap();
+    assert_eq!(record.native()["phase"], "result");
+    let (acknowledged, committed) =
+        crate::remote_result::complete_acknowledgement_lossless(store, &record).unwrap();
+    assert!(committed);
+    assert_eq!(acknowledged["status"], "completed");
+    assert_eq!(closes.load(Ordering::SeqCst), 0);
+}
+/// A selected or captured parent keeps its capture and output, and recovery never re-enters
+/// provider capture.
+fn assert_adopted_capture(
+    recovered: &Value,
+    parent: &Value,
+    home: &Path,
+    capture_kind: Option<&str>,
+    original_output_identity: Option<crate::native_fs::NativeIdentity>,
+    trace: &Mutex<Vec<Value>>,
+) {
     if capture_kind == Some("selected")
         || capture_kind.is_some_and(|kind| kind.starts_with("captured"))
     {
@@ -3424,6 +3683,17 @@ async fn assert_parent_recovery_from(
             "Selected-parent resume re-entered provider capture"
         );
     }
+}
+/// A reserved parent resumes without provider capture and keeps its pending artifacts and
+/// captures exact.
+fn assert_reserved_resume(
+    store: &SessionStore,
+    parent_id: &str,
+    trace: &Mutex<Vec<Value>>,
+    capture_kind: Option<&str>,
+    original_pending_artifacts: &[(PathBuf, crate::native_fs::NativeIdentity)],
+    original_parent_files: &[std::ffi::OsString],
+) {
     if capture_kind.is_some_and(|kind| kind.starts_with("reserved")) {
         assert!(
             trace
@@ -3438,7 +3708,7 @@ async fn assert_parent_recovery_from(
         if !original_pending_artifacts.is_empty() {
             // The parent's own transcript is new at adoption; pending artifacts stay exact.
             assert_eq!(
-                pending_artifact_files()
+                pending_artifacts_in(store, parent_id)
                     .into_iter()
                     .filter(|(path, _)| path.file_name().unwrap() != "transcript.md")
                     .collect::<Vec<_>>(),
@@ -3448,12 +3718,23 @@ async fn assert_parent_recovery_from(
         }
         if !original_parent_files.is_empty() {
             assert_eq!(
-                capture_files_for(parent_id),
+                capture_files_in(store, parent_id),
                 original_parent_files,
                 "Reserved recovery duplicated pending parent capture"
             );
         }
     }
+}
+/// The child settles completed with its original capture, controller and attempt link.
+fn assert_child_settled(
+    store: &SessionStore,
+    child_id: &str,
+    child: &Value,
+    capture_kind: Option<&str>,
+    original_capture_files: &[std::ffi::OsString],
+    original_child_controller: &Value,
+    original_link: &Value,
+) {
     let settled = store.require(child_id).unwrap();
     assert_eq!(settled["status"], "completed");
     assert_eq!(settled["dispatch"]["state"], "completed");
@@ -3464,50 +3745,16 @@ async fn assert_parent_recovery_from(
             "Recovery replaced the original accepted child capture"
         );
         assert_eq!(
-            capture_files(),
+            capture_files_in(store, child_id),
             original_capture_files,
             "Recovery accumulated another child capture"
         );
     }
     assert_eq!(
         crate::execution::controller_identity(&settled),
-        original_child_controller
+        *original_child_controller
     );
-    assert_eq!(settled["browser"]["attempt"], original_link);
-    let retired = journal.read(&creator["allocationId"]).unwrap();
-    assert_eq!(retired["creator"], creator);
-    assert_eq!(retired["disposition"]["decision"], "retired");
-    if !capture_kind.is_some_and(|kind| kind.starts_with("remote")) {
-        assert!(
-            retired["commit"]["requiredOutputs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|row| row["file"] == recovered["browser"]["requiredTextOutput"]["file"])
-        );
-        assert!(
-            Path::new(
-                recovered["browser"]["requiredTextOutput"]["file"]
-                    .as_str()
-                    .unwrap()
-            )
-            .is_file()
-        );
-    }
-    assert_eq!(
-        sends.load(Ordering::SeqCst),
-        manifest["sends"].as_u64().unwrap() as usize
-    );
-    assert_eq!(closes.load(Ordering::SeqCst), 1);
-    assert!(trace.lock().unwrap().iter().all(|v| !matches!(
-        v["method"].as_str(),
-        Some(
-            "Target.createTarget"
-                | "Page.navigate"
-                | "Input.dispatchKeyEvent"
-                | "DOM.setFileInputFiles"
-        )
-    )));
+    assert_eq!(settled["browser"]["attempt"], *original_link);
 }
 
 #[tokio::test]

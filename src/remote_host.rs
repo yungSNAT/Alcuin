@@ -555,175 +555,19 @@ async fn route(
         ));
     }
     if result_route {
-        let operation = async {
-            let record = remote_result::read(&state.store, parts[2])?;
-            if parts[3] == "result" && method == Method::GET {
-                let mut result = response(
-                    200,
-                    "application/x-ndjson",
-                    events(&state.store, &record, &gone)?.concat(),
-                );
-                result.headers_mut().insert(
-                    "Cache-Control",
-                    hyper::header::HeaderValue::from_static("no-store"),
-                );
-                Ok(result)
-            } else if parts[3] == "ack" && method == Method::POST {
-                let delivery =
-                    parse_json(&body(&mut request, &gone, Some(1024), receive_deadline).await?)?;
-                ensure!(
-                    delivery["version"] == 1
-                        && delivery["runId"] == record.native()["runId"]
-                        && delivery["sha256"] == record.native()["delivery"]["sha256"],
-                    "Remote result acknowledgement does not match the captured delivery."
-                );
-                let store = state.store.clone();
-                let (sender, receiver) = tokio::sync::oneshot::channel();
-                spawn(&state, async move {
-                    // Reply once the acknowledgement is durable. Target retirement and
-                    // browser cleanup can outlast the client's acknowledgement timeout, so
-                    // they run afterwards in this tracked worker.
-                    let committed = match remote_result::commit_acknowledgement(&store, &record) {
-                        Ok(committed) => committed,
-                        Err(error) => {
-                            let _ = sender.send(Err(error));
-                            return;
-                        }
-                    };
-                    let _ = sender.send(Ok(()));
-                    let run = record.native()["runId"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned();
-                    match committed.finish(&store, &record).await {
-                        Ok(None) => {}
-                        Ok(Some(warning)) => eprintln!("Remote run {run}: {warning}"),
-                        Err(error) => eprintln!(
-                            "Remote run {run}: delivery is saved; cleanup failed: {error:#}"
-                        ),
-                    }
-                })
-                .await;
-                receiver.await??;
-                Ok(json_response(200, json!({"acknowledged":true})))
-            } else {
-                Ok(response(404, "application/json", Bytes::new()))
-            }
-        }
-        .await;
-        return Ok(operation.unwrap_or_else(|error: anyhow::Error| {
-            if error
-                .downcast_ref::<tokio::time::error::Elapsed>()
-                .is_some()
-            {
-                return receive_timeout_response();
-            }
-            json_response(
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                {
-                    404
-                } else {
-                    409
-                },
-                json!({"error":"remote_result_unavailable"}),
-            )
-        }));
+        return Ok(result_response(
+            &mut request,
+            &state,
+            &gone,
+            &method,
+            parts[2],
+            parts[3],
+            receive_deadline,
+        )
+        .await);
     }
     if artifact_route {
-        let operation = || -> Result<_> {
-            let missing = || ArtifactRefusal(404, "artifact_not_found");
-            let record =
-                remote_result::read(&state.store, &artifact_parts[2]).map_err(|_| missing())?;
-            let artifact = record.native()["artifacts"]
-                .as_array()
-                .and_then(|artifacts| {
-                    artifacts
-                        .iter()
-                        .find(|artifact| artifact["descriptor"]["artifactId"] == artifact_parts[4])
-                })
-                .ok_or_else(missing)?;
-            // Reference stat checks: a missing or empty file, then an oversized one.
-            match artifact["filePath"].as_str().map(std::fs::metadata) {
-                Some(Ok(metadata)) if metadata.is_file() && metadata.len() > 0 => {
-                    if metadata.len() > MAX_ARTIFACT_BYTES {
-                        return Err(ArtifactRefusal(413, "artifact_too_large").into());
-                    }
-                }
-                _ => return Err(ArtifactRefusal(410, "artifact_unavailable").into()),
-            }
-            let verified = VerifiedArtifact::open(&state.store, &record, artifact, &gone)?;
-            let descriptor = &artifact["descriptor"];
-            let filename =
-                crate::browser_output::filename(descriptor["filename"].as_str().unwrap_or(""));
-            let mime = artifact_mime(descriptor["mimeType"].as_str())
-                .unwrap_or_else(|| "application/octet-stream".into());
-            let (sender, receiver) = mpsc::channel(1);
-            let mut result = Response::builder()
-                .status(200)
-                .header("Content-Type", &mime)
-                .body(RemoteBody {
-                    receiver,
-                    disconnect: Some(gone.clone()),
-                })?;
-            result.headers_mut().insert(
-                "Content-Length",
-                hyper::header::HeaderValue::from_str(&descriptor["byteSize"].to_string())?,
-            );
-            result.headers_mut().insert(
-                "Content-Disposition",
-                hyper::header::HeaderValue::from_str(&format!(
-                    "attachment; filename=\"{filename}\""
-                ))?,
-            );
-            result.headers_mut().insert(
-                "Cache-Control",
-                hyper::header::HeaderValue::from_static("no-store"),
-            );
-            result.headers_mut().insert(
-                "X-Content-Type-Options",
-                hyper::header::HeaderValue::from_static("nosniff"),
-            );
-            result.headers_mut().insert(
-                "X-Oracle-Artifact-Id",
-                hyper::header::HeaderValue::from_str(
-                    descriptor["artifactId"]
-                        .as_str()
-                        .context("Missing artifact ID")?,
-                )?,
-            );
-            result.headers_mut().insert(
-                "X-Oracle-Artifact-Sha256",
-                hyper::header::HeaderValue::from_str(
-                    descriptor["sha256"]
-                        .as_str()
-                        .context("Missing artifact digest")?,
-                )?,
-            );
-            Ok((result, verified, sender))
-        };
-        return Ok(match operation() {
-            Ok((result, verified, sender)) => {
-                let cancel = gone.clone();
-                spawn(&state, async move {
-                    // A dropped response releases a blocked sender; shutdown also cancels
-                    // the request. No browser worker or target authority is involved.
-                    let _ =
-                        tokio::task::spawn_blocking(move || verified.stream(sender, &cancel)).await;
-                })
-                .await;
-                result
-            }
-            // A file that fails verification is unavailable, as the reference has no such file.
-            Err(error) => {
-                let ArtifactRefusal(status, code) = error
-                    .downcast_ref::<ArtifactRefusal>()
-                    .copied()
-                    .unwrap_or(ArtifactRefusal(410, "artifact_unavailable"));
-                json_response(status, json!({"error":code}))
-            }
-        });
+        return Ok(artifact_response(&state, &gone, &artifact_parts[2], &artifact_parts[4]).await);
     }
     if method != Method::POST || path != "/runs" {
         return Ok(response(404, "application/json", Bytes::new()));
@@ -898,6 +742,187 @@ async fn route(
         hyper::header::HeaderValue::from_static("application/x-ndjson"),
     );
     Ok(result)
+}
+/// `GET /runs/<id>/result` and `POST /runs/<id>/ack` for an authorised client.
+async fn result_response(
+    request: &mut Request<Incoming>,
+    state: &Arc<State>,
+    gone: &CancellationToken,
+    method: &Method,
+    run: &str,
+    action: &str,
+    receive_deadline: tokio::time::Instant,
+) -> Response<RemoteBody> {
+    let operation = async {
+        let record = remote_result::read(&state.store, run)?;
+        if action == "result" && *method == Method::GET {
+            let mut result = response(
+                200,
+                "application/x-ndjson",
+                events(&state.store, &record, gone)?.concat(),
+            );
+            result.headers_mut().insert(
+                "Cache-Control",
+                hyper::header::HeaderValue::from_static("no-store"),
+            );
+            Ok(result)
+        } else if action == "ack" && *method == Method::POST {
+            let delivery = parse_json(&body(request, gone, Some(1024), receive_deadline).await?)?;
+            ensure!(
+                delivery["version"] == 1
+                    && delivery["runId"] == record.native()["runId"]
+                    && delivery["sha256"] == record.native()["delivery"]["sha256"],
+                "Remote result acknowledgement does not match the captured delivery."
+            );
+            let store = state.store.clone();
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            spawn(state, async move {
+                // Reply once the acknowledgement is durable. Target retirement and
+                // browser cleanup can outlast the client's acknowledgement timeout, so
+                // they run afterwards in this tracked worker.
+                let committed = match remote_result::commit_acknowledgement(&store, &record) {
+                    Ok(committed) => committed,
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        return;
+                    }
+                };
+                let _ = sender.send(Ok(()));
+                let run = record.native()["runId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                match committed.finish(&store, &record).await {
+                    Ok(None) => {}
+                    Ok(Some(warning)) => eprintln!("Remote run {run}: {warning}"),
+                    Err(error) => {
+                        eprintln!("Remote run {run}: delivery is saved; cleanup failed: {error:#}")
+                    }
+                }
+            })
+            .await;
+            receiver.await??;
+            Ok(json_response(200, json!({"acknowledged":true})))
+        } else {
+            Ok(response(404, "application/json", Bytes::new()))
+        }
+    }
+    .await;
+    operation.unwrap_or_else(|error: anyhow::Error| {
+        if error
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some()
+        {
+            return receive_timeout_response();
+        }
+        json_response(
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            {
+                404
+            } else {
+                409
+            },
+            json!({"error":"remote_result_unavailable"}),
+        )
+    })
+}
+/// `GET /runs/<id>/artifacts/<artifact id>` for an authorised client.
+async fn artifact_response(
+    state: &Arc<State>,
+    gone: &CancellationToken,
+    run: &str,
+    artifact_id: &str,
+) -> Response<RemoteBody> {
+    let operation = || -> Result<_> {
+        let missing = || ArtifactRefusal(404, "artifact_not_found");
+        let record = remote_result::read(&state.store, run).map_err(|_| missing())?;
+        let artifact = record.native()["artifacts"]
+            .as_array()
+            .and_then(|artifacts| {
+                artifacts
+                    .iter()
+                    .find(|artifact| artifact["descriptor"]["artifactId"] == artifact_id)
+            })
+            .ok_or_else(missing)?;
+        // Reference stat checks: a missing or empty file, then an oversized one.
+        match artifact["filePath"].as_str().map(std::fs::metadata) {
+            Some(Ok(metadata)) if metadata.is_file() && metadata.len() > 0 => {
+                if metadata.len() > MAX_ARTIFACT_BYTES {
+                    return Err(ArtifactRefusal(413, "artifact_too_large").into());
+                }
+            }
+            _ => return Err(ArtifactRefusal(410, "artifact_unavailable").into()),
+        }
+        let verified = VerifiedArtifact::open(&state.store, &record, artifact, gone)?;
+        let descriptor = &artifact["descriptor"];
+        let filename =
+            crate::browser_output::filename(descriptor["filename"].as_str().unwrap_or(""));
+        let mime = artifact_mime(descriptor["mimeType"].as_str())
+            .unwrap_or_else(|| "application/octet-stream".into());
+        let (sender, receiver) = mpsc::channel(1);
+        let mut result = Response::builder()
+            .status(200)
+            .header("Content-Type", &mime)
+            .body(RemoteBody {
+                receiver,
+                disconnect: Some(gone.clone()),
+            })?;
+        result.headers_mut().insert(
+            "Content-Length",
+            hyper::header::HeaderValue::from_str(&descriptor["byteSize"].to_string())?,
+        );
+        result.headers_mut().insert(
+            "Content-Disposition",
+            hyper::header::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))?,
+        );
+        result.headers_mut().insert(
+            "Cache-Control",
+            hyper::header::HeaderValue::from_static("no-store"),
+        );
+        result.headers_mut().insert(
+            "X-Content-Type-Options",
+            hyper::header::HeaderValue::from_static("nosniff"),
+        );
+        result.headers_mut().insert(
+            "X-Oracle-Artifact-Id",
+            hyper::header::HeaderValue::from_str(
+                descriptor["artifactId"]
+                    .as_str()
+                    .context("Missing artifact ID")?,
+            )?,
+        );
+        result.headers_mut().insert(
+            "X-Oracle-Artifact-Sha256",
+            hyper::header::HeaderValue::from_str(
+                descriptor["sha256"]
+                    .as_str()
+                    .context("Missing artifact digest")?,
+            )?,
+        );
+        Ok((result, verified, sender))
+    };
+    match operation() {
+        Ok((result, verified, sender)) => {
+            let cancel = gone.clone();
+            spawn(state, async move {
+                // A dropped response releases a blocked sender; shutdown also cancels
+                // the request. No browser worker or target authority is involved.
+                let _ = tokio::task::spawn_blocking(move || verified.stream(sender, &cancel)).await;
+            })
+            .await;
+            result
+        }
+        // A file that fails verification is unavailable, as the reference has no such file.
+        Err(error) => {
+            let ArtifactRefusal(status, code) = error
+                .downcast_ref::<ArtifactRefusal>()
+                .copied()
+                .unwrap_or(ArtifactRefusal(410, "artifact_unavailable"));
+            json_response(status, json!({"error":code}))
+        }
+    }
 }
 #[cfg(test)]
 mod tests {

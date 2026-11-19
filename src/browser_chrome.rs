@@ -869,54 +869,17 @@ impl ChromeConnection {
         let raw = read_record(&record_path)?;
         let recorded = raw.is_some();
         if let Some(raw) = raw {
-            let record: LaunchRecord = serde_json::from_value(raw)
-                .context("Native Chrome ownership record is malformed; refusing launch")?;
-            anyhow::ensure!(
-                record.version == 1
-                    && record.profile_identity == profile_entry.identity
-                    && (!require_executable
-                        || NativeEntry::open(&executable, false)?.identity
-                            == record.executable_identity)
-                    && NativeEntry::open(&record.executable, false)?.identity
-                        == record.executable_identity,
-                ChromeIdentityRefusal(
-                    "Chrome executable or native profile identity changed; refusing reuse"
-                )
-            );
+            let record = Self::recorded_launch(
+                raw,
+                &profile_entry.identity,
+                &executable,
+                require_executable,
+            )?;
             match record.process_identity.liveness() {
                 Liveness::Alive => {
-                    anyhow::ensure!(
-                        !bootstrap,
-                        "Explicit cookie bootstrap requires a newly owned Chrome process; close its existing browser or select a separate profile"
-                    );
-                    anyhow::ensure!(
-                        record.headless == options.headless,
-                        "Existing Chrome visibility mode differs; use a separate profile or close its owned browser before changing modes"
-                    );
-                    let endpoint = record.endpoint.context(
-                        "Existing Chrome launch has no acknowledged endpoint; recovery is required",
-                    )?;
-                    let actual = read_devtools_endpoint(profile.path())?.ok_or(
-                        ChromeIdentityRefusal("Existing Chrome debugging identity is unavailable"),
-                    )?;
-                    anyhow::ensure!(
-                        actual == endpoint,
-                        ChromeIdentityRefusal("Chrome debugging endpoint changed; refusing reuse")
-                    );
-                    let browser = endpoint.connect_admitted(options.timeout, cancel).await?;
-                    profile.check()?;
-                    anyhow::ensure!(
-                        record.process_identity.liveness() == Liveness::Alive,
-                        ChromeIdentityRefusal("Chrome process identity changed during attachment")
-                    );
-                    #[cfg(windows)]
-                    if options.keep_window_behind
-                        && !options.headless
-                        && let Err(error) =
-                            crate::window_keeper::start(&profile, &record.process_identity).await
-                    {
-                        eprintln!("Could not start the Chrome window keeper: {error}");
-                    }
+                    let (endpoint, browser) =
+                        Self::attach_recorded(&profile, &record, &options, bootstrap, cancel)
+                            .await?;
                     return Self::borrowed_process(
                         profile,
                         endpoint,
@@ -1160,6 +1123,73 @@ impl ChromeConnection {
             idle_startup,
             attachment: None,
         })
+    }
+    /// The profile's launch record, once its version and the profile and executable identities
+    /// it names still match.
+    fn recorded_launch(
+        raw: Value,
+        profile_identity: &NativeIdentity,
+        executable: &Path,
+        require_executable: bool,
+    ) -> Result<LaunchRecord> {
+        let record: LaunchRecord = serde_json::from_value(raw)
+            .context("Native Chrome ownership record is malformed; refusing launch")?;
+        anyhow::ensure!(
+            record.version == 1
+                && record.profile_identity == *profile_identity
+                && (!require_executable
+                    || NativeEntry::open(executable, false)?.identity
+                        == record.executable_identity)
+                && NativeEntry::open(&record.executable, false)?.identity
+                    == record.executable_identity,
+            ChromeIdentityRefusal(
+                "Chrome executable or native profile identity changed; refusing reuse"
+            )
+        );
+        Ok(record)
+    }
+    /// Attaches to the live Chrome process a launch record names, once its visibility mode and
+    /// debugging endpoint still match. A cookie bootstrap refuses an existing process.
+    async fn attach_recorded(
+        profile: &ProfileRegistry,
+        record: &LaunchRecord,
+        options: &ChromeLaunch,
+        bootstrap: bool,
+        cancel: &CancellationToken,
+    ) -> Result<(AttachmentEndpoint, Cdp)> {
+        anyhow::ensure!(
+            !bootstrap,
+            "Explicit cookie bootstrap requires a newly owned Chrome process; close its existing browser or select a separate profile"
+        );
+        anyhow::ensure!(
+            record.headless == options.headless,
+            "Existing Chrome visibility mode differs; use a separate profile or close its owned browser before changing modes"
+        );
+        let endpoint = record
+            .endpoint
+            .clone()
+            .context("Existing Chrome launch has no acknowledged endpoint; recovery is required")?;
+        let actual = read_devtools_endpoint(profile.path())?.ok_or(ChromeIdentityRefusal(
+            "Existing Chrome debugging identity is unavailable",
+        ))?;
+        anyhow::ensure!(
+            actual == endpoint,
+            ChromeIdentityRefusal("Chrome debugging endpoint changed; refusing reuse")
+        );
+        let browser = endpoint.connect_admitted(options.timeout, cancel).await?;
+        profile.check()?;
+        anyhow::ensure!(
+            record.process_identity.liveness() == Liveness::Alive,
+            ChromeIdentityRefusal("Chrome process identity changed during attachment")
+        );
+        #[cfg(windows)]
+        if options.keep_window_behind
+            && !options.headless
+            && let Err(error) = crate::window_keeper::start(profile, &record.process_identity).await
+        {
+            eprintln!("Could not start the Chrome window keeper: {error}");
+        }
+        Ok((endpoint, browser))
     }
     /// Reusing a process this launch did not start is a borrowed-process attachment, not new
     /// kill authority. Idle cleanup takes the bring-up lock, so the attachment is marked first.
@@ -3603,7 +3633,6 @@ mod tests {
     #[tokio::test]
     #[ignore = "Uses only disposable synthetic profiles and installed Chrome or Linux Chromium"]
     async fn fresh_ordinary_profile_is_seeded_privately_and_disposed_only_when_untouched() {
-        use crate::browser_target::TargetAcquisition;
         use futures_util::FutureExt;
         let home = tempfile::Builder::new()
             .prefix("PUBLIC-fresh-native-")
@@ -3688,222 +3717,27 @@ mod tests {
             let path = registry.path().to_owned();
             let disposal_store =
                 crate::sessions::SessionStore::new(home.path().join("PUBLIC-disposal-state"));
-            let result = tokio::time::timeout(Duration::from_secs(30), std::panic::AssertUnwindSafe(async {
-                let disposal_id = if matches!(case, "late" | "clean" | "exit-retry" | "partial-retry" | "headless" | "missing-capability") {
-                    Some(fresh_retirement::saved_disposal_fixture(&connection, &disposal_store))
-                } else if case == "survivor" {
-                    let meta = disposal_store.create(serde_json::json!({"prompt":"PUBLIC source","model":"gpt-6-pro","engine":"browser"}),home.path(),None)?;
-                    Some(meta["id"].as_str().context("Missing live disposal fixture session")?.to_owned())
-                } else { None };
-                anyhow::ensure!(
-                    connection.is_fresh() && connection.owns_process(),
-                    "Ordinary launch did not own a fresh profile"
-                );
-                anyhow::ensure!(
-                    path.starts_with(fs::canonicalize(&base)?)
-                        && path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.starts_with("alcuin-browser-")),
-                    "Fresh profile is outside its private destination"
-                );
-                anyhow::ensure!(
-                    !home.path().join(".oracle").exists(),
-                    "Fresh run touched the persistent manual-login profile"
-                );
-                let lock = connection
-                    .take_bootstrap_lock()
-                    .context("Ordinary sync did not hold its bring-up lock until seeding")?;
-                let startup = connection
-                    .take_bootstrap_admission()
-                    .context("Ordinary sync did not hold startup admission until seeding")?;
-                let lease = Arc::new(
-                    registry
-                        .acquire_with_limit(if case=="survivor" {disposal_id.as_deref().unwrap()}else{"PUBLIC-fresh-native"}, 2, timeout, &cancel)
-                        .await?,
-                );
-                let mut target = TargetAcquisition::default()
-                    .acquire(connection.browser.clone(), lease, &cancel, timeout)
-                    .await?;
-                anyhow::ensure!(
-                    batch
-                        .apply(target.page(), "https://chatgpt.com/", timeout, &cancel)
-                        .await?
-                        == 1,
-                    "Extracted cookie was not applied"
-                );
-                let cookies = target
-                    .page()
-                    .call(
-                        "Network.getCookies",
-                        serde_json::json!({"urls":["https://chatgpt.com/"]}),
-                        timeout,
-                        &cancel,
-                    )
-                    .await?;
-                anyhow::ensure!(
-                    cookies["cookies"].as_array().is_some_and(|cookies| cookies
-                        .iter()
-                        .any(|cookie| cookie["name"] == "PUBLIC-session"
-                            && cookie["value"] == "PUBLIC-cookie-value")),
-                    "Fresh Chromium did not store the extracted synthetic cookie"
-                );
-                lock.release()?;
-                startup.release()?;
-                if case == "survivor" {
-                    fresh_retirement::retire_last_page_fixture(&connection,&disposal_store,disposal_id.as_deref().unwrap(),&target).await?;
-                } else {
-                    target.retire_unclaimed_blank(timeout).await?;
-                }
-                drop(target);
-                let rows = connection
-                    .browser
-                    .call("Target.getTargets", serde_json::json!({}), timeout, &cancel)
-                    .await?;
-                eprintln!(
-                    "PUBLIC-fresh-{case}-targets={} startup={:?}",
-                    rows["targetInfos"],
-                    connection
-                        .fresh
-                        .as_ref()
-                        .map(|fresh| &fresh.startup_targets)
-                );
-                let blocker = if matches!(case, "foreign" | "late") {
-                    Some(connection
-                        .browser
-                        .call(
-                            "Target.createTarget",
-                            serde_json::json!({"url":"about:blank"}),
-                            timeout,
-                            &cancel,
-                        )
-                        .await?["targetId"].as_str().context("Fixture target is missing")?.to_owned())
-                } else { None };
-                // Chrome may still be starting helpers, or the previous fixture's
-                // processes may be exiting. Begin disposal from a complete scan.
-                let scan_deadline = std::time::Instant::now() + Duration::from_secs(5);
-                while !profile_processes(&path).is_ok_and(|pids| pids == [identity.pid]) {
-                    anyhow::ensure!(std::time::Instant::now() < scan_deadline,
-                        "PUBLIC fixture process inventory never settled");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                let settled = if case == "pre-prompt-marker" {
-                    fresh_retirement::TEST_DISPOSAL_STOP.scope("after-pre-prompt-marker",
-                        connection.settle_fresh(Duration::from_secs(5))).await
-                } else if case == "unreadable" {
-                    anyhow::ensure!(crate::browser_runner::settle_completed_fresh(
-                        &disposal_store, "PUBLIC-missing-record", &mut connection).await
-                        && identity.liveness() == Liveness::Alive
-                        && path.join("oracle-chrome-native.json").exists(),
-                        "Unreadable completion evidence entered the old deletion path");
-                    Ok(())
-                } else if matches!(case, "exit-retry" | "partial-retry") {
-                    let id = disposal_id.as_deref().unwrap();
-                    let stage = if case == "exit-retry" {"after-browser-exit"} else {"after-launch-record-removal"};
-                    let routed = fresh_retirement::TEST_DISPOSAL_STOP.scope(stage,
-                        crate::browser_runner::settle_completed_fresh(&disposal_store, id, &mut connection)).await;
-                    anyhow::ensure!(routed && identity.liveness() == Liveness::Dead && path.exists(),
-                        "Completed disposal did not reach its injected interruption");
-                    let saved = disposal_store.stored_for_update(id)?;
-                    anyhow::ensure!(saved["status"] == "completed"
-                        && saved["browser"]["runtime"]["freshProfileDisposal"]["disposition"] == "retained"
-                        && saved["browser"]["runtime"]["freshProfileDisposal"]["observedProcesses"].as_array().is_some_and(|rows| !rows.is_empty()),
-                        "Interrupted disposal lost its completed answer or native exit evidence");
-                    anyhow::ensure!(path.join("oracle-chrome-native.json").exists() == (case == "exit-retry")
-                        && crate::browser_profile::fresh_disposal_marker(&path).unwrap().exists() == (case == "partial-retry"),
-                        "Injected interruption did not exercise its durable marker boundary");
-                    // No DEFERRED_FRESH entry remains, as after a worker restart.
-                    crate::browser_runner::settle_deferred_fresh(&disposal_store, Some(id)).await;
-                    let saved = disposal_store.stored_for_update(id)?;
-                    anyhow::ensure!(saved["browser"]["runtime"]["freshProfileDisposal"]["disposition"] == "removed"
-                        && !path.exists() && !crate::browser_profile::fresh_disposal_marker(&path).unwrap().exists(),
-                        "Restarted deferred cleanup did not finish interrupted disposal");
-                    Ok(())
-                } else if let Some(id) = disposal_id.as_deref() {
-                    if case == "missing-capability" {
-                        disposal_store.update(id, |current| {
-                            let mut browser=current["browser"].clone();
-                            browser["runtime"].as_object_mut().unwrap().remove("freshProfileOwner");
-                            Ok(Some(serde_json::json!({"browser":browser})))
-                        })?;
-                    }
-                    anyhow::ensure!(crate::browser_runner::settle_completed_fresh(&disposal_store, id, &mut connection).await,
-                        "Completed fresh launch bypassed durable disposal");
-                    if case == "late" { Err(anyhow::anyhow!("PUBLIC retained target")) } else { Ok(()) }
-                } else {
-                    connection.settle_fresh(Duration::from_secs(5)).await
-                };
-                if case == "pre-prompt-marker" {
-                    anyhow::ensure!(settled.is_err() && identity.liveness() == Liveness::Dead
-                        && path.exists() && crate::browser_profile::fresh_disposal_marker(&path).unwrap().exists(),
-                        "Interrupted pre-prompt disposal did not retain its disk barrier after native exit");
-                    anyhow::ensure!(registry.acquire("PUBLIC-refused-after-disposal",Duration::from_millis(200),&cancel).await.is_err(),
-                        "Interrupted disposal allowed a new profile admission");
-                } else if case == "late" {
-                    anyhow::ensure!(settled.is_err(), "First disposal must retain the unproven target");
-                    let id = disposal_id.as_deref().unwrap();
-                    anyhow::ensure!(retire_saved_fresh(&disposal_store, id, Duration::from_secs(3)).await.is_err()
-                        && identity.liveness() == Liveness::Alive, "Recovery closed a browser with a retained target");
-                    connection.browser.close_owned_target(blocker.as_deref().unwrap(), Duration::from_secs(1), &cancel).await?;
-                    let absence_deadline = std::time::Instant::now() + timeout;
-                    loop {
-                        let inventory = connection.browser.call("Target.getTargets", serde_json::json!({}), timeout, &cancel).await?;
-                        if inventory["targetInfos"].as_array().context("Missing fixture inventory")?.iter().all(|row|row["targetId"] != blocker.as_deref().unwrap()) { break; }
-                        anyhow::ensure!(std::time::Instant::now() < absence_deadline, "Fixture blocker close was acknowledged but absence remains unconfirmed");
-                        tokio::time::sleep(Duration::from_millis(25)).await;
-                    }
-                    let lease = registry.acquire("PUBLIC-concurrent-admission", timeout, &cancel).await?;
-                    anyhow::ensure!(retire_saved_fresh(&disposal_store, id, Duration::from_secs(3)).await.is_err()
-                        && identity.liveness() == Liveness::Alive, "Recovery ignored concurrent admission");
-                    lease.release()?;
-                    let saved = disposal_store.stored_for_update(id)?;
-                    for changed in ["keep", "profile", "process", "launch", "endpoint"] {
-                        let mut value = saved.clone();
-                        match changed {
-                            "keep" => value["browser"]["config"]["keepBrowser"] = serde_json::json!(true),
-                            "profile" => value["browser"]["runtime"]["freshProfileOwner"]["profile"] = serde_json::json!(home.path()),
-                            "process" => value["browser"]["runtime"]["freshProfileOwner"]["processIdentity"] = serde_json::json!(ProcessIdentity::current()?),
-                            "launch" => value["browser"]["runtime"]["freshProfileOwner"]["launchSha256"] = serde_json::json!("PUBLIC-changed"),
-                            _ => value["browser"]["runtime"]["freshProfileOwner"]["endpoint"]["port"] = serde_json::json!(1),
-                        }
-                        disposal_store.update(id, |_| Ok(Some(value)))?;
-                        anyhow::ensure!(retire_saved_fresh(&disposal_store, id, Duration::from_secs(3)).await.is_err()
-                            && identity.liveness() == Liveness::Alive, "Recovery ignored changed {changed}");
-                        disposal_store.update(id, |_| Ok(Some(saved.clone())))?;
-                    }
-                    let mut outcome = retire_saved_fresh(&disposal_store, id, Duration::from_secs(5)).await?;
-                    if outcome.as_ref().is_some_and(|value| value["disposition"] != "removed") {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        outcome = retire_saved_fresh(&disposal_store, id, Duration::from_secs(5)).await?;
-                    }
-                    anyhow::ensure!(outcome.as_ref().is_some_and(|value| value["disposition"] == "removed")
-                        && identity.liveness() == Liveness::Dead && !path.exists(),
-                        "Later recovery did not reclaim fresh Chrome and its profile: {outcome:?}");
-                } else if case == "headless" {
-                    settled?;
-                    let saved=disposal_store.stored_for_update(disposal_id.as_deref().unwrap())?;
-                    let disposition=&saved["browser"]["runtime"]["freshProfileDisposal"]["disposition"];
-                    anyhow::ensure!((identity.liveness()==Liveness::Dead && !path.exists() && disposition=="removed")
-                        || (identity.liveness()==Liveness::Alive && path.exists() && disposition=="retained"),
-                        "Headless natural exit was not observed or safely retained");
-                    eprintln!("PUBLIC-headless-natural-exit-disposition={disposition}");
-                } else if matches!(case, "clean" | "exit-retry" | "partial-retry" | "survivor" | "pre-prompt") {
-                    settled?;
-                    anyhow::ensure!(
-                        identity.liveness() == Liveness::Dead && !path.exists(),
-                        "Untouched fresh Chrome or profile survived disposal"
-                    );
-                } else {
-                    anyhow::ensure!(
-                        settled.is_err() == (case == "foreign")
-                            && identity.liveness() == Liveness::Alive
-                            && path.join("oracle-chrome-native.json").exists(),
-                        "Kept or foreign-tab fresh Chrome was not retained with its profile"
-                    );
-                }
-                Ok::<_, anyhow::Error>(())
-            }).catch_unwind())
-            .await.map(|caught| caught.unwrap_or_else(|_| Err(anyhow::anyhow!("PUBLIC disposal fixture panicked"))));
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                std::panic::AssertUnwindSafe(fresh_profile_case(
+                    case,
+                    &mut connection,
+                    &registry,
+                    &path,
+                    &disposal_store,
+                    &batch,
+                    &home,
+                    &base,
+                    &cancel,
+                    timeout,
+                    &identity,
+                ))
+                .catch_unwind(),
+            )
+            .await
+            .map(|caught| {
+                caught.unwrap_or_else(|_| Err(anyhow::anyhow!("PUBLIC disposal fixture panicked")))
+            });
             eprintln!(
                 "PUBLIC-fresh-{case}-before-teardown native={:?} passed={}",
                 identity.liveness(),
@@ -3935,6 +3769,431 @@ mod tests {
             eprintln!("PUBLIC-fresh-{case}-Chromium-{}=dead", identity.pid);
             result.unwrap().unwrap();
         }
+    }
+    /// One disposal case of a fresh ordinary profile: whether its disposal keeps, refuses or
+    /// retires the profile and its process, as `case` names.
+    #[cfg(any(target_os = "linux", windows))]
+    #[allow(clippy::too_many_arguments)] // Each fixture handle the case reads stays explicit.
+    async fn fresh_profile_case(
+        case: &str,
+        connection: &mut ChromeConnection,
+        registry: &Arc<ProfileRegistry>,
+        path: &Path,
+        disposal_store: &crate::sessions::SessionStore,
+        batch: &crate::browser_auth::CookieBootstrap,
+        home: &tempfile::TempDir,
+        base: &Path,
+        cancel: &CancellationToken,
+        timeout: Duration,
+        identity: &ProcessIdentity,
+    ) -> Result<()> {
+        let disposal_id = if matches!(
+            case,
+            "late" | "clean" | "exit-retry" | "partial-retry" | "headless" | "missing-capability"
+        ) {
+            Some(fresh_retirement::saved_disposal_fixture(
+                connection,
+                disposal_store,
+            ))
+        } else if case == "survivor" {
+            let meta = disposal_store.create(serde_json::json!({"prompt":"PUBLIC source","model":"gpt-6-pro","engine":"browser"}),home.path(),None)?;
+            Some(
+                meta["id"]
+                    .as_str()
+                    .context("Missing live disposal fixture session")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        anyhow::ensure!(
+            connection.is_fresh() && connection.owns_process(),
+            "Ordinary launch did not own a fresh profile"
+        );
+        anyhow::ensure!(
+            path.starts_with(fs::canonicalize(base)?)
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("alcuin-browser-")),
+            "Fresh profile is outside its private destination"
+        );
+        anyhow::ensure!(
+            !home.path().join(".oracle").exists(),
+            "Fresh run touched the persistent manual-login profile"
+        );
+        let lock = connection
+            .take_bootstrap_lock()
+            .context("Ordinary sync did not hold its bring-up lock until seeding")?;
+        let startup = connection
+            .take_bootstrap_admission()
+            .context("Ordinary sync did not hold startup admission until seeding")?;
+        let lease = Arc::new(
+            registry
+                .acquire_with_limit(
+                    if case == "survivor" {
+                        disposal_id.as_deref().unwrap()
+                    } else {
+                        "PUBLIC-fresh-native"
+                    },
+                    2,
+                    timeout,
+                    cancel,
+                )
+                .await?,
+        );
+        let mut target = crate::browser_target::TargetAcquisition::default()
+            .acquire(connection.browser.clone(), lease, cancel, timeout)
+            .await?;
+        anyhow::ensure!(
+            batch
+                .apply(target.page(), "https://chatgpt.com/", timeout, cancel)
+                .await?
+                == 1,
+            "Extracted cookie was not applied"
+        );
+        let cookies = target
+            .page()
+            .call(
+                "Network.getCookies",
+                serde_json::json!({"urls":["https://chatgpt.com/"]}),
+                timeout,
+                cancel,
+            )
+            .await?;
+        anyhow::ensure!(
+            cookies["cookies"].as_array().is_some_and(|cookies| cookies
+                .iter()
+                .any(|cookie| cookie["name"] == "PUBLIC-session"
+                    && cookie["value"] == "PUBLIC-cookie-value")),
+            "Fresh Chromium did not store the extracted synthetic cookie"
+        );
+        lock.release()?;
+        startup.release()?;
+        if case == "survivor" {
+            fresh_retirement::retire_last_page_fixture(
+                connection,
+                disposal_store,
+                disposal_id.as_deref().unwrap(),
+                &target,
+            )
+            .await?;
+        } else {
+            target.retire_unclaimed_blank(timeout).await?;
+        }
+        drop(target);
+        let rows = connection
+            .browser
+            .call("Target.getTargets", serde_json::json!({}), timeout, cancel)
+            .await?;
+        eprintln!(
+            "PUBLIC-fresh-{case}-targets={} startup={:?}",
+            rows["targetInfos"],
+            connection
+                .fresh
+                .as_ref()
+                .map(|fresh| &fresh.startup_targets)
+        );
+        let blocker = if matches!(case, "foreign" | "late") {
+            Some(
+                connection
+                    .browser
+                    .call(
+                        "Target.createTarget",
+                        serde_json::json!({"url":"about:blank"}),
+                        timeout,
+                        cancel,
+                    )
+                    .await?["targetId"]
+                    .as_str()
+                    .context("Fixture target is missing")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        // Chrome may still be starting helpers, or the previous fixture's
+        // processes may be exiting. Begin disposal from a complete scan.
+        let scan_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !profile_processes(path).is_ok_and(|pids| pids == [identity.pid]) {
+            anyhow::ensure!(
+                std::time::Instant::now() < scan_deadline,
+                "PUBLIC fixture process inventory never settled"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let settled = if case == "pre-prompt-marker" {
+            fresh_retirement::TEST_DISPOSAL_STOP
+                .scope(
+                    "after-pre-prompt-marker",
+                    connection.settle_fresh(Duration::from_secs(5)),
+                )
+                .await
+        } else if case == "unreadable" {
+            anyhow::ensure!(
+                crate::browser_runner::settle_completed_fresh(
+                    disposal_store,
+                    "PUBLIC-missing-record",
+                    connection
+                )
+                .await
+                    && identity.liveness() == Liveness::Alive
+                    && path.join("oracle-chrome-native.json").exists(),
+                "Unreadable completion evidence entered the old deletion path"
+            );
+            Ok(())
+        } else if matches!(case, "exit-retry" | "partial-retry") {
+            let id = disposal_id.as_deref().unwrap();
+            let stage = if case == "exit-retry" {
+                "after-browser-exit"
+            } else {
+                "after-launch-record-removal"
+            };
+            let routed = fresh_retirement::TEST_DISPOSAL_STOP
+                .scope(
+                    stage,
+                    crate::browser_runner::settle_completed_fresh(disposal_store, id, connection),
+                )
+                .await;
+            anyhow::ensure!(
+                routed && identity.liveness() == Liveness::Dead && path.exists(),
+                "Completed disposal did not reach its injected interruption"
+            );
+            let saved = disposal_store.stored_for_update(id)?;
+            anyhow::ensure!(
+                saved["status"] == "completed"
+                    && saved["browser"]["runtime"]["freshProfileDisposal"]["disposition"]
+                        == "retained"
+                    && saved["browser"]["runtime"]["freshProfileDisposal"]["observedProcesses"]
+                        .as_array()
+                        .is_some_and(|rows| !rows.is_empty()),
+                "Interrupted disposal lost its completed answer or native exit evidence"
+            );
+            anyhow::ensure!(
+                path.join("oracle-chrome-native.json").exists() == (case == "exit-retry")
+                    && crate::browser_profile::fresh_disposal_marker(path)
+                        .unwrap()
+                        .exists()
+                        == (case == "partial-retry"),
+                "Injected interruption did not exercise its durable marker boundary"
+            );
+            // No DEFERRED_FRESH entry remains, as after a worker restart.
+            crate::browser_runner::settle_deferred_fresh(disposal_store, Some(id)).await;
+            let saved = disposal_store.stored_for_update(id)?;
+            anyhow::ensure!(
+                saved["browser"]["runtime"]["freshProfileDisposal"]["disposition"] == "removed"
+                    && !path.exists()
+                    && !crate::browser_profile::fresh_disposal_marker(path)
+                        .unwrap()
+                        .exists(),
+                "Restarted deferred cleanup did not finish interrupted disposal"
+            );
+            Ok(())
+        } else if let Some(id) = disposal_id.as_deref() {
+            if case == "missing-capability" {
+                disposal_store.update(id, |current| {
+                    let mut browser = current["browser"].clone();
+                    browser["runtime"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("freshProfileOwner");
+                    Ok(Some(serde_json::json!({"browser":browser})))
+                })?;
+            }
+            anyhow::ensure!(
+                crate::browser_runner::settle_completed_fresh(disposal_store, id, connection).await,
+                "Completed fresh launch bypassed durable disposal"
+            );
+            if case == "late" {
+                Err(anyhow::anyhow!("PUBLIC retained target"))
+            } else {
+                Ok(())
+            }
+        } else {
+            connection.settle_fresh(Duration::from_secs(5)).await
+        };
+        if case == "pre-prompt-marker" {
+            anyhow::ensure!(
+                settled.is_err()
+                    && identity.liveness() == Liveness::Dead
+                    && path.exists()
+                    && crate::browser_profile::fresh_disposal_marker(path)
+                        .unwrap()
+                        .exists(),
+                "Interrupted pre-prompt disposal did not retain its disk barrier after native exit"
+            );
+            anyhow::ensure!(
+                registry
+                    .acquire(
+                        "PUBLIC-refused-after-disposal",
+                        Duration::from_millis(200),
+                        cancel
+                    )
+                    .await
+                    .is_err(),
+                "Interrupted disposal allowed a new profile admission"
+            );
+        } else if case == "late" {
+            check_late_case(
+                connection,
+                registry,
+                path,
+                disposal_store,
+                disposal_id.as_deref(),
+                blocker.as_deref(),
+                &settled,
+                home,
+                cancel,
+                timeout,
+                identity,
+            )
+            .await?;
+        } else if case == "headless" {
+            settled?;
+            let saved = disposal_store.stored_for_update(disposal_id.as_deref().unwrap())?;
+            let disposition = &saved["browser"]["runtime"]["freshProfileDisposal"]["disposition"];
+            anyhow::ensure!(
+                (identity.liveness() == Liveness::Dead
+                    && !path.exists()
+                    && disposition == "removed")
+                    || (identity.liveness() == Liveness::Alive
+                        && path.exists()
+                        && disposition == "retained"),
+                "Headless natural exit was not observed or safely retained"
+            );
+            eprintln!("PUBLIC-headless-natural-exit-disposition={disposition}");
+        } else if matches!(
+            case,
+            "clean" | "exit-retry" | "partial-retry" | "survivor" | "pre-prompt"
+        ) {
+            settled?;
+            anyhow::ensure!(
+                identity.liveness() == Liveness::Dead && !path.exists(),
+                "Untouched fresh Chrome or profile survived disposal"
+            );
+        } else {
+            anyhow::ensure!(
+                settled.is_err() == (case == "foreign")
+                    && identity.liveness() == Liveness::Alive
+                    && path.join("oracle-chrome-native.json").exists(),
+                "Kept or foreign-tab fresh Chrome was not retained with its profile"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    /// The late case: a retained tab keeps the browser through disposal and recovery, recovery
+    /// refuses a changed saved owner, and once the tab is gone recovery reclaims the profile.
+    #[cfg(any(target_os = "linux", windows))]
+    #[allow(clippy::too_many_arguments)] // Each fixture handle the case reads stays explicit.
+    async fn check_late_case(
+        connection: &ChromeConnection,
+        registry: &Arc<ProfileRegistry>,
+        path: &Path,
+        disposal_store: &crate::sessions::SessionStore,
+        disposal_id: Option<&str>,
+        blocker: Option<&str>,
+        settled: &Result<()>,
+        home: &tempfile::TempDir,
+        cancel: &CancellationToken,
+        timeout: Duration,
+        identity: &ProcessIdentity,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            settled.is_err(),
+            "First disposal must retain the unproven target"
+        );
+        let id = disposal_id.unwrap();
+        anyhow::ensure!(
+            retire_saved_fresh(disposal_store, id, Duration::from_secs(3))
+                .await
+                .is_err()
+                && identity.liveness() == Liveness::Alive,
+            "Recovery closed a browser with a retained target"
+        );
+        connection
+            .browser
+            .close_owned_target(blocker.unwrap(), Duration::from_secs(1), cancel)
+            .await?;
+        let absence_deadline = std::time::Instant::now() + timeout;
+        loop {
+            let inventory = connection
+                .browser
+                .call("Target.getTargets", serde_json::json!({}), timeout, cancel)
+                .await?;
+            if inventory["targetInfos"]
+                .as_array()
+                .context("Missing fixture inventory")?
+                .iter()
+                .all(|row| row["targetId"] != blocker.unwrap())
+            {
+                break;
+            }
+            anyhow::ensure!(
+                std::time::Instant::now() < absence_deadline,
+                "Fixture blocker close was acknowledged but absence remains unconfirmed"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let lease = registry
+            .acquire("PUBLIC-concurrent-admission", timeout, cancel)
+            .await?;
+        anyhow::ensure!(
+            retire_saved_fresh(disposal_store, id, Duration::from_secs(3))
+                .await
+                .is_err()
+                && identity.liveness() == Liveness::Alive,
+            "Recovery ignored concurrent admission"
+        );
+        lease.release()?;
+        let saved = disposal_store.stored_for_update(id)?;
+        for changed in ["keep", "profile", "process", "launch", "endpoint"] {
+            let mut value = saved.clone();
+            match changed {
+                "keep" => value["browser"]["config"]["keepBrowser"] = serde_json::json!(true),
+                "profile" => {
+                    value["browser"]["runtime"]["freshProfileOwner"]["profile"] =
+                        serde_json::json!(home.path())
+                }
+                "process" => {
+                    value["browser"]["runtime"]["freshProfileOwner"]["processIdentity"] =
+                        serde_json::json!(ProcessIdentity::current()?)
+                }
+                "launch" => {
+                    value["browser"]["runtime"]["freshProfileOwner"]["launchSha256"] =
+                        serde_json::json!("PUBLIC-changed")
+                }
+                _ => {
+                    value["browser"]["runtime"]["freshProfileOwner"]["endpoint"]["port"] =
+                        serde_json::json!(1)
+                }
+            }
+            disposal_store.update(id, |_| Ok(Some(value)))?;
+            anyhow::ensure!(
+                retire_saved_fresh(disposal_store, id, Duration::from_secs(3))
+                    .await
+                    .is_err()
+                    && identity.liveness() == Liveness::Alive,
+                "Recovery ignored changed {changed}"
+            );
+            disposal_store.update(id, |_| Ok(Some(saved.clone())))?;
+        }
+        let mut outcome = retire_saved_fresh(disposal_store, id, Duration::from_secs(5)).await?;
+        if outcome
+            .as_ref()
+            .is_some_and(|value| value["disposition"] != "removed")
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            outcome = retire_saved_fresh(disposal_store, id, Duration::from_secs(5)).await?;
+        }
+        anyhow::ensure!(
+            outcome
+                .as_ref()
+                .is_some_and(|value| value["disposition"] == "removed")
+                && identity.liveness() == Liveness::Dead
+                && !path.exists(),
+            "Later recovery did not reclaim fresh Chrome and its profile: {outcome:?}"
+        );
+        Ok(())
     }
     /// A short-lived synthetic child, or a long-lived one when `linger` is set.
     pub(super) fn synthetic_child(home: &Path, linger: bool) -> Child {

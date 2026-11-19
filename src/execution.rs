@@ -265,65 +265,8 @@ fn resolve_origin(
     let azure = (input["provider"] != "openai")
         .then(|| providers::resolve_azure(&input["azure"], &config["azure"], env, false))
         .flatten();
-    let mut requested_models = input["models"].as_array().cloned().unwrap_or_default();
     let requested = input["model"].as_str().or(config["model"].as_str());
-    for model in requested_models
-        .iter()
-        .filter_map(Value::as_str)
-        .chain(requested)
-    {
-        policy::assert_model_allowed(Some(model))?;
-    }
-    if engine == "api"
-        && let Some(key) = input
-            .as_object()
-            .context("Run options must be an object")?
-            .keys()
-            .find(|key| {
-                // Reference: blank browser follow-ups are dropped before the engine check.
-                let blank_followups = key.as_str() == "browserFollowUps"
-                    && input[key.as_str()].as_array().is_some_and(|turns| {
-                        turns
-                            .iter()
-                            .all(|turn| turn.as_str().is_some_and(|t| policy::trim(t).is_empty()))
-                    });
-                !blank_followups
-                    && (key.starts_with("browser")
-                        || matches!(key.as_str(), "generateImage" | "outputPath" | "copyProfile"))
-            })
-    {
-        ensure!(
-            key != "browserFollowUps",
-            "--browser-follow-up requires --engine browser."
-        );
-        bail!("API execution cannot honour requested {key}; use engine browser.");
-    }
-    let model = if engine == "api" {
-        api_model(requested.unwrap_or(policy::DEFAULT_API_MODEL))?
-    } else {
-        let s = requested.unwrap_or("gpt-6-pro");
-        if s.to_lowercase().replace([' ', '_'], "-").ends_with("-pro") {
-            "gpt-6-pro".into()
-        } else {
-            policy::DEFAULT_API_MODEL.into()
-        }
-    };
-    for name in &mut requested_models {
-        *name = json!(api_model(
-            name.as_str().context("Model names must be strings")?
-        )?);
-    }
-    let mut unique = vec![];
-    for model in requested_models {
-        if !unique.contains(&model) {
-            unique.push(model);
-        }
-    }
-    let model = unique
-        .first()
-        .and_then(Value::as_str)
-        .unwrap_or(&model)
-        .to_owned();
+    let (model, unique) = request_models(input, &engine, requested)?;
     let prompt = if let Some(suffix) = config["promptSuffix"]
         .as_str()
         .filter(|s| !policy::trim(s).is_empty())
@@ -479,6 +422,127 @@ fn resolve_origin(
         }
         providers::model_settings(&model, &options)?;
     }
+    let (browser, cookie_bootstrap, manual_choice) =
+        browser_settings(input, config, env, cwd, &engine, mcp, &model)?;
+    // Grok-direct is a request choice only; configuration never selects a provider.
+    match input.get("browserProvider") {
+        None => {}
+        Some(value) if *value == "chatgpt" => {}
+        Some(value) if *value == "grok" => {
+            ensure!(
+                file_inputs.is_empty(),
+                "--browser-provider grok sends text prompts only; put the files' contents in the prompt instead of --file."
+            );
+            ensure!(
+                browser["researchMode"] != "deep",
+                "--browser-provider grok does not support deep research."
+            );
+            options["browserProvider"] = json!("grok");
+        }
+        Some(_) => bail!("Browser provider must be chatgpt or grok"),
+    }
+    if engine == "browser" {
+        options["browserConfig"] = browser.clone();
+    }
+    let mut browser_preview = browser.clone();
+    browser_preview["manualLogin"] = json!(manual_choice.unwrap_or(false));
+    Ok(ResolvedRequest {
+        options,
+        engine,
+        files,
+        markdown,
+        user_prompt,
+        browser,
+        browser_preview,
+        cookie_bootstrap,
+        min_prompt_chars: parse_int(
+            env.get("ORACLE_MIN_PROMPT_CHARS")
+                .map_or("10", String::as_str),
+        ),
+    })
+}
+/// The request's model and its distinct `models`, each checked against the model policy.
+fn request_models(
+    input: &Value,
+    engine: &str,
+    requested: Option<&str>,
+) -> Result<(String, Vec<Value>)> {
+    let mut requested_models = input["models"].as_array().cloned().unwrap_or_default();
+    for model in requested_models
+        .iter()
+        .filter_map(Value::as_str)
+        .chain(requested)
+    {
+        policy::assert_model_allowed(Some(model))?;
+    }
+    if engine == "api"
+        && let Some(key) = input
+            .as_object()
+            .context("Run options must be an object")?
+            .keys()
+            .find(|key| {
+                // Reference: blank browser follow-ups are dropped before the engine check.
+                let blank_followups = key.as_str() == "browserFollowUps"
+                    && input[key.as_str()].as_array().is_some_and(|turns| {
+                        turns
+                            .iter()
+                            .all(|turn| turn.as_str().is_some_and(|t| policy::trim(t).is_empty()))
+                    });
+                !blank_followups
+                    && (key.starts_with("browser")
+                        || matches!(key.as_str(), "generateImage" | "outputPath" | "copyProfile"))
+            })
+    {
+        ensure!(
+            key != "browserFollowUps",
+            "--browser-follow-up requires --engine browser."
+        );
+        bail!("API execution cannot honour requested {key}; use engine browser.");
+    }
+    let model = if engine == "api" {
+        api_model(requested.unwrap_or(policy::DEFAULT_API_MODEL))?
+    } else {
+        let s = requested.unwrap_or("gpt-6-pro");
+        if s.to_lowercase().replace([' ', '_'], "-").ends_with("-pro") {
+            "gpt-6-pro".into()
+        } else {
+            policy::DEFAULT_API_MODEL.into()
+        }
+    };
+    for name in &mut requested_models {
+        *name = json!(api_model(
+            name.as_str().context("Model names must be strings")?
+        )?);
+    }
+    let mut unique = vec![];
+    for model in requested_models {
+        if !unique.contains(&model) {
+            unique.push(model);
+        }
+    }
+    let model = unique
+        .first()
+        .and_then(Value::as_str)
+        .unwrap_or(&model)
+        .to_owned();
+    Ok((model, unique))
+}
+/// The request's browser configuration, its explicit cookie bootstrap and the manual-login
+/// choice the caller made, if any.
+fn browser_settings(
+    input: &Value,
+    config: &Value,
+    env: &Environment,
+    cwd: &Path,
+    engine: &str,
+    mcp: bool,
+    model: &str,
+) -> Result<(
+    Value,
+    Option<crate::browser_auth::CookieBootstrap>,
+    Option<bool>,
+)> {
+    let requested = input["model"].as_str().or(config["model"].as_str());
     let mut browser = if config["browser"].is_object() {
         config["browser"].clone()
     } else {
@@ -602,7 +666,7 @@ fn resolve_origin(
             .filter(|s| !s.is_empty())
             .unwrap_or("GPT-6")
     );
-    browser["requestedModel"] = json!(requested.unwrap_or(&model));
+    browser["requestedModel"] = json!(requested.unwrap_or(model));
     browser["modelIsImplicitDefault"] =
         json!(requested.is_none() && input.get("browserModelLabel").is_none());
     // Reference buildConsultBrowserConfig: an explicit Pro model outranks a saved thinking time,
@@ -680,42 +744,7 @@ fn resolve_origin(
         engine != "browser" || browser["captureProviderNative"] != true,
         "browser.captureProviderNative (provider-native capture): this build does not support it. Remove the setting from your configuration."
     );
-    // Grok-direct is a request choice only; configuration never selects a provider.
-    match input.get("browserProvider") {
-        None => {}
-        Some(value) if *value == "chatgpt" => {}
-        Some(value) if *value == "grok" => {
-            ensure!(
-                file_inputs.is_empty(),
-                "--browser-provider grok sends text prompts only; put the files' contents in the prompt instead of --file."
-            );
-            ensure!(
-                browser["researchMode"] != "deep",
-                "--browser-provider grok does not support deep research."
-            );
-            options["browserProvider"] = json!("grok");
-        }
-        Some(_) => bail!("Browser provider must be chatgpt or grok"),
-    }
-    if engine == "browser" {
-        options["browserConfig"] = browser.clone();
-    }
-    let mut browser_preview = browser.clone();
-    browser_preview["manualLogin"] = json!(manual_choice.unwrap_or(false));
-    Ok(ResolvedRequest {
-        options,
-        engine,
-        files,
-        markdown,
-        user_prompt,
-        browser,
-        browser_preview,
-        cookie_bootstrap,
-        min_prompt_chars: parse_int(
-            env.get("ORACLE_MIN_PROMPT_CHARS")
-                .map_or("10", String::as_str),
-        ),
-    })
+    Ok((browser, cookie_bootstrap, manual_choice))
 }
 impl ResolvedRequest {
     pub(crate) fn replace_browser_config(

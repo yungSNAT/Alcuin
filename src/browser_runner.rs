@@ -2817,53 +2817,7 @@ async fn run_owned(
                 {
                     return Err(error);
                 }
-                let cleanup = async {
-                    let current = store.require(id)?;
-                    witness.require(&current)?;
-                    anyhow::ensure!(
-                        current["status"] == "running"
-                            && current.get("dispatch").is_none()
-                            && current["browser"]["runtime"]["ownedRecoveryTarget"]["creator"]
-                                == creator
-                            && journal.read(&creator["allocationId"])?["creator"] == creator,
-                        "Pre-navigation creator or session changed"
-                    );
-                    runtime_patch(store, id, witness, json!({"preNavigationCleanupPending":true}))?;
-                    journal.record_disposition(
-                        &creator,
-                        "unknown",
-                        "settled-pre-dispatch-close-pending",
-                    )?;
-                    let retiring = &mut *target;
-                    let expected_creator = &creator;
-                    let disposed = journal.retire_settled_before_dispatch(&creator, |deadline| async move {
-                        let current = store.require(id)?;
-                        witness.require(&current)?;
-                        anyhow::ensure!(current["status"] == "running" && current.get("dispatch").is_none()
-                            && current["browser"]["runtime"]["ownedRecoveryTarget"]["creator"] == *expected_creator,
-                            "Pre-navigation owner changed before retirement");
-                        retiring.retire_unclaimed_blank(deadline.saturating_duration_since(std::time::Instant::now()).min(Duration::from_secs(1))).await?;
-                        Ok(("confirmed-absent".into(),"unused-authentication-target".into()))
-                    }).await?;
-                    anyhow::ensure!(disposed["decision"] == "retired" && disposed["absence"] == "confirmed-absent",
-                        "Pre-navigation target absence remains unconfirmed");
-                    runtime_patch(
-                        store,
-                        id,
-                        witness,
-                        json!({"preNavigationCleanupPending":false,"targetDispositionPending":false,"targetRetiredAt":timestamp()}),
-                    )?;
-                    Ok::<_, anyhow::Error>(())
-                }
-                .await;
-                if let Err(cleanup) = cleanup {
-                    let _ = runtime_patch(
-                        store,
-                        id,
-                        witness,
-                        json!({"preNavigationCleanupWarning":cleanup.to_string()}),
-                    );
-                }
+                retire_pre_navigation(store, id, witness, &journal, &creator, target).await;
                 return Err(error);
             }
         };
@@ -2998,83 +2952,22 @@ async fn run_owned(
         Ok::<_, anyhow::Error>(())
     }.await;
     if let Err(error) = outcome {
-        let quarantined = reservation
-            .quarantine(crate::browser_renderer::CONTROL_ACK_TIMEOUT)
-            .await;
-        if quarantined.is_ok()
-            && reservation.settled_before_dispatch()
-            && (!cancel.is_cancelled()
-                || config["closeOwnedTabOnCancel"]
-                    .as_bool()
-                    .unwrap_or(config["keepBrowser"] != true))
-        {
-            let cleanup = async {
-                if let Err(first) =
-                    retire_pre_dispatch(store, witness, target, &reservation, &journal, &creator)
-                        .await
-                {
-                    // Retry only whilst the original worker still proves its not-started
-                    // reservation. The saved marker survives a refused or unacknowledged close.
-                    require_pre_dispatch_authority(
-                        store,
-                        witness,
-                        target,
-                        &reservation,
-                        &journal,
-                        &creator,
-                        std::time::Instant::now() + Duration::from_secs(1),
-                    )?;
-                    retire_pre_dispatch(store, witness, target, &reservation, &journal, &creator)
-                        .await
-                        .with_context(|| {
-                            format!("Pre-dispatch cleanup retry failed after {first}")
-                        })?;
-                }
-                runtime_patch(
-                    store,
-                    id,
-                    witness,
-                    json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}),
-                )?;
-                retire_inputs(store, id, &committed)?;
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            if let Err(cleanup) = cleanup {
-                // Cleanup cannot replace the consultation's original error.
-                let _ = runtime_patch(
-                    store,
-                    id,
-                    witness,
-                    json!({"preDispatchCleanupWarning":cleanup.to_string()}),
-                );
-            }
-        } else if quarantined.is_ok()
-            && cancel.is_cancelled()
-            && !reservation.settled_before_dispatch()
-            && !grok
-            && !capture.deferred()
-            && let Err(cleanup) = retire_cancelled_send(
-                store,
-                id,
-                witness,
-                target,
-                &reservation,
-                &journal,
-                &creator,
-                cancelled_send_settle(),
-                limits.command,
-            )
-            .await
-        {
-            eprintln!("[browser] {cleanup}; retaining its target and lease.");
-            let _ = runtime_patch(
-                store,
-                id,
-                witness,
-                json!({"cancelledSendCleanupWarning":cleanup.to_string()}),
-            );
-        }
+        settle_failed_owned_run(
+            store,
+            id,
+            witness,
+            target,
+            &mut reservation,
+            &journal,
+            &creator,
+            &committed,
+            &config,
+            grok,
+            capture,
+            limits,
+            cancel,
+        )
+        .await;
         return Err(error);
     }
     if capture.deferred() {
@@ -3121,69 +3014,246 @@ async fn run_owned(
         Ok::<_, anyhow::Error>(())
     }.await;
     if let Err(first_error) = cleanup {
-        // One retry finishes transient close/acknowledgement failures whilst this worker is live.
-        // Only a durable completed commitment can enter this route; it never replays submission.
-        let retry_deadline = std::time::Instant::now() + Duration::from_secs(8);
-        let retry = tokio::time::timeout(Duration::from_secs(8), async {
-            let current = store.require(id)?;
-            witness.require(&current)?;
-            anyhow::ensure!(
-                crate::sessions::answered(&current["status"])
-                    && current["dispatch"]["state"] == "completed",
-                "Completed cleanup retry lost its terminal session"
-            );
-            let record = journal.read(&creator["allocationId"])?;
-            journal.verify(&record)?;
-            let marker = journal.retirement_id(&creator, &record["commit"])?;
-            if record["disposition"]["decision"] != "retired"
-                && !target
-                    .observe_absence_until(std::time::Instant::now() + Duration::from_secs(1))
-                    .await?
-            {
-                anyhow::ensure!(
-                    crate::browser_retirement::pending_marker(
-                        target.page(),
-                        &current["browser"]["runtime"]["submissionOwner"],
-                        &marker,
-                        std::time::Instant::now() + Duration::from_secs(1)
-                    )
-                    .await?
-                    .is_some(),
-                    "Automatic cleanup retry requires the original retirement marker"
-                );
-            }
-            let disposed = crate::browser_retirement::retire_committed(
-                store,
-                &journal,
-                target.browser(),
-                endpoint,
-                &creator,
-            )
-            .await?;
-            anyhow::ensure!(
-                disposed["decision"] == "retired" && disposed["absence"] == "confirmed-absent",
-                "Owned tab cleanup retry remains pending: {}",
-                disposed["reason"]
-            );
-            settle_completed_retirement(store, &journal, &creator, &disposed, retry_deadline)?;
-            Ok::<_, anyhow::Error>(())
-        })
-        .await
-        .context("Owned tab cleanup retry deadline reached")
-        .and_then(|result| result);
-        if let Err(retry_error) = retry
-            && let Err(persist_error) = store.update_until(
-                id,
-                std::time::Instant::now() + Duration::from_secs(1),
-                |current| {
-                    if witness.require(current).is_err() { return Ok(None); }
-                    Ok(Some(json!({"recoveryRequired":true,"cleanupWarning":format!("{first_error}; retry: {retry_error}")})))
-                },
-            ) {
-            eprintln!("Answer saved. Owned tab cleanup status could not be persisted: {persist_error:#}; cleanup: {first_error:#}; retry: {retry_error:#}");
-        }
+        retry_completed_cleanup(
+            store,
+            id,
+            witness,
+            target,
+            &journal,
+            &creator,
+            endpoint,
+            &first_error,
+        )
+        .await;
     }
     store.require(id)
+}
+/// Retires a new tab whose cookie bootstrap failed before navigation. A cleanup failure is
+/// saved as a warning; the caller returns the bootstrap error either way.
+async fn retire_pre_navigation(
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
+    journal: &TargetJournal,
+    creator: &Value,
+    target: &mut OwnedTarget,
+) {
+    let cleanup = async {
+        let current = store.require(id)?;
+        witness.require(&current)?;
+        anyhow::ensure!(
+            current["status"] == "running"
+                && current.get("dispatch").is_none()
+                && current["browser"]["runtime"]["ownedRecoveryTarget"]["creator"]
+                    == *creator
+                && journal.read(&creator["allocationId"])?["creator"] == *creator,
+            "Pre-navigation creator or session changed"
+        );
+        runtime_patch(store, id, witness, json!({"preNavigationCleanupPending":true}))?;
+        journal.record_disposition(
+            creator,
+            "unknown",
+            "settled-pre-dispatch-close-pending",
+        )?;
+        let retiring = &mut *target;
+        let expected_creator = creator;
+        let disposed = journal.retire_settled_before_dispatch(creator, |deadline| async move {
+            let current = store.require(id)?;
+            witness.require(&current)?;
+            anyhow::ensure!(current["status"] == "running" && current.get("dispatch").is_none()
+                && current["browser"]["runtime"]["ownedRecoveryTarget"]["creator"] == *expected_creator,
+                "Pre-navigation owner changed before retirement");
+            retiring.retire_unclaimed_blank(deadline.saturating_duration_since(std::time::Instant::now()).min(Duration::from_secs(1))).await?;
+            Ok(("confirmed-absent".into(),"unused-authentication-target".into()))
+        }).await?;
+        anyhow::ensure!(disposed["decision"] == "retired" && disposed["absence"] == "confirmed-absent",
+            "Pre-navigation target absence remains unconfirmed");
+        runtime_patch(
+            store,
+            id,
+            witness,
+            json!({"preNavigationCleanupPending":false,"targetDispositionPending":false,"targetRetiredAt":timestamp()}),
+        )?;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    if let Err(cleanup) = cleanup {
+        let _ = runtime_patch(
+            store,
+            id,
+            witness,
+            json!({"preNavigationCleanupWarning":cleanup.to_string()}),
+        );
+    }
+}
+#[allow(clippy::too_many_arguments)] // Each witness and the exact target authority stay explicit.
+/// After a failed owned run, quarantines its renderer, then retires a tab that never dispatched
+/// or a cancelled send's tab. Cleanup failures are saved as warnings; the caller returns the
+/// run's error either way.
+async fn settle_failed_owned_run(
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
+    target: &mut OwnedTarget,
+    reservation: &mut RendererReservation,
+    journal: &TargetJournal,
+    creator: &Value,
+    committed: &BrowserRequest,
+    config: &Value,
+    grok: bool,
+    capture: &CaptureBoundary,
+    limits: &RunnerLimits,
+    cancel: &CancellationToken,
+) {
+    let quarantined = reservation
+        .quarantine(crate::browser_renderer::CONTROL_ACK_TIMEOUT)
+        .await;
+    if quarantined.is_ok()
+        && reservation.settled_before_dispatch()
+        && (!cancel.is_cancelled()
+            || config["closeOwnedTabOnCancel"]
+                .as_bool()
+                .unwrap_or(config["keepBrowser"] != true))
+    {
+        let cleanup = async {
+            if let Err(first) =
+                retire_pre_dispatch(store, witness, target, reservation, journal, creator).await
+            {
+                // Retry only whilst the original worker still proves its not-started
+                // reservation. The saved marker survives a refused or unacknowledged close.
+                require_pre_dispatch_authority(
+                    store,
+                    witness,
+                    target,
+                    reservation,
+                    journal,
+                    creator,
+                    std::time::Instant::now() + Duration::from_secs(1),
+                )?;
+                retire_pre_dispatch(store, witness, target, reservation, journal, creator)
+                    .await
+                    .with_context(|| format!("Pre-dispatch cleanup retry failed after {first}"))?;
+            }
+            runtime_patch(
+                store,
+                id,
+                witness,
+                json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}),
+            )?;
+            retire_inputs(store, id, committed)?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(cleanup) = cleanup {
+            // Cleanup cannot replace the consultation's original error.
+            let _ = runtime_patch(
+                store,
+                id,
+                witness,
+                json!({"preDispatchCleanupWarning":cleanup.to_string()}),
+            );
+        }
+    } else if quarantined.is_ok()
+        && cancel.is_cancelled()
+        && !reservation.settled_before_dispatch()
+        && !grok
+        && !capture.deferred()
+        && let Err(cleanup) = retire_cancelled_send(
+            store,
+            id,
+            witness,
+            target,
+            reservation,
+            journal,
+            creator,
+            cancelled_send_settle(),
+            limits.command,
+        )
+        .await
+    {
+        eprintln!("[browser] {cleanup}; retaining its target and lease.");
+        let _ = runtime_patch(
+            store,
+            id,
+            witness,
+            json!({"cancelledSendCleanupWarning":cleanup.to_string()}),
+        );
+    }
+}
+#[allow(clippy::too_many_arguments)] // Each witness and the exact target authority stay explicit.
+/// Retries a completed run's failed tab cleanup once, within 8 s. A failed retry leaves the
+/// session marked for recovery, or reports that the mark could not be saved.
+async fn retry_completed_cleanup(
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
+    target: &mut OwnedTarget,
+    journal: &TargetJournal,
+    creator: &Value,
+    endpoint: &AttachmentEndpoint,
+    first_error: &anyhow::Error,
+) {
+    // One retry finishes transient close/acknowledgement failures whilst this worker is live.
+    // Only a durable completed commitment can enter this route; it never replays submission.
+    let retry_deadline = std::time::Instant::now() + Duration::from_secs(8);
+    let retry = tokio::time::timeout(Duration::from_secs(8), async {
+        let current = store.require(id)?;
+        witness.require(&current)?;
+        anyhow::ensure!(
+            crate::sessions::answered(&current["status"])
+                && current["dispatch"]["state"] == "completed",
+            "Completed cleanup retry lost its terminal session"
+        );
+        let record = journal.read(&creator["allocationId"])?;
+        journal.verify(&record)?;
+        let marker = journal.retirement_id(creator, &record["commit"])?;
+        if record["disposition"]["decision"] != "retired"
+            && !target
+                .observe_absence_until(std::time::Instant::now() + Duration::from_secs(1))
+                .await?
+        {
+            anyhow::ensure!(
+                crate::browser_retirement::pending_marker(
+                    target.page(),
+                    &current["browser"]["runtime"]["submissionOwner"],
+                    &marker,
+                    std::time::Instant::now() + Duration::from_secs(1)
+                )
+                .await?
+                .is_some(),
+                "Automatic cleanup retry requires the original retirement marker"
+            );
+        }
+        let disposed = crate::browser_retirement::retire_committed(
+            store,
+            journal,
+            target.browser(),
+            endpoint,
+            creator,
+        )
+        .await?;
+        anyhow::ensure!(
+            disposed["decision"] == "retired" && disposed["absence"] == "confirmed-absent",
+            "Owned tab cleanup retry remains pending: {}",
+            disposed["reason"]
+        );
+        settle_completed_retirement(store, journal, creator, &disposed, retry_deadline)?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("Owned tab cleanup retry deadline reached")
+    .and_then(|result| result);
+    if let Err(retry_error) = retry
+        && let Err(persist_error) = store.update_until(
+            id,
+            std::time::Instant::now() + Duration::from_secs(1),
+            |current| {
+                if witness.require(current).is_err() { return Ok(None); }
+                Ok(Some(json!({"recoveryRequired":true,"cleanupWarning":format!("{first_error}; retry: {retry_error}")})))
+            },
+        ) {
+        eprintln!("Answer saved. Owned tab cleanup status could not be persisted: {persist_error:#}; cleanup: {first_error:#}; retry: {retry_error:#}");
+    }
 }
 /// Whether a run selects its model and thinking effort or only verifies the current ones.
 #[derive(Clone, Copy)]
@@ -3256,49 +3326,17 @@ async fn deliver(
         json!({"temporaryChat":{"verified":true,"source":"chatgpt-live-ui","capturedAt":timestamp()}}),
     )?;
     crate::perf::phase("mode-selection", None);
-    let selected = match (selection, authority) {
-        (Selection::Choose, _) => {
-            reservation
-                .select_pair(
-                    config["modelStrategy"].as_str().unwrap_or("select"),
-                    config["desiredModel"].as_str().unwrap_or("GPT-6"),
-                    config["thinkingTime"].as_str().unwrap_or("pro"),
-                    limits.command,
-                    cancel,
-                )
-                .await
-        }
-        // A borrowed tab is verified against Alcuin's Pro default unless a saved effort exists.
-        (Selection::Verify, TargetAuthority::Borrowed) => {
-            reservation
-                .verify_pair(
-                    config["desiredModel"]
-                        .as_str()
-                        .context("Borrowed browser run has no saved model")?,
-                    config["thinkingTime"].as_str().unwrap_or("pro"),
-                    limits.command,
-                    cancel,
-                )
-                .await
-        }
-        (Selection::Verify, _) => {
-            reservation
-                .verify_pair(
-                    config["desiredModel"]
-                        .as_str()
-                        .context("Browser follow-up has no saved model")?,
-                    config["thinkingTime"]
-                        .as_str()
-                        .context("Browser follow-up has no saved thinking effort")?,
-                    limits.command,
-                    cancel,
-                )
-                .await
-        }
-    };
-    flush_notes(store, id, reservation);
-    let (model, thinking, effective) = selected?;
-    reservation.seal_selection();
+    let (model, thinking, effective) = choose_pair(
+        store,
+        id,
+        reservation,
+        selection,
+        authority,
+        config,
+        limits,
+        cancel,
+    )
+    .await?;
     let selected_level = match thinking.requested_level {
         policy::ThinkingTime::Pro => "pro",
         policy::ThinkingTime::ExtraHigh => "extra-high",
@@ -3323,99 +3361,20 @@ async fn deliver(
     if deferred_reconciliation {
         crate::browser_retirement::reconcile(store, target.browser(), endpoint).await?;
     }
-    let automation = automation_lock(target, config, limits, cancel).await?;
-    crate::perf::phase("upload", None);
-    if !committed.upload_paths.is_empty() {
-        crate::perf::detail("attachment-transfer", Some(crate::perf::current_turn()));
-    }
-    let expectations = upload_inputs(
+    let (automation, mut prepared) = prepare_first_turn(
         store,
         id,
         witness,
+        target,
         reservation,
         committed,
         &nav,
-        attachment_budget(config, limits, committed.upload_paths.len()),
-        remote_host(endpoint),
+        config,
+        endpoint,
+        limits,
         cancel,
     )
     .await?;
-    crate::perf::detail("composer-population", Some(crate::perf::current_turn()));
-    let mut prepared = match PreparedPrompt::stage(
-        reservation,
-        &committed.prompt,
-        &nav,
-        &expectations,
-        limits.command,
-        cancel,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(error)
-            if error
-                .downcast_ref::<browser_dom::PromptTooLarge>()
-                .is_some()
-                && committed.fallback.is_some()
-                && !committed.fallback_used =>
-        {
-            let observed = error
-                .downcast_ref::<browser_dom::PromptTooLarge>()
-                .context("Missing positive truncation evidence")?;
-            anyhow::ensure!(
-                !cancel.is_cancelled()
-                    && reservation.state() == crate::browser_renderer::DispatchState::NotStarted,
-                "Fallback refused after cancellation or dispatch"
-            );
-            reservation.assert_active(limits.command, cancel).await?;
-            automation_log(
-                store,
-                id,
-                "[browser] Inline prompt too large; retrying with file uploads.",
-            )?;
-            if !committed.upload_paths.is_empty() {
-                let uploads = store.require(id)?["browser"]["runtime"]["uploads"]
-                    .as_array()
-                    .cloned()
-                    .context("Original raw uploads have no renderer receipts")?;
-                anyhow::ensure!(
-                    uploads.len() == committed.upload_paths.len(),
-                    "Original upload receipt count changed before fallback"
-                );
-                browser_dom::reset_uploads(reservation, &uploads, &nav, limits.command, cancel)
-                    .await?;
-                runtime_patch(
-                    store,
-                    id,
-                    witness,
-                    json!({"uploads":[],"priorUploads":uploads,"fallbackUploadsCleared":true}),
-                )?;
-            }
-            materialize_fallback(store, id, witness, committed, observed, cancel)?;
-            let expectations = upload_inputs(
-                store,
-                id,
-                witness,
-                reservation,
-                committed,
-                &nav,
-                attachment_budget(config, limits, committed.upload_paths.len()),
-                remote_host(endpoint),
-                cancel,
-            )
-            .await?;
-            PreparedPrompt::stage(
-                reservation,
-                &committed.prompt,
-                &nav,
-                &expectations,
-                limits.command,
-                cancel,
-            )
-            .await?
-        }
-        Err(error) => return Err(error),
-    };
     crate::perf::phase("generation", None);
     let (mut receipt, mut outcome_witness) = Box::pin(send_owned_turn(
         store,
@@ -3501,47 +3460,19 @@ async fn deliver(
             cancel,
         ))
         .await?;
-        reservation
-            .release_clean(crate::browser_renderer::CONTROL_ACK_TIMEOUT)
-            .await?;
-        let turn_lock = profile_lock(
-            &target
-                .lease()
-                .profile()
-                .path()
-                .join("oracle-browser-bringup.lock"),
-            limits.profile_lock,
-            cancel,
-        )
-        .await?;
-        *reservation = RendererReservation::acquire(
-            target.page().clone(),
-            reservation.owner().claim_id.clone(),
-            limits.command,
-            cancel,
-        )
-        .await?;
-        runtime_patch(
+        let (turn_lock, nav) = resume_turn(
             store,
             id,
             witness,
-            json!({"submissionOwner":reservation.owner()}),
-        )?;
-        crate::perf::phase("mode-selection", Some(turn));
-        // The previous answer's view can still be remounting. Wait read-only for the live
-        // predicate before the turn's first guarded step; only `true` lets the turn continue.
-        crate::browser_privacy::require(reservation.page(), limits.command, cancel).await?;
-        let (_, nav) = browser_dom::capture_navigation(reservation, limits.command, cancel).await?;
-        anyhow::ensure!(
-            nav["conversationId"] == receipt.conversation.conversation_id,
-            "Sequential browser navigation changed"
-        );
-        let verified = reservation
-            .verify_pair("Latest", selected_level, limits.command, cancel)
-            .await;
-        flush_notes(store, id, reservation);
-        verified?;
-        reservation.seal_selection();
+            target,
+            reservation,
+            &receipt,
+            selected_level,
+            turn,
+            limits,
+            cancel,
+        )
+        .await?;
         let automation = automation_lock(target, config, limits, cancel).await?;
         crate::perf::phase("upload", None);
         crate::perf::detail("composer-population", Some(turn));
@@ -3642,6 +3573,233 @@ async fn deliver(
         text: text_with_images,
         outcome: outcome_witness,
     })
+}
+#[allow(clippy::too_many_arguments)] // Each witness and the exact target authority stay explicit.
+/// Selects the run's model and thinking effort, or verifies the current pair, and seals the
+/// selection.
+async fn choose_pair(
+    store: &SessionStore,
+    id: &str,
+    reservation: &mut RendererReservation,
+    selection: Selection,
+    authority: TargetAuthority<'_>,
+    config: &Value,
+    limits: &RunnerLimits,
+    cancel: &CancellationToken,
+) -> Result<(policy::ModelEvidence, policy::ThinkingEvidence, String)> {
+    let selected = match (selection, authority) {
+        (Selection::Choose, _) => {
+            reservation
+                .select_pair(
+                    config["modelStrategy"].as_str().unwrap_or("select"),
+                    config["desiredModel"].as_str().unwrap_or("GPT-6"),
+                    config["thinkingTime"].as_str().unwrap_or("pro"),
+                    limits.command,
+                    cancel,
+                )
+                .await
+        }
+        // A borrowed tab is verified against Alcuin's Pro default unless a saved effort exists.
+        (Selection::Verify, TargetAuthority::Borrowed) => {
+            reservation
+                .verify_pair(
+                    config["desiredModel"]
+                        .as_str()
+                        .context("Borrowed browser run has no saved model")?,
+                    config["thinkingTime"].as_str().unwrap_or("pro"),
+                    limits.command,
+                    cancel,
+                )
+                .await
+        }
+        (Selection::Verify, _) => {
+            reservation
+                .verify_pair(
+                    config["desiredModel"]
+                        .as_str()
+                        .context("Browser follow-up has no saved model")?,
+                    config["thinkingTime"]
+                        .as_str()
+                        .context("Browser follow-up has no saved thinking effort")?,
+                    limits.command,
+                    cancel,
+                )
+                .await
+        }
+    };
+    flush_notes(store, id, reservation);
+    let (model, thinking, effective) = selected?;
+    reservation.seal_selection();
+    Ok((model, thinking, effective))
+}
+#[allow(clippy::too_many_arguments)] // Each witness and the exact target authority stay explicit.
+/// Uploads the first turn's files and stages its prompt, falling back to file uploads once
+/// when the inline prompt is too large. Returns the automation lock and the staged prompt.
+async fn prepare_first_turn(
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
+    target: &OwnedTarget,
+    reservation: &mut RendererReservation,
+    committed: &mut BrowserRequest,
+    nav: &Value,
+    config: &Value,
+    endpoint: &AttachmentEndpoint,
+    limits: &RunnerLimits,
+    cancel: &CancellationToken,
+) -> Result<(Option<DirectoryLock>, PreparedPrompt)> {
+    let automation = automation_lock(target, config, limits, cancel).await?;
+    crate::perf::phase("upload", None);
+    if !committed.upload_paths.is_empty() {
+        crate::perf::detail("attachment-transfer", Some(crate::perf::current_turn()));
+    }
+    let expectations = upload_inputs(
+        store,
+        id,
+        witness,
+        reservation,
+        committed,
+        nav,
+        attachment_budget(config, limits, committed.upload_paths.len()),
+        remote_host(endpoint),
+        cancel,
+    )
+    .await?;
+    crate::perf::detail("composer-population", Some(crate::perf::current_turn()));
+    let prepared = match PreparedPrompt::stage(
+        reservation,
+        &committed.prompt,
+        nav,
+        &expectations,
+        limits.command,
+        cancel,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(error)
+            if error
+                .downcast_ref::<browser_dom::PromptTooLarge>()
+                .is_some()
+                && committed.fallback.is_some()
+                && !committed.fallback_used =>
+        {
+            let observed = error
+                .downcast_ref::<browser_dom::PromptTooLarge>()
+                .context("Missing positive truncation evidence")?;
+            anyhow::ensure!(
+                !cancel.is_cancelled()
+                    && reservation.state() == crate::browser_renderer::DispatchState::NotStarted,
+                "Fallback refused after cancellation or dispatch"
+            );
+            reservation.assert_active(limits.command, cancel).await?;
+            automation_log(
+                store,
+                id,
+                "[browser] Inline prompt too large; retrying with file uploads.",
+            )?;
+            if !committed.upload_paths.is_empty() {
+                let uploads = store.require(id)?["browser"]["runtime"]["uploads"]
+                    .as_array()
+                    .cloned()
+                    .context("Original raw uploads have no renderer receipts")?;
+                anyhow::ensure!(
+                    uploads.len() == committed.upload_paths.len(),
+                    "Original upload receipt count changed before fallback"
+                );
+                browser_dom::reset_uploads(reservation, &uploads, nav, limits.command, cancel)
+                    .await?;
+                runtime_patch(
+                    store,
+                    id,
+                    witness,
+                    json!({"uploads":[],"priorUploads":uploads,"fallbackUploadsCleared":true}),
+                )?;
+            }
+            materialize_fallback(store, id, witness, committed, observed, cancel)?;
+            let expectations = upload_inputs(
+                store,
+                id,
+                witness,
+                reservation,
+                committed,
+                nav,
+                attachment_budget(config, limits, committed.upload_paths.len()),
+                remote_host(endpoint),
+                cancel,
+            )
+            .await?;
+            PreparedPrompt::stage(
+                reservation,
+                &committed.prompt,
+                nav,
+                &expectations,
+                limits.command,
+                cancel,
+            )
+            .await?
+        }
+        Err(error) => return Err(error),
+    };
+    Ok((automation, prepared))
+}
+#[allow(clippy::too_many_arguments)] // Each witness and the exact target authority stay explicit.
+/// Claims the renderer again for a follow-up turn under the profile's bring-up lock and
+/// verifies its conversation and model pair. Returns the lock and the turn's navigation.
+async fn resume_turn(
+    store: &SessionStore,
+    id: &str,
+    witness: &ExecutionWitness,
+    target: &OwnedTarget,
+    reservation: &mut RendererReservation,
+    receipt: &CommitReceipt,
+    selected_level: &str,
+    turn: u64,
+    limits: &RunnerLimits,
+    cancel: &CancellationToken,
+) -> Result<(DirectoryLock, Value)> {
+    reservation
+        .release_clean(crate::browser_renderer::CONTROL_ACK_TIMEOUT)
+        .await?;
+    let turn_lock = profile_lock(
+        &target
+            .lease()
+            .profile()
+            .path()
+            .join("oracle-browser-bringup.lock"),
+        limits.profile_lock,
+        cancel,
+    )
+    .await?;
+    *reservation = RendererReservation::acquire(
+        target.page().clone(),
+        reservation.owner().claim_id.clone(),
+        limits.command,
+        cancel,
+    )
+    .await?;
+    runtime_patch(
+        store,
+        id,
+        witness,
+        json!({"submissionOwner":reservation.owner()}),
+    )?;
+    crate::perf::phase("mode-selection", Some(turn));
+    // The previous answer's view can still be remounting. Wait read-only for the live
+    // predicate before the turn's first guarded step; only `true` lets the turn continue.
+    crate::browser_privacy::require(reservation.page(), limits.command, cancel).await?;
+    let (_, nav) = browser_dom::capture_navigation(reservation, limits.command, cancel).await?;
+    anyhow::ensure!(
+        nav["conversationId"] == receipt.conversation.conversation_id,
+        "Sequential browser navigation changed"
+    );
+    let verified = reservation
+        .verify_pair("Latest", selected_level, limits.command, cancel)
+        .await;
+    flush_notes(store, id, reservation);
+    verified?;
+    reservation.seal_selection();
+    Ok((turn_lock, nav))
 }
 /// A manual-login profile serialises each turn's upload and send window across runs
 /// (reference `acquireProfileRunLock`, `oracle-automation.lock`, `profileLockTimeoutMs`).
@@ -5910,65 +6068,21 @@ async fn recover_existing_inner(
         "Recovery target list contains malformed identities"
     );
     if targets.iter().all(|target| target["targetId"] != target_id) {
-        anyhow::ensure!(
-            saved["status"] == "completed" && saved["dispatch"]["state"] == "completed",
-            "An absent uncertain target cannot establish provider completion; recovery evidence retained"
-        );
-        captured(store, id)?;
-        let selection = json!({"modelSelection":runtime["modelSelection"],"thinkingSelection":runtime["thinkingSelection"],"effectiveModel":runtime["effectiveModel"]});
-        browser::accept_answer(&saved, &runtime["acceptedObservation"], &selection)?;
-        let exact: browser::RecoveryTarget =
-            serde_json::from_value(runtime["ownedRecoveryTarget"].clone())?;
-        anyhow::ensure!(
-            browser::exact_owned_target(&saved, &exact)
-                && exact.target_id == target_id
-                && exact.browser_ws_endpoint.as_deref() == Some(&endpoint.browser_ws_endpoint),
-            "Absent-target retirement does not match saved ownership"
-        );
-        if let (Some(journal), Some(creator)) = (&journal, &creator) {
-            let commit = journal.commit(creator, &journal.session_commit(creator, &saved)?)?;
-            journal.finalise(&commit)?;
-            let result = journal
-                .retire_finalised(creator, |commit| {
-                    let commit = commit.clone();
-                    let saved_raw = &saved_raw;
-                    let browser = &browser;
-                    async move {
-                        anyhow::ensure!(
-                            store.stored_for_update(id)? == *saved_raw,
-                            "Recovery owner changed during absence inspection"
-                        );
-                        journal.verify(&json!({"creator":creator,"commit":commit}))?;
-                        let listed = browser
-                            .call(
-                                "Target.getTargets",
-                                json!({}),
-                                limits.command,
-                                &CancellationToken::new(),
-                            )
-                            .await?;
-                        let rows = listed["targetInfos"]
-                            .as_array()
-                            .context("Target absence evidence is incomplete")?;
-                        anyhow::ensure!(
-                            rows.iter().all(|row| row["targetId"]
-                                .as_str()
-                                .is_some_and(crate::browser_target::valid_id))
-                                && rows.iter().all(|row| row["targetId"] != target_id),
-                            "Target reappeared before retirement persistence"
-                        );
-                        Ok(("confirmed-absent".into(), "exact-target-absent".into()))
-                    }
-                })
-                .await?;
-            anyhow::ensure!(
-                result["decision"] == "retired" && result["absence"] == "confirmed-absent",
-                "Absent target disposition remains pending"
-            );
-        }
-        lease.confirm_target_absent(target_id)?;
-        retire_inputs(store, id, &committed)?;
-        let result=store.update(id,|meta|{anyhow::ensure!(meta==&saved_raw,"Recovery owner changed during absence inspection");Ok(Some(json!({"recoveryRequired":false,"cleanupWarning":null,"browser":merge_object(&meta["browser"],&json!({"runtime":merge_object(&meta["browser"]["runtime"],&json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}))}))})))})?;
+        let result = retire_absent_target(
+            store,
+            id,
+            &saved,
+            &saved_raw,
+            journal.as_ref(),
+            creator.as_ref(),
+            &browser,
+            &endpoint,
+            &lease,
+            target_id,
+            &committed,
+            limits,
+        )
+        .await?;
         recovery_lock.release()?;
         return Ok(result);
     }
@@ -6150,6 +6264,83 @@ async fn recover_existing_inner(
     recovery_lock.release()?;
     recovered?;
     store.require(id)
+}
+#[allow(clippy::too_many_arguments)] // Each witness and the exact target authority stay explicit.
+/// Retires a completed run whose exact target is already absent, once its answer and saved
+/// ownership are confirmed. Returns the updated session.
+async fn retire_absent_target(
+    store: &SessionStore,
+    id: &str,
+    saved: &Value,
+    saved_raw: &Value,
+    journal: Option<&TargetJournal>,
+    creator: Option<&Value>,
+    browser: &Cdp,
+    endpoint: &AttachmentEndpoint,
+    lease: &crate::browser_profile::TabLease,
+    target_id: &str,
+    committed: &BrowserRequest,
+    limits: &RunnerLimits,
+) -> Result<Value> {
+    let runtime = &saved["browser"]["runtime"];
+    anyhow::ensure!(
+        saved["status"] == "completed" && saved["dispatch"]["state"] == "completed",
+        "An absent uncertain target cannot establish provider completion; recovery evidence retained"
+    );
+    captured(store, id)?;
+    let selection = json!({"modelSelection":runtime["modelSelection"],"thinkingSelection":runtime["thinkingSelection"],"effectiveModel":runtime["effectiveModel"]});
+    browser::accept_answer(saved, &runtime["acceptedObservation"], &selection)?;
+    let exact: browser::RecoveryTarget =
+        serde_json::from_value(runtime["ownedRecoveryTarget"].clone())?;
+    anyhow::ensure!(
+        browser::exact_owned_target(saved, &exact)
+            && exact.target_id == target_id
+            && exact.browser_ws_endpoint.as_deref() == Some(&endpoint.browser_ws_endpoint),
+        "Absent-target retirement does not match saved ownership"
+    );
+    if let (Some(journal), Some(creator)) = (journal, creator) {
+        let commit = journal.commit(creator, &journal.session_commit(creator, saved)?)?;
+        journal.finalise(&commit)?;
+        let result = journal
+            .retire_finalised(creator, |commit| {
+                let commit = commit.clone();
+                async move {
+                    anyhow::ensure!(
+                        store.stored_for_update(id)? == *saved_raw,
+                        "Recovery owner changed during absence inspection"
+                    );
+                    journal.verify(&json!({"creator":creator,"commit":commit}))?;
+                    let listed = browser
+                        .call(
+                            "Target.getTargets",
+                            json!({}),
+                            limits.command,
+                            &CancellationToken::new(),
+                        )
+                        .await?;
+                    let rows = listed["targetInfos"]
+                        .as_array()
+                        .context("Target absence evidence is incomplete")?;
+                    anyhow::ensure!(
+                        rows.iter().all(|row| row["targetId"]
+                            .as_str()
+                            .is_some_and(crate::browser_target::valid_id))
+                            && rows.iter().all(|row| row["targetId"] != target_id),
+                        "Target reappeared before retirement persistence"
+                    );
+                    Ok(("confirmed-absent".into(), "exact-target-absent".into()))
+                }
+            })
+            .await?;
+        anyhow::ensure!(
+            result["decision"] == "retired" && result["absence"] == "confirmed-absent",
+            "Absent target disposition remains pending"
+        );
+    }
+    lease.confirm_target_absent(target_id)?;
+    retire_inputs(store, id, committed)?;
+    let result=store.update(id,|meta|{anyhow::ensure!(meta==saved_raw,"Recovery owner changed during absence inspection");Ok(Some(json!({"recoveryRequired":false,"cleanupWarning":null,"browser":merge_object(&meta["browser"],&json!({"runtime":merge_object(&meta["browser"]["runtime"],&json!({"targetDispositionPending":false,"targetRetiredAt":timestamp()}))}))})))})?;
+    Ok(result)
 }
 #[cfg(test)]
 #[path = "browser_runner_tests.rs"]
