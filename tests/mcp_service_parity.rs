@@ -120,6 +120,7 @@ fn startup_failure_uses_the_reference_prefix_and_exit_code() {
     let home = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_alcuin-mcp"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .current_dir(home.path())
         .stdin(Stdio::null())
         .output()
@@ -637,6 +638,7 @@ fn mcp_child_with(home: &Path, endpoint: &str, extra: &[(&str, &str)]) -> Child 
     let mut command = Command::new(env!("CARGO_BIN_EXE_alcuin-mcp"));
     command
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("ORACLE_HOME_DIR", home)
         .env("USERPROFILE", home)

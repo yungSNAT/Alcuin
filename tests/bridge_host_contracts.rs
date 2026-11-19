@@ -71,6 +71,7 @@ async fn compiled_foreground_host_rotates_credentials_redacts_output_and_exits()
         let address = format!("127.0.0.1:{}", unused_port());
         let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(environment(home.path()))
             .current_dir(home.path())
@@ -298,6 +299,7 @@ async fn failed_background_pid_publication_cannot_start_ssh_before_commit() {
         Duration::from_secs(15),
         tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(env)
             .current_dir(home.path())
@@ -348,6 +350,7 @@ async fn background_bootstrap_failure_is_reported_before_success() {
         Duration::from_secs(15),
         tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(env)
             .current_dir(home.path())
@@ -382,6 +385,7 @@ async fn compiled_background_host_survives_parent_exit_and_hands_off_credentials
         Duration::from_secs(15),
         tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(environment(home.path()))
             .current_dir(home.path())

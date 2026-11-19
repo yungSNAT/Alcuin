@@ -5085,6 +5085,7 @@ mod tests {
         command
             .arg("--list")
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

@@ -16,6 +16,7 @@ async fn cli(home: &Path, args: &[&str]) -> std::process::Output {
         Duration::from_secs(15),
         Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home)
             .env("USERPROFILE", home)
@@ -140,6 +141,7 @@ async fn actual_cli_api_followups_send_one_previous_response_and_preserve_parent
         let mut command = Command::new(env!("CARGO_BIN_EXE_alcuin"));
         command
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
@@ -607,6 +609,9 @@ async fn url_followups_refuse_before_profile_access_or_child_creation() {
             Duration::from_secs(15),
             Command::new(env!("CARGO_BIN_EXE_alcuin"))
                 .env_clear()
+                .envs(
+                    std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)),
+                )
                 .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
                 .env("HOME", home.path())
                 .env("USERPROFILE", home.path())

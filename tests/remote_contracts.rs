@@ -61,6 +61,7 @@ async fn compiled_cli_remote_runs_wait_and_dispatch_once_without_persisting_toke
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
         command
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(&env)
             .current_dir(home.path())
@@ -155,6 +156,7 @@ async fn remote_cli_api_host_checks_include_configuration_and_ignore_blank_value
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
         command
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(&env)
             .current_dir(home.path())
@@ -390,6 +392,7 @@ async fn compiled_recovery_requires_explicit_host_and_never_dispatches_an_unknow
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
         command
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .envs(&env)
             .current_dir(home.path())
@@ -429,6 +432,7 @@ async fn compiled_serve_advertises_authenticated_capabilities_without_opening_br
     let home = tempfile::tempdir().unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .envs(environment(home.path()))
         .current_dir(home.path())

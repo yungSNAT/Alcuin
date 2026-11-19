@@ -2725,6 +2725,7 @@ mod tests {
                 "--nocapture",
             ])
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
             .env("ALCUIN_SYNTHETIC_WORKER_MARKER", &marker)

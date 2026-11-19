@@ -27,6 +27,7 @@ fn compiled_browser_health_refuses_the_default_profile_before_chrome() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .arg("browser-health")
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())

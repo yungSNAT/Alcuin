@@ -143,7 +143,10 @@ async fn restart_cli_creates_a_fresh_api_run_and_preserves_its_active_source_and
         assert_eq!(original["status"], "pending");
         storage::atomic_json(&store.home().join("config.json"),&json!({"promptSuffix":"PUBLIC must not be added","model":"gpt-5","heartbeatSeconds":1})).unwrap();
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-        command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+        command
+            .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+            .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
         if cfg!(windows)
             && let Some(root) = std::env::var_os("SystemRoot")
         {
@@ -246,7 +249,10 @@ async fn native_reply_cli_validates_request_before_endpoint_io_and_requires_both
             fs::create_dir(&profile).unwrap();
         }
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-        command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+        command
+            .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+            .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
         if cfg!(windows)
             && let Some(root) = std::env::var_os("SystemRoot")
         {
@@ -309,7 +315,10 @@ async fn attach_running_profile_conflict_refuses_before_session_or_discovery_io(
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-        command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+        command
+            .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+            .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
         if !configured {
             command.arg("--browser-attach-running");
         }
@@ -378,6 +387,7 @@ async fn root_cli_no_detach_preserves_wait_defaults_without_dispatching_backgrou
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
         command
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
@@ -465,6 +475,10 @@ async fn local_browser_cli_and_mcp_admit_foreground_and_detached_rust_workers() 
                 let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
                 command
                     .env_clear()
+                    .envs(
+                        std::env::var_os("LLVM_PROFILE_FILE")
+                            .map(|value| ("LLVM_PROFILE_FILE", value)),
+                    )
                     .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
                     .env("HOME", home.path())
                     .env("USERPROFILE", home.path())
@@ -583,6 +597,7 @@ impl McpChild {
         let mut child = tokio::process::Command::new(program)
             .args(args)
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home)
             .env("USERPROFILE", home)
@@ -823,6 +838,7 @@ async fn actual_stdio_wait_cancellation_and_eof_preserve_the_underlying_record()
 fn cli(home: &std::path::Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home)
         .env("USERPROFILE", home)
@@ -842,6 +858,7 @@ fn browser_health_uses_explicit_safe_inputs_and_reports_failed_launch_without_se
     fs::write(home.path().join(".oracle/config.json"),r#"{"browser":{"manualLoginProfileDir":"PUBLIC ignored project profile","remoteChrome":{"host":"example.invalid","port":1},"chatgptUrl":"https://chatgpt.com/c/PUBLIC-ignored","cookieSync":true}}"#).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -914,6 +931,7 @@ fn actual_cli_help_version_alias_render_and_stdin_interfaces() {
     assert!(!home.path().join("sessions").exists());
     let mut child = Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -1019,6 +1037,7 @@ async fn actual_cli_session_streams_live_logs_and_finishes_on_the_saved_terminal
         .unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -1094,6 +1113,7 @@ async fn actual_cli_session_settles_a_dead_legacy_api_worker_without_resending()
         Duration::from_secs(5),
         tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
@@ -1145,6 +1165,7 @@ async fn actual_cli_session_sigint_stops_only_the_observer() {
     let before = fs::read(store.directory(id).unwrap().join("meta.json")).unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("ORACLE_HOME_DIR", home.path())
@@ -1860,6 +1881,9 @@ async fn inspection_cli_settles_absent_completed_target_before_live_or_harvest()
             let mut command = Command::new(env!("CARGO_BIN_EXE_alcuin"));
             command
                 .env_clear()
+                .envs(
+                    std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)),
+                )
                 .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
                 .env("HOME", &directory)
                 .env("USERPROFILE", &directory)
@@ -1989,7 +2013,10 @@ async fn runtime_remote_chrome_flag_probes_its_explicit_endpoint_and_clears_stal
             }
         });
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-        command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+        command
+            .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+            .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
         if attach {
             command.arg("--browser-attach-running");
         }
@@ -2144,7 +2171,10 @@ async fn background_cli_releases_its_callers_pipes_while_its_worker_runs() {
     let store = SessionStore::new(home.path().join("oracle"));
     store.create(json!({"prompt":"PUBLIC held background request","model":"gpt-6-astra","mode":"api","reasoningMode":"pro","provider":"azure","azure":{"endpoint":format!("http://{address}"),"deployment":"PUBLIC-held-deployment"},"background":false,"waitPreference":true}),home.path(),Some("held")).unwrap();
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-    command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+    command
+        .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+        .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
     if cfg!(windows)
         && let Some(root) = std::env::var_os("SystemRoot")
     {
@@ -2211,6 +2241,7 @@ fn azure_api_version_is_accepted_and_route_plans_merge_user_config_by_field() {
     let run = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_alcuin"))
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
             .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
@@ -2359,7 +2390,10 @@ async fn api_run(extra: &[&str], usage: Value, detached: bool) -> String {
         socket.shutdown().await.unwrap();
     });
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-    command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+    command
+        .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+        .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
     if cfg!(windows)
         && let Some(root) = std::env::var_os("SystemRoot")
     {
@@ -2818,7 +2852,10 @@ async fn failed_api_runs_log_the_reference_error_line_once() {
             socket.shutdown().await.unwrap();
         });
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_alcuin"));
-        command.env_clear().env("ORACLE_DISABLE_NOTIFICATIONS", "1");
+        command
+            .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
+            .env("ORACLE_DISABLE_NOTIFICATIONS", "1");
         if cfg!(windows)
             && let Some(root) = std::env::var_os("SystemRoot")
         {

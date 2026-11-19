@@ -522,6 +522,7 @@ fn over_budget_cli_runs_print_the_file_report_before_the_refusal() {
     .unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
@@ -690,6 +691,7 @@ fn the_cli_refuses_a_capped_run_it_cannot_bound_before_creating_a_session() {
     let home = tempfile::tempdir().unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())

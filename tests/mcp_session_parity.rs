@@ -470,6 +470,7 @@ fn cli_status_reports_a_verified_dead_worker_as_failed() {
     let before = fs::read(store.directory(&id).unwrap().join("meta.json")).unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_alcuin"))
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
         .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
