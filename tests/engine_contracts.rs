@@ -108,7 +108,7 @@ fn legacy_browser_and_explicit_provider_flags_keep_their_cli_priority() {
             assert!(
                 String::from_utf8(output.stdout)
                     .unwrap()
-                    .starts_with("[dry-run] Alcuin (0.1.0) would call gpt-6-astra")
+                    .starts_with("[dry-run] Alcuin (0.2.0) would call gpt-6-astra")
             );
         } else {
             let output = String::from_utf8(output.stdout).unwrap();

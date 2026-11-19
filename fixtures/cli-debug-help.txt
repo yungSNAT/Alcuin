@@ -1,4 +1,4 @@
-🧿 Alcuin 0.1.0 - Keeps 196k tokens feeling roomy, not risky.
+🧿 Alcuin 0.2.0 - Keeps 196k tokens feeling roomy, not risky.
 Advanced Options
   --search <on|off>      Enable or disable the server-side search tool (default on).
   --max-input <tokens>   Override the input token budget.
