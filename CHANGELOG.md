@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- When a ChatGPT run saved by an older Alcuin replaces a prompt too long for the composer with a bundled upload, the run's cleanup now also deletes the session's staged copy of each attached media file, such as a PDF. That copy stayed in the session folder after the run, because the fallback took the file into the bundle but dropped the copy from the request it saved.
+
 ## 0.2.0 (2026-11-19)
 
 The first release with archives for macOS on Apple silicon and Linux on aarch64, and the first under Apache-2.0 for Ryan Duguid's work.
