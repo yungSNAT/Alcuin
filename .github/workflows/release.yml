@@ -234,7 +234,7 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Prebuilt alcuin and alcuin-mcp for Linux (x86_64 and aarch64, glibc 2.39 or later), macOS (Apple silicon) and Windows (x86_64), each archive with a SHA-256 checksum and a build provenance attestation, and an MCP bundle (alcuin.mcpb) for Claude Desktop. See CHANGELOG.md for what changed."
+            --notes "Prebuilt alcuin and alcuin-mcp for Linux (x86_64 and aarch64, glibc 2.39 or later), macOS (Apple silicon) and Windows (x86_64), each archive with a SHA-256 checksum and a build provenance attestation, and an MCP bundle (alcuin.mcpb) for Claude Desktop on Linux and Windows. See CHANGELOG.md for what changed."
 
   # Lists the release on the MCP Registry. GitHub OIDC proves the io.github.yungSNAT namespace,
   # so no registry secret is stored. It runs after the release job, so the bundle URL resolves.
