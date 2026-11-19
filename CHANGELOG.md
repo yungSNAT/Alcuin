@@ -3,6 +3,7 @@
 ## Unreleased
 
 - The MCP session resources (`oracle-session://<id>/metadata`, `/log` and `/request`) now see only sessions started in or below the server's working directory, as the `sessions` and `wait` tools already did; they returned any project's session to an agent that knew its id. `ORACLE_MCP_ALL_SESSIONS=1` still shows every project's sessions.
+- When a ChatGPT run saved by an older Alcuin replaces a prompt too long for the composer with a bundled upload, the run's cleanup now also deletes the session's staged copy of each attached media file, such as a PDF. That copy stayed in the session folder after the run, because the fallback took the file into the bundle but dropped the copy from the request it saved.
 
 ## 0.2.0 (2026-11-19)
 
