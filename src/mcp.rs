@@ -659,12 +659,20 @@ impl AlcuinMcp {
         let kind = decode_component(kind)?;
         sessions::assert_id(&id)?;
         let text = match kind.as_str() {
-            "metadata" => serde_json::to_string_pretty(&self.store.require(&id)?)?,
-            "log" => self.store.log(&id)?,
-            "request" => match self.store.request(&id)? {
-                Some(value) => serde_json::to_string_pretty(&value)?,
-                None => std::fs::read_to_string(self.store.directory(&id)?.join("request.json"))?,
-            },
+            "metadata" => serde_json::to_string_pretty(&self.project_session(&id)?)?,
+            "log" => {
+                self.project_session(&id)?;
+                self.store.log(&id)?
+            }
+            "request" => {
+                self.project_session(&id)?;
+                match self.store.request(&id)? {
+                    Some(value) => serde_json::to_string_pretty(&value)?,
+                    None => {
+                        std::fs::read_to_string(self.store.directory(&id)?.join("request.json"))?
+                    }
+                }
+            }
             _ => bail!("Unsupported resource kind: {kind}"),
         };
         Ok(json!({"contents":[{"uri":uri,"text":text}]}))

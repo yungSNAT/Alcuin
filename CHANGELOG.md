@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The MCP session resources (`oracle-session://<id>/metadata`, `/log` and `/request`) now see only sessions started in or below the server's working directory, as the `sessions` and `wait` tools already did; they returned any project's session to an agent that knew its id. `ORACLE_MCP_ALL_SESSIONS=1` still shows every project's sessions.
+
 ## 0.2.0 (2026-11-19)
 
 The first release with archives for macOS on Apple silicon and Linux on aarch64, and the first under Apache-2.0 for Ryan Duguid's work.

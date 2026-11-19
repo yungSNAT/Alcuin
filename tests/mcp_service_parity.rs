@@ -304,7 +304,7 @@ async fn validation_and_engine_texts_match_the_reference() {
 }
 
 #[tokio::test]
-async fn sessions_and_wait_see_only_this_projects_sessions_unless_opted_in() {
+async fn sessions_wait_and_resources_see_only_this_projects_sessions_unless_opted_in() {
     let home = tempfile::tempdir().unwrap();
     let project = home.path().join("PUBLIC-project");
     let elsewhere = home.path().join("PUBLIC-elsewhere");
@@ -351,6 +351,19 @@ async fn sessions_and_wait_see_only_this_projects_sessions_unless_opted_in() {
     call(&scoped, "sessions", json!({"id":inside}))
         .await
         .unwrap();
+    for kind in ["metadata", "log", "request"] {
+        let error = scoped
+            .resource(&format!("oracle-session://{outside}/{kind}"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("ORACLE_MCP_ALL_SESSIONS=1"),
+            "{kind}: {error}"
+        );
+        scoped
+            .resource(&format!("oracle-session://{inside}/{kind}"))
+            .unwrap();
+    }
     let mut everywhere = server(
         home.path(),
         Environment::from([("ORACLE_MCP_ALL_SESSIONS".into(), "1".into())]),
@@ -361,6 +374,9 @@ async fn sessions_and_wait_see_only_this_projects_sessions_unless_opted_in() {
     assert_eq!(listed(&everywhere).await, both);
     call(&everywhere, "sessions", json!({"id":outside}))
         .await
+        .unwrap();
+    everywhere
+        .resource(&format!("oracle-session://{outside}/metadata"))
         .unwrap();
 }
 
