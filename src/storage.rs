@@ -786,10 +786,13 @@ mod lock_race_tests {
     fn bounded_lock_release_and_drop_do_not_restart_the_mutex_timeout() {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("PUBLIC-bounded.lock");
-        let deadline = Instant::now() + Duration::from_millis(100);
+        // The acquisition gets 2 s, as a durable write on a busy runner outlasted 100 ms. The
+        // release starts once that deadline has passed, so it may wait for nothing.
+        let deadline = Instant::now() + Duration::from_secs(2);
         let lock = DirectoryLock::acquire_until(&path, deadline).unwrap();
         let mutex = RecoveryMutex::acquire(&path, Duration::from_secs(1)).unwrap();
         let owner = fs::read(path.join("owner.json")).unwrap();
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
         let started = Instant::now();
         assert!(lock.release().is_err());
         assert!(started.elapsed() < Duration::from_secs(1));
@@ -797,10 +800,10 @@ mod lock_race_tests {
         drop(mutex);
 
         let other_path = home.path().join("PUBLIC-drop.lock");
-        let lock =
-            DirectoryLock::acquire_until(&other_path, Instant::now() + Duration::from_millis(100))
-                .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let lock = DirectoryLock::acquire_until(&other_path, deadline).unwrap();
         let mutex = RecoveryMutex::acquire(&other_path, Duration::from_secs(1)).unwrap();
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
         let started = Instant::now();
         drop(lock);
         assert!(started.elapsed() < Duration::from_secs(1));
