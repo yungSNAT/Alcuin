@@ -148,12 +148,13 @@ jobs:
           TMP: ${{ runner.temp }}
       # The ignored native fixtures drive a real browser through launch, ownership and profile
       # disposal, code no other test reaches. They exec /usr/lib/chromium/chromium, which is
-      # Google Chrome on the runner, and some need a display.
+      # Google Chrome on the runner, and some need a display. The fixtures pass Chrome DISPLAY
+      # but not XAUTHORITY, so the disposable display takes any local client (-ac).
       - if: runner.os == 'Linux' && runner.arch == 'X64'
         run: |
           sudo mkdir -p /usr/lib/chromium
           sudo ln -s /opt/google/chrome/chrome /usr/lib/chromium/chromium
-          xvfb-run -a cargo llvm-cov --no-report --locked --lib -- --ignored --test-threads=1 \
+          xvfb-run -a -s "-screen 0 1280x1024x24 -ac" cargo llvm-cov --no-report --locked --lib -- --ignored --test-threads=1 \
             native_temporary_chat_predicate_and_retained_send_guard \
             native_persistent_idle_browser_exits_without_removing_its_profile \
             copied_profile_reuses_synthetic_cookies_and_removes_only_its_owned_copy \
