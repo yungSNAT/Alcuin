@@ -281,7 +281,7 @@ impl ResponseAccumulator {
                 if annotation_index == annotations.len() {
                     annotations.push(event["annotation"].clone());
                 } else {
-                    annotations.insert(annotation_index, event["annotation"].clone());
+                    annotations[annotation_index] = event["annotation"].clone();
                 }
             }
             "response.function_call_arguments.delta"
@@ -414,7 +414,10 @@ fn validate_item(item: &Value) -> Result<()> {
         kind,
         "function_call" | "custom_tool_call" | "shell_call" | "shell_call_output"
     ) {
-        ensure!(true, "Missing tool call identity");
+        ensure!(
+            item["call_id"].as_str().is_some_and(|id| !id.is_empty()),
+            "Missing tool call identity"
+        );
     }
     Ok(())
 }
