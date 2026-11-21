@@ -826,6 +826,74 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn model_filters_ignore_case_and_space_and_read_the_run_list_first() {
+        let runs =
+            json!({"model":"PUBLIC-solo","models":[{"model":"GPT-6"},{"model":"GPT-6-Pro"}]});
+        assert!(matches_model(&runs, " gpt-6-pro "));
+        assert!(matches_model(&runs, ""));
+        // With a run list, the session's own model is not consulted.
+        assert!(!matches_model(&runs, "public-solo"));
+        assert!(!matches_model(&runs, "gpt"));
+        let single = json!({"model":"GPT-6"});
+        assert!(matches_model(&single, "GPT-6"));
+        assert!(!matches_model(&single, "gpt-6-pro"));
+        assert!(!matches_model(&json!({}), "gpt-6"));
+    }
+    #[test]
+    fn relative_durations_and_sizes_follow_the_reference_units() {
+        let ago = |seconds: i64| {
+            let time = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(seconds);
+            relative_duration(&time.to_string())
+        };
+        for (seconds, text) in [
+            (30, "30s"),
+            (300, "5m"),
+            (307, "5m 7s"),
+            (7_200, "2h"),
+            (7_380, "2h 3m"),
+            (259_200, "3d"),
+            (273_600, "3d 4h"),
+        ] {
+            assert_eq!(ago(seconds).as_deref(), Some(text), "{seconds}");
+        }
+        // A time a moment ago still reads as 1 second, never 0.
+        assert_eq!(ago(0).as_deref(), Some("1s"));
+        assert_eq!(ago(-3_600), None);
+        assert_eq!(relative_duration("PUBLIC not a time"), None);
+        assert_eq!(bytes(512.0), "512 B");
+        assert_eq!(bytes(1_536.0), "1.5 KB");
+        assert_eq!(bytes(3.0 * 1024.0 * 1024.0), "3.0 MB");
+    }
+    #[test]
+    fn a_running_browser_session_with_dead_owners_names_the_harvest_command() {
+        let meta = json!({"id":"PUBLIC-run","status":"running","mode":"browser","lifecycle":{"workerPid":u32::MAX},"browser":{"runtime":{"chromePort":9222}}});
+        assert_eq!(
+            recovery_notice(&meta).as_deref(),
+            Some(
+                "Worker exited for PUBLIC-run; stored status remains running. Use \"alcuin session PUBLIC-run --harvest\" to inspect the saved conversation."
+            )
+        );
+        let mut endpoint = meta.clone();
+        endpoint["browser"]["runtime"] =
+            json!({"chromeBrowserWSEndpoint":"ws://127.0.0.1:9222/devtools/browser/PUBLIC"});
+        assert!(recovery_notice(&endpoint).is_some());
+        for (pointer, value) in [
+            ("/status", json!("completed")),
+            ("/mode", json!("api")),
+            ("/lifecycle/workerPid", json!(0)),
+            (
+                "/browser/runtime",
+                json!({"chromePort":0,"chromeBrowserWSEndpoint":" "}),
+            ),
+            // A live worker is not reported as gone.
+            ("/lifecycle/workerPid", json!(std::process::id())),
+        ] {
+            let mut changed = meta.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(recovery_notice(&changed), None, "{pointer}");
+        }
+    }
+    #[test]
     fn table_rows_follow_the_reference_columns() {
         assert_eq!(
             table_header(),
