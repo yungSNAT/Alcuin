@@ -1,3 +1,13 @@
+/// A script from `browser-scripts/`, as the browser receives it.
+macro_rules! browser_script {
+    ($name:literal) => {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/browser-scripts/",
+            $name
+        ))
+    };
+}
 pub mod artifacts;
 pub mod bridge;
 pub mod bridge_host;
@@ -83,3 +93,36 @@ pub mod sessions;
 pub mod storage;
 pub mod tokenizer;
 mod window_keeper;
+
+#[cfg(test)]
+mod browser_script_tests {
+    /// Pins the text the browser receives for the scripts that read target ownership. They run
+    /// in a signed-in ChatGPT session, so a change to that text is a reviewed change: update the
+    /// hash with it.
+    #[test]
+    fn injected_ownership_scripts_are_pinned() {
+        let text = [
+            browser_script!("attachment-evidence.js"),
+            browser_script!("attachment-ready.js"),
+            browser_script!("completion-install.js"),
+            browser_script!("copy-markdown.js"),
+            browser_script!("file-input-prepare.js"),
+            browser_script!("inspection-finish.js"),
+            browser_script!("inspection-prepare.js"),
+            browser_script!("model.js"),
+            browser_script!("owned_commit.js"),
+            browser_script!("prompt-check.js"),
+            browser_script!("prompt-prepare.js"),
+            browser_script!("send-focus.js"),
+            browser_script!("send-prepare.js"),
+            browser_script!("submission.js"),
+            browser_script!("thinking.js"),
+        ]
+        .concat()
+        .replace("\r\n", "\n");
+        assert_eq!(
+            crate::artifacts::sha256(text.as_bytes()),
+            "5393a262c86501207ac4965adb12469f21953a1a51ff25fbcd6ab6167542429c"
+        );
+    }
+}
