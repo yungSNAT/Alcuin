@@ -533,3 +533,38 @@ async fn legacy_harvest_warns_before_inspecting_and_reports_progress_through_the
         ]
     );
 }
+#[test]
+fn submitted_source_requires_the_identity_the_saved_hash_was_taken_from() {
+    let legacy = json!({"browser":{"runtime":{"submittedPromptHash":"PUBLIC-hash"}}});
+    let legacy_tab = json!({"lastUserMessageId":"PUBLIC-user","lastUserText":"PUBLIC source"});
+    assert!(submitted_source_available(&legacy, &legacy_tab));
+    for field in ["lastUserTextRaw", "lastUserContentText"] {
+        assert!(submitted_source_available(
+            &legacy,
+            &json!({"lastUserMessageId":"PUBLIC-user", field:"PUBLIC source"})
+        ));
+    }
+    // A blank or missing message id, or no user text, cannot identify the hashed turn.
+    assert!(!submitted_source_available(
+        &legacy,
+        &json!({"lastUserMessageId":"  ","lastUserText":"PUBLIC source"})
+    ));
+    assert!(!submitted_source_available(
+        &legacy,
+        &json!({"lastUserText":"PUBLIC source"})
+    ));
+    assert!(!submitted_source_available(
+        &legacy,
+        &json!({"lastUserMessageId":"PUBLIC-user"})
+    ));
+    // The original-source format reads only the original-source fields.
+    assert!(submitted_source_available(&metadata(), &tab()));
+    assert!(!submitted_source_available(&metadata(), &legacy_tab));
+    let mut no_text = tab();
+    no_text["lastUserOriginalSourceText"] = Value::Null;
+    assert!(!submitted_source_available(&metadata(), &no_text));
+    // No saved hash, or a format this build does not know, leaves nothing to check here.
+    assert!(submitted_source_available(&json!({}), &json!({})));
+    let unknown = json!({"browser":{"runtime":{"submittedPromptHash":"PUBLIC-hash","submittedPromptHashFormat":"PUBLIC-v9"}}});
+    assert!(submitted_source_available(&unknown, &json!({})));
+}
