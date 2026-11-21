@@ -281,7 +281,7 @@ impl ResponseAccumulator {
                 if annotation_index == annotations.len() {
                     annotations.push(event["annotation"].clone());
                 } else {
-                    annotations.push(event["annotation"].clone());
+                    annotations.insert(annotation_index, event["annotation"].clone());
                 }
             }
             "response.function_call_arguments.delta"
