@@ -621,6 +621,44 @@ mod tests {
         (home, store, id)
     }
     #[test]
+    fn finished_prints_the_failure_and_the_reference_usage_line_when_no_summary_fits() {
+        let lines = |meta: Value| {
+            let mut out = Vec::new();
+            finished(&meta, &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        assert_eq!(
+            lines(
+                json!({"status":"error","errorMessage":"PUBLIC refused","usage":{"inputTokens":1}})
+            ),
+            "\nResult:\nSession failed: PUBLIC refused\n"
+        );
+        // An error message on a session that did not fail is not a failure line.
+        assert_eq!(
+            lines(json!({"status":"completed","errorMessage":"PUBLIC stale"})),
+            ""
+        );
+        // Without elapsed time the summary is unavailable; the reference prints raw counts and
+        // 'undefined' for a missing one.
+        assert_eq!(
+            lines(
+                json!({"status":"completed","usage":{"inputTokens":12,"outputTokens":3,"totalTokens":15}})
+            ),
+            "\nFinished (tok i/o/r/t: 12/3/undefined/15)\n"
+        );
+        assert_eq!(
+            lines(
+                json!({"status":"partial","response":{"incompleteReason":"max_output_tokens"},"usage":{"inputTokens":1,"outputTokens":2,"reasoningTokens":0,"totalTokens":3}})
+            ),
+            "\nAnswer incomplete (max_output_tokens): the saved text may be cut.\n\nFinished (tok i/o/r/t: 1/2/0/3)\n"
+        );
+        // A partial answer a remote host delivered is not reported as cut.
+        assert_eq!(
+            lines(json!({"status":"partial","browser":{"remoteDelivery":{"host":"PUBLIC"}}})),
+            ""
+        );
+    }
+    #[test]
     fn a_failed_diagnostic_write_preserves_the_original_recovery_and_cleanup_errors() {
         struct Broken;
         impl Write for Broken {
