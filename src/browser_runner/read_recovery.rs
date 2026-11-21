@@ -59,17 +59,23 @@ impl Budget {
     }
     /// An answer wait due to start after the episode ended has met its deadline, so it never
     /// starts. The typed failure decides provider eligibility; `observe` revalidates authority.
-    pub(super) async fn answer_within<T>(
+    /// The wait gets these limits bounded by what is left of the episode, so a recovered
+    /// commitment cannot restart the full answer timeout.
+    pub(super) async fn answer_within<T, Fut>(
         &self,
-        future: impl std::future::Future<Output = Result<T>>,
-    ) -> Result<T> {
+        limits: &RunnerLimits,
+        wait: impl FnOnce(RunnerLimits) -> Fut,
+    ) -> Result<T>
+    where
+        Fut: std::future::Future<Output = Result<T>>,
+    {
         let Some(deadline) = self.deadline else {
-            return future.await;
+            return wait(limits.clone()).await;
         };
         if Instant::now() >= deadline {
             return Err(crate::browser_provider::Failure::AnswerDeadline.into());
         }
-        Self::settle(deadline, future).await
+        Self::settle(deadline, wait(self.limits(limits))).await
     }
     async fn settle<T>(
         deadline: Instant,
@@ -351,7 +357,7 @@ mod tests {
             Poll::<Result<()>>::Pending
         });
         let error = budget(Instant::now())
-            .answer_within(wait)
+            .answer_within(&RunnerLimits::default(), |_| wait)
             .await
             .unwrap_err();
         assert!(
@@ -367,9 +373,33 @@ mod tests {
     async fn an_answer_wait_still_unsettled_at_the_deadline_stays_ineligible() {
         let deadline = Instant::now() + Duration::from_millis(50);
         let error = budget(deadline)
-            .answer_within(std::future::pending::<Result<()>>())
+            .answer_within(&RunnerLimits::default(), |_| {
+                std::future::pending::<Result<()>>()
+            })
             .await
             .unwrap_err();
         assert!(!eligible(&error), "{error:#}");
+    }
+    #[tokio::test]
+    async fn a_recovered_answer_wait_gets_only_what_is_left_of_the_episode() {
+        // The full timeouts are 60 s; the episode that recovered the commitment has 3 s left.
+        let full = RunnerLimits {
+            commit: Duration::from_secs(60),
+            answer: Duration::from_secs(60),
+            ..RunnerLimits::default()
+        };
+        let left = Duration::from_secs(3);
+        let given = budget(Instant::now() + left)
+            .answer_within(&full, |bounded| async move { Ok(bounded) })
+            .await
+            .unwrap();
+        assert!(given.answer < left, "{:?}", given.answer);
+        assert!(given.commit < left, "{:?}", given.commit);
+        // Outside an episode the wait keeps its full timeout.
+        let unbounded = Budget::new(true)
+            .answer_within(&full, |bounded| async move { Ok(bounded) })
+            .await
+            .unwrap();
+        assert_eq!(unbounded.answer, full.answer);
     }
 }
