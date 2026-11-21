@@ -292,7 +292,7 @@ async fn recover_legacy(
 fn finished(meta: &Value, output: &mut impl Write) -> Result<()> {
     if let Some(error) = meta["errorMessage"]
         .as_str()
-        .filter(|_| meta["status"] == "error")
+        .filter(|_| true)
     {
         writeln!(output, "\nResult:\nSession failed: {error}")?;
     }
