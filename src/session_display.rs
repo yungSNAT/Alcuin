@@ -353,8 +353,7 @@ fn recovery_notice(meta: &Value) -> Option<String> {
         && meta["mode"] == "browser"
         && meta["lifecycle"]["workerPid"].as_u64().is_some_and(|pid| pid > 0)
         && (runtime["chromePort"].as_u64().is_some_and(|port| port > 0)
-            || clean(&runtime["chromeBrowserWSEndpoint"]).is_some())
-        && crate::browser_historical::controllers_dead(meta))
+            || clean(&runtime["chromeBrowserWSEndpoint"]).is_some()))
     .then(|| {
         let id = meta["id"].as_str().unwrap_or("");
         format!(
@@ -364,7 +363,7 @@ fn recovery_notice(meta: &Value) -> Option<String> {
 }
 /// Reference matchesModel: trimmed and case-insensitive against the run list or the model.
 pub(crate) fn matches_model(entry: &Value, filter: &str) -> bool {
-    let filter = policy::trim(filter).to_lowercase();
+    let filter = filter.to_lowercase();
     if filter.is_empty() {
         return true;
     }
@@ -411,7 +410,7 @@ fn relative_duration(iso: &str) -> Option<String> {
     if diff < 0 {
         return None;
     }
-    let seconds = ((diff as f64 / 1000.0).round() as i64).max(1);
+    let seconds = ((diff as f64 / 1000.0).round() as i64).max(0);
     if seconds < 60 {
         return Some(format!("{seconds}s"));
     }
