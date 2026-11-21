@@ -478,6 +478,121 @@ mod tests {
         accumulator.event(&json!({"type":"response.output_item.added","output_index":output_index,"item":{"id":id,"type":"message","content":[]}})).unwrap();
         accumulator.event(&json!({"type":"response.content_part.added","item_id":id,"output_index":output_index,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}})).unwrap();
     }
+    fn started(items: Value) -> ResponseAccumulator {
+        let mut accumulator = ResponseAccumulator::default();
+        accumulator.event(&created()).unwrap();
+        for (index, item) in items.as_array().unwrap().iter().enumerate() {
+            accumulator
+                .event(
+                    &json!({"type":"response.output_item.added","output_index":index,"item":item}),
+                )
+                .unwrap();
+        }
+        accumulator
+    }
+    #[test]
+    fn summaries_refusals_tool_inputs_annotations_and_statuses_reach_the_final_response() {
+        let mut accumulator = started(json!([
+            {"id":"rs_a","type":"reasoning"},
+            {"id":"msg_a","type":"message","content":[]},
+            {"id":"fc_a","type":"function_call","call_id":"call_a","arguments":""},
+            {"id":"ct_a","type":"custom_tool_call","call_id":"call_b"},
+            {"id":"mcp_a","type":"mcp_call"},
+            {"id":"ci_a","type":"code_interpreter_call"},
+            {"id":"ws_a","type":"web_search_call","status":"in_progress"},
+        ]));
+        let events = [
+            json!({"type":"response.reasoning_summary_part.added","item_id":"rs_a","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}),
+            json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_a","output_index":0,"summary_index":0,"delta":"PUBLIC plan"}),
+            json!({"type":"response.reasoning_summary_text.done","item_id":"rs_a","output_index":0,"summary_index":0,"text":"PUBLIC plan."}),
+            json!({"type":"response.content_part.added","item_id":"msg_a","output_index":1,"content_index":0,"part":{"type":"refusal","refusal":""}}),
+            json!({"type":"response.refusal.delta","item_id":"msg_a","output_index":1,"content_index":0,"delta":"PUBLIC no"}),
+            json!({"type":"response.content_part.added","item_id":"msg_a","output_index":1,"content_index":1,"part":{"type":"output_text","text":"","annotations":[]}}),
+            json!({"type":"response.output_text.annotation.added","item_id":"msg_a","output_index":1,"content_index":1,"annotation_index":0,"annotation":{"url":"PUBLIC-first"}}),
+            json!({"type":"response.output_text.annotation.added","item_id":"msg_a","output_index":1,"content_index":1,"annotation_index":1,"annotation":{"url":"PUBLIC-second"}}),
+            json!({"type":"response.output_text.annotation.added","item_id":"msg_a","output_index":1,"content_index":1,"annotation_index":0,"annotation":{"url":"PUBLIC-replaced"}}),
+            json!({"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":2,"delta":"{\"a\":"}),
+            json!({"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":2,"delta":"1}"}),
+            json!({"type":"response.custom_tool_call_input.delta","item_id":"ct_a","output_index":3,"delta":"PUBLIC input"}),
+            json!({"type":"response.mcp_call_arguments.done","item_id":"mcp_a","output_index":4,"arguments":"{}"}),
+            json!({"type":"response.code_interpreter_call_code.delta","item_id":"ci_a","output_index":5,"delta":"print(1)"}),
+            json!({"type":"response.web_search_call.searching","item_id":"ws_a","output_index":6}),
+            // A status with no output index stays in the lifecycle snapshot only.
+            json!({"type":"response.web_search_call.completed"}),
+        ];
+        for event in &events {
+            // Only answer text is streamed to the caller.
+            assert_eq!(accumulator.event(event).unwrap(), None, "{event}");
+        }
+        accumulator.event(&json!({"type":"response.content_part.done","item_id":"msg_a","output_index":1,"content_index":0,"part":{"type":"refusal","refusal":"PUBLIC no."}})).unwrap();
+        accumulator.event(&json!({"type":"response.output_item.done","output_index":2,"item":{"id":"fc_a","type":"function_call","call_id":"call_a","arguments":"{\"a\":1}","status":"completed"}})).unwrap();
+        let result = accumulator.finish().unwrap();
+        let output = &result["output"];
+        assert_eq!(
+            output[0]["summary"],
+            json!([{"type":"summary_text","text":"PUBLIC plan."}])
+        );
+        assert_eq!(
+            output[1]["content"][0],
+            json!({"type":"refusal","refusal":"PUBLIC no."})
+        );
+        assert_eq!(
+            output[1]["content"][1]["annotations"],
+            json!([{"url":"PUBLIC-replaced"},{"url":"PUBLIC-second"}])
+        );
+        assert_eq!(output[2]["arguments"], "{\"a\":1}");
+        assert_eq!(output[2]["status"], "completed");
+        assert_eq!(output[3]["input"], "PUBLIC input");
+        assert_eq!(output[4]["arguments"], "{}");
+        assert_eq!(output[5]["code"], "print(1)");
+        assert_eq!(output[6]["status"], "searching");
+        // A refusal is not answer text.
+        assert_eq!(result["output_text"], "");
+    }
+    #[test]
+    fn stream_refuses_malformed_items_parts_and_lifecycle_order() {
+        let items = json!([
+            {"id":"msg_a","type":"message","content":[{"type":"refusal","refusal":""}]},
+            {"id":"fc_a","type":"function_call","call_id":"call_a"},
+            {"type":"custom_tool_call","call_id":"call_b"},
+        ]);
+        for event in [
+            json!({"output_index":0}),
+            json!({"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","id":"fc_b"}}),
+            json!({"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","id":"","call_id":"call_c"}}),
+            json!({"type":"response.output_item.added","output_index":3,"item":{"type":"message"}}),
+            json!({"type":"response.output_item.added","output_index":3,"item":{"type":"custom_tool_call","call_id":"call_b"}}),
+            json!({"type":"response.output_item.done","output_index":1,"item":{"id":"fc_a","type":"function_call","call_id":"call_other"}}),
+            json!({"type":"response.content_part.done","item_id":"msg_a","output_index":0,"content_index":4,"part":{"type":"refusal","refusal":""}}),
+            json!({"type":"response.content_part.added","item_id":"msg_a","output_index":0,"content_index":1}),
+            json!({"type":"response.output_text.delta","item_id":"msg_a","output_index":0,"content_index":0,"delta":"wrong"}),
+            json!({"type":"response.refusal.done","item_id":"msg_a","output_index":0,"content_index":0,"refusal":7}),
+            json!({"type":"response.output_text.annotation.added","item_id":"msg_a","output_index":0,"content_index":0,"annotation_index":0,"annotation":{}}),
+            json!({"type":"response.function_call_arguments.delta","item_id":"msg_a","output_index":0,"delta":"{}"}),
+            json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{}"}),
+            json!({"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":1,"delta":7}),
+            json!({"type":"response.function_call_arguments.done","item_id":"fc_a","output_index":1}),
+            json!({"type":"response.web_search_call.completed","item_id":"other","output_index":0}),
+            json!({"type":"response.output_text.delta","item_id":"msg_a","output_index":-1,"content_index":0,"delta":"x"}),
+            json!({"type":"response.completed","response":{"id":"resp_public","output":[{"type":"message","id":"msg_a"},{"type":"message","id":"msg_a"}]}}),
+            json!({"type":"response.completed","response":{"id":"resp_public"}}),
+            json!({"type":"response.completed"}),
+        ] {
+            let mut accumulator = started(items.clone());
+            let before = accumulator.snapshot.clone();
+            assert!(accumulator.event(&event).is_err(), "{event}");
+            assert_eq!(accumulator.snapshot, before, "{event}");
+        }
+        // A stream must open with response.created, before any other event.
+        let mut accumulator = ResponseAccumulator::default();
+        assert!(accumulator.event(&json!({"type":"response.in_progress","response":{"id":"resp_public","output":[]}})).is_err());
+        assert!(accumulator.event(&json!({"type":"response.output_text.delta","item_id":"msg_a","output_index":0,"content_index":0,"delta":"x"})).is_err());
+        assert_eq!(
+            accumulator.event(&json!({"type":"keepalive"})).unwrap(),
+            None
+        );
+        assert!(accumulator.snapshot.is_none());
+    }
     #[test]
     fn indexed_deltas_final_replacements_and_clean_in_progress_eof() {
         let mut accumulator = ResponseAccumulator::default();
