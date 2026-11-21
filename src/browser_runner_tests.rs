@@ -3373,12 +3373,12 @@ async fn assert_parent_recovery_from(
         &original_child_controller,
         &original_link,
     );
+    assert_target_retired(&journal, &creator, &recovered, capture_kind, &trace);
     assert_eq!(
         sends.load(Ordering::SeqCst),
         manifest["sends"].as_u64().unwrap() as usize
     );
     assert_eq!(closes.load(Ordering::SeqCst), 1);
-    assert_target_retired(&journal, &creator, &recovered, capture_kind, &trace);
 }
 /// The recovered tab's journal entry is retired with its required output, and recovery never
 /// created, navigated, typed into or uploaded to a tab.
