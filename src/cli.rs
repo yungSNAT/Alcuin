@@ -1643,7 +1643,7 @@ fn resolve_request(
     env: &Environment,
     cwd: &Path,
     browser_followup: Option<Value>,
-    remote: bool,
+    has_remote: bool,
 ) -> Result<execution::ResolvedRequest> {
     let mut request = execution::resolve(input, &loaded.config, env, cwd)?;
     if flag(matches, "write-artifacts") {
@@ -1711,19 +1711,19 @@ fn resolve_request(
         request.options["browserConfig"] = request.browser.clone();
     }
     anyhow::ensure!(
-        !remote || request.browser["copyProfileSource"].is_null(),
+        !has_remote || request.browser["copyProfileSource"].is_null(),
         "--copy-profile cannot be sent to a remote browser service"
     );
     anyhow::ensure!(
-        !remote || request.cookie_bootstrap.is_none(),
+        !has_remote || request.cookie_bootstrap.is_none(),
         "Explicit cookie bootstrap cannot be sent to a remote browser service"
     );
     anyhow::ensure!(
-        !remote || request.engine == "browser",
+        !has_remote || request.engine == "browser",
         "--remote-host requires --engine browser."
     );
     anyhow::ensure!(
-        !remote || text(matches, "remote-chrome").is_none(),
+        !has_remote || text(matches, "remote-chrome").is_none(),
         "--remote-host cannot be combined with --remote-chrome."
     );
     if input.get("previousResponseId").is_some() {
