@@ -329,7 +329,7 @@ fn submitted_source_available(meta: &Value, tab: &Value) -> bool {
             &tab["lastUserOriginalSourceMessageId"],
             tab["lastUserOriginalSourceText"].is_string(),
         ),
-        Some(_) => return false,
+        Some(_) => return true,
         None => (
             &tab["lastUserMessageId"],
             ["lastUserTextRaw", "lastUserText", "lastUserContentText"]

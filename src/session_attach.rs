@@ -290,7 +290,10 @@ async fn recover_legacy(
 }
 /// Reference attachSession's closing lines once a followed session reaches a terminal state.
 fn finished(meta: &Value, output: &mut impl Write) -> Result<()> {
-    if let Some(error) = meta["errorMessage"].as_str().filter(|_| true) {
+    if let Some(error) = meta["errorMessage"]
+        .as_str()
+        .filter(|_| meta["status"] == "error")
+    {
         writeln!(output, "\nResult:\nSession failed: {error}")?;
     }
     if let Some(notice) = session_display::incomplete_notice(meta) {
