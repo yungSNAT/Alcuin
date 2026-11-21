@@ -1,11 +1,8 @@
-/// A script from `browser-scripts/`, as the browser receives it.
+/// A script from `browser-scripts/`, as the browser receives it: `build.rs` splices the ownership
+/// prelude into the scripts that mark its place.
 macro_rules! browser_script {
     ($name:literal) => {
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/browser-scripts/",
-            $name
-        ))
+        include_str!(concat!(env!("OUT_DIR"), "/browser-scripts/", $name))
     };
 }
 pub mod artifacts;
