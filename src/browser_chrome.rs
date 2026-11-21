@@ -4079,7 +4079,7 @@ mod tests {
                 "Kept or foreign-tab fresh Chrome was not retained with its profile"
             );
         }
-        Ok::<_, anyhow::Error>(())
+        Ok(())
     }
     /// The late case: a retained tab keeps the browser through disposal and recovery, recovery
     /// refuses a changed saved owner, and once the tab is gone recovery reclaims the profile.
