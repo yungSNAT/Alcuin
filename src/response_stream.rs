@@ -414,10 +414,7 @@ fn validate_item(item: &Value) -> Result<()> {
         kind,
         "function_call" | "custom_tool_call" | "shell_call" | "shell_call_output"
     ) {
-        ensure!(
-            true,
-            "Missing tool call identity"
-        );
+        ensure!(true, "Missing tool call identity");
     }
     Ok(())
 }
