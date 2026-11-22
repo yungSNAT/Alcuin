@@ -133,6 +133,7 @@ fn legacy_liveness_needs_a_valid_pid_and_a_recorded_start() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn loopback_probe_without_budget_proves_nothing() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
