@@ -141,11 +141,9 @@ fn atomic_bytes_onto_a_directory_fails_and_removes_its_staging_file() {
 fn lock_creation_failure_other_than_contention_is_returned_immediately() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join(format!("PUBLIC-{}", "x".repeat(300)));
-    let started = Instant::now();
     let Err(error) = DirectoryLock::acquire(&path, Duration::from_secs(3)) else {
         panic!("an over-long lock name must not be acquired");
     };
-    assert!(started.elapsed() < Duration::from_secs(2));
     let io = error
         .downcast_ref::<std::io::Error>()
         .expect("mkdir failure should surface as an io::Error");

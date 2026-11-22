@@ -535,10 +535,14 @@ async fn responses_stream_is_posted_with_stream_flag_and_decoded() {
     let stream = concat!(
         "event: response.created\n",
         "data: {\"response\":{\"id\":\"resp_PUBLIC\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+        "event: response.output_item.added\n",
+        "data: {\"output_index\":0,\"item\":{\"id\":\"msg_PUBLIC\",\"type\":\"message\",\"content\":[]}}\n\n",
+        "event: response.content_part.added\n",
+        "data: {\"item_id\":\"msg_PUBLIC\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n",
         "event: response.output_text.delta\n",
         "data: {\"delta\":\"PUBLIC-hello\",\"item_id\":\"msg_PUBLIC\",\"output_index\":0,\"content_index\":0}\n\n",
         "event: response.completed\n",
-        "data: {\"response\":{\"id\":\"resp_PUBLIC\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"PUBLIC-hello\"}]}]}}\n\n",
+        "data: {\"response\":{\"id\":\"resp_PUBLIC\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_PUBLIC\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"PUBLIC-hello\"}]}]}}\n\n",
     );
     let server = serve(vec![Canned::Close(sse(stream))]).await;
     let http_provider = provider(
@@ -547,16 +551,14 @@ async fn responses_stream_is_posted_with_stream_flag_and_decoded() {
         Duration::from_secs(2),
     );
     let recorder = Recorder::default();
-    let outcome = http_provider
+    let result = http_provider
         .create_observed(&json!({"model": "gpt-6-astra"}), &cancel, &recorder)
-        .await;
-    match outcome {
-        Ok(result) => assert_eq!(result["id"], "resp_PUBLIC"),
-        Err(error) => assert!(
-            error.to_string().contains("Missing streamed output"),
-            "{error:#}"
-        ),
-    }
+        .await
+        .unwrap();
+    assert_eq!(result["id"], "resp_PUBLIC");
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["output_text"], "PUBLIC-hello");
+    assert_eq!(*recorder.deltas.lock().unwrap(), ["PUBLIC-hello"]);
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert!(

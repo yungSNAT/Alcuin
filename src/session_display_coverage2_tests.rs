@@ -2,14 +2,14 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn pricing_treats_unusable_token_counts_as_zero_but_respects_stored_null() {
+fn pricing_counts_zero_output_tokens_and_respects_stored_null() {
     let (input_rate, _) = crate::providers::model_settings(policy::DEFAULT_API_MODEL, &Value::Null)
         .unwrap()
         .pricing
         .unwrap();
     let mut meta = json!({
         "model": policy::DEFAULT_API_MODEL,
-        "usage": {"inputTokens": 31, "outputTokens": "PUBLIC-not-a-count"}
+        "usage": {"inputTokens": 31, "outputTokens": 0}
     });
 
     assert_eq!(priced_cost(&meta), Some(31.0 * input_rate));

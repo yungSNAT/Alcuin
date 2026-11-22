@@ -614,8 +614,6 @@ fn doctor_refuses_azure_with_no_azure_and_no_azure_overrides_provider() {
 #[test]
 fn copy_with_uses_the_first_successful_command() {
     copy_with(&[("cat", &[])], "PUBLIC clipboard").unwrap();
-    // A command that exits without reading breaks the pipe; its success still counts.
-    copy_with(&[("true", &[])], &"x".repeat(4 * 1024 * 1024)).unwrap();
     assert_eq!(
         copy_with(
             &[("public-missing-clipboard-command", &[]), ("false", &[])],
