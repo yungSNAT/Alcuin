@@ -14,11 +14,12 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// Lower-case hexadecimal, two digits a byte.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 pub fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    hex(&Sha256::digest(bytes))
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,11 +108,7 @@ fn capture_with_until(
         saved.handle.write_all(chunk)?;
         hash.update(chunk);
     }
-    let expected: String = hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let expected: String = hex(&hash.finalize());
     saved.handle.sync_all()?;
     check(cancel)?;
     before_verify();
@@ -192,11 +189,7 @@ pub(crate) fn verify_capture_until(
         hash.update(&buffer[..count]);
         bytes.extend_from_slice(&buffer[..count]);
     }
-    let digest: String = hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let digest: String = hex(&hash.finalize());
     file.require_matches(&path)?;
     directory.require_matches(&directory_path)?;
     anyhow::ensure!(
@@ -276,11 +269,7 @@ fn verify_streamed_file_with(
         anyhow::ensure!(bytes <= size, "Artifact exceeded declared size");
         hash.update(&buffer[..count]);
     }
-    let digest: String = hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let digest: String = hex(&hash.finalize());
     anyhow::ensure!(
         bytes == size && digest == expected,
         "Artifact size or digest differs"

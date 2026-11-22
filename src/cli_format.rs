@@ -1,4 +1,5 @@
 //! Plain CLI text that mirrors the reference Commander and display helpers.
+use crate::policy::nonempty;
 use serde_json::Value;
 use std::{borrow::Cow, ffi::OsString};
 
@@ -618,11 +619,6 @@ pub(crate) fn terminal_chunk(text: &str, held_cr: &mut bool) -> String {
         *held_cr = true;
     }
     terminal_text(&chunk, true).into_owned()
-}
-fn nonempty(value: Option<&str>) -> Option<&str> {
-    value
-        .map(crate::policy::trim)
-        .filter(|value| !value.is_empty())
 }
 fn azure_note(mode: &str, configured: bool, azure: bool) -> Option<&'static str> {
     if !configured {

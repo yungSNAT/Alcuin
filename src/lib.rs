@@ -1,3 +1,10 @@
+/// A script from `browser-scripts/`, as the browser receives it: `build.rs` splices the ownership
+/// prelude into the scripts that mark its place.
+macro_rules! browser_script {
+    ($name:literal) => {
+        include_str!(concat!(env!("OUT_DIR"), "/browser-scripts/", $name))
+    };
+}
 pub mod artifacts;
 pub mod bridge;
 pub mod bridge_host;
@@ -83,3 +90,45 @@ pub mod sessions;
 pub mod storage;
 pub mod tokenizer;
 mod window_keeper;
+
+#[cfg(test)]
+mod browser_script_tests {
+    /// Pins the text the browser receives for the scripts that read target ownership. They run
+    /// in a signed-in ChatGPT session, so a change to that text is a reviewed change: update the
+    /// hash with it.
+    #[test]
+    fn injected_ownership_scripts_are_pinned() {
+        let text = [
+            browser_script!("attachment-evidence.js"),
+            browser_script!("attachment-ready.js"),
+            browser_script!("completion-install.js"),
+            browser_script!("copy-markdown.js"),
+            browser_script!("file-input-prepare.js"),
+            browser_script!("inspection-finish.js"),
+            browser_script!("inspection-prepare.js"),
+            browser_script!("model.js"),
+            browser_script!("owned_commit.js"),
+            browser_script!("prompt-check.js"),
+            browser_script!("prompt-prepare.js"),
+            browser_script!("send-focus.js"),
+            browser_script!("send-prepare.js"),
+            browser_script!("submission.js"),
+            browser_script!("thinking.js"),
+        ]
+        .map(|script| {
+            // A spliced prelude takes its script's line ends.
+            let crlf = script.matches("\r\n").count();
+            assert!(
+                crlf == 0 || crlf == script.matches('\n').count(),
+                "mixed line ends"
+            );
+            let lf = script.replace("\r\n", "\n");
+            format!("{}\n{lf}", lf.len())
+        })
+        .concat();
+        assert_eq!(
+            crate::artifacts::sha256(text.as_bytes()),
+            "cbebb6be7d02558cbb172047651a312aa85a79a044fa700d5b8bbee91253ae02"
+        );
+    }
+}

@@ -1,7 +1,7 @@
 //! Provider route resolution and bounded HTTP. Dispatch never retries a POST.
 use crate::{
     config::Environment,
-    policy::{assert_model_allowed, require_api_pro},
+    policy::{assert_model_allowed, nonempty, require_api_pro},
 };
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
@@ -137,9 +137,6 @@ fn native(raw: &str) -> bool {
 }
 fn openrouter(raw: &str) -> bool {
     reqwest::Url::parse(raw).is_ok_and(|u| u.host_str() == Some("openrouter.ai"))
-}
-fn nonempty(value: Option<&str>) -> Option<&str> {
-    value.map(crate::policy::trim).filter(|s| !s.is_empty())
 }
 /// Azure options resolved per field as the Node CLI does: explicit option, then
 /// `AZURE_OPENAI_*`, then user config. Runs take an explicit value as given and
