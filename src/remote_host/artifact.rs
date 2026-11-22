@@ -149,12 +149,7 @@ impl VerifiedArtifact {
                     self.entry.handle.read(&mut extra)? == 0,
                     "Remote artifact grew"
                 );
-                let actual = hash
-                    .clone()
-                    .finalize()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
+                let actual = crate::artifacts::hex(&hash.clone().finalize());
                 ensure!(
                     actual == self.hash,
                     "Remote artifact bytes changed during transfer"
@@ -206,11 +201,7 @@ mod tests {
         }
         file.sync_all().unwrap();
         drop(file);
-        let hash = hash
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let hash = crate::artifacts::hex(&hash.finalize());
         let captured = json!({"answerText":"PUBLIC streamed artifact","artifacts":[{"kind":"file","path":path,"sizeBytes":size,"sha256":hash}]});
         let produced = crate::remote_protocol::produced(&store, &run, captured, false).unwrap();
         remote_result::save(
@@ -289,10 +280,7 @@ mod tests {
                 outcome.unwrap();
                 assert_eq!(total, size);
                 assert_eq!(
-                    hash.finalize()
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>(),
+                    crate::artifacts::hex(&hash.finalize()),
                     record.native()["artifacts"][0]["descriptor"]["sha256"]
                         .as_str()
                         .unwrap()

@@ -193,11 +193,7 @@ fn register_until(
         ensure!(bytes <= size, "Artifact grew during registration");
         hash.update(&buffer[..count]);
     }
-    let hash: String = hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let hash: String = crate::artifacts::hex(&hash.finalize());
     ensure!(
         bytes == size
             && artifact

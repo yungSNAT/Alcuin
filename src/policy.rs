@@ -10,6 +10,10 @@ pub(crate) fn javascript_whitespace(character: char) -> bool {
 pub(crate) fn trim(value: &str) -> &str {
     value.trim_matches(javascript_whitespace)
 }
+/// The trimmed value, or `None` when nothing is left.
+pub(crate) fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.map(trim).filter(|value| !value.is_empty())
+}
 pub(crate) fn trim_end(value: &str) -> &str {
     value.trim_end_matches(javascript_whitespace)
 }

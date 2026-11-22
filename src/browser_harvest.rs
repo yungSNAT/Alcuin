@@ -289,7 +289,7 @@ fn patch(current: &Value, harvested: &Value, integrity: &HarvestIntegrity) -> Va
     let mut harvest = merge_object(
         &browser["harvest"],
         &json!({
-            "harvestedAt":timestamp(),"assistantHash":Sha1::digest(answer.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),"integrity":integrity,
+            "harvestedAt":timestamp(),"assistantHash":crate::artifacts::hex(&Sha1::digest(answer.as_bytes())),"integrity":integrity,
         }),
     );
     for key in [

@@ -801,11 +801,7 @@ fn upload_digest(handle: &mut fs::File, expected: u64) -> Result<String> {
         hash.update(&buffer[..count]);
     }
     anyhow::ensure!(total == expected, "Upload changed during capture");
-    Ok(hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(crate::artifacts::hex(&hash.finalize()))
 }
 pub fn attachment_expectation(name: &str) -> Value {
     attachment_expectation_for(name, false)
