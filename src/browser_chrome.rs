@@ -2293,9 +2293,8 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
                     Ok(reading) if reading == profile => true,
                     // The browser's profile was moved to the launched path and its old name then
                     // reused: the kernel reports the moved files under their new path.
-                    Ok(_) => open_paths(&entry.path())?.is_some_and(|open| {
-                        open.iter().any(|(_, open)| open.starts_with(profile))
-                    }),
+                    Ok(_) => open_paths(&entry.path())?
+                        .is_some_and(|open| open.iter().any(|(_, open)| open.starts_with(profile))),
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() =>
                     {
