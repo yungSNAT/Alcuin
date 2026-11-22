@@ -257,6 +257,12 @@ fn project_config_cannot_redirect_credentials_routes_or_native_capture() {
         )["browser"]["url"]
             .is_string()
     );
+    // A project may set how long its runs queue for a slot, but not the browser executable.
+    let browser = &config::sanitise_project(
+        &json!({"browser":{"slotWaitMs":60_000,"chromePath":"PUBLIC chrome.exe"}}),
+    )["browser"];
+    assert_eq!(browser["slotWaitMs"], 60_000);
+    assert!(browser.get("chromePath").is_none(), "{browser}");
 }
 /// Another account can write a shared ancestor such as /tmp, so the walk stops at the first
 /// directory this account does not own, and a file another account owns is refused.
