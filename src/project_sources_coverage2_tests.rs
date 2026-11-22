@@ -3,8 +3,10 @@ use crate::cdp::fake::{self, Reply};
 
 const COMMAND: Duration = Duration::from_secs(1);
 const PROJECT_PATH: &str = "/g/g-p-public/project";
+#[cfg(target_os = "linux")]
 const PROJECT_URL: &str = "https://chatgpt.com/g/g-p-public/project?tab=sources";
 
+#[cfg(target_os = "linux")]
 fn plaintext_cookie_config(directory: &Path) -> Value {
     let path = directory.join("Cookies");
     let db = rusqlite::Connection::open(&path).unwrap();
@@ -49,6 +51,7 @@ fn plaintext_cookie_config(directory: &Path) -> Value {
     })
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn sources_accept_fresh_plaintext_cookies_and_check_explicit_bootstrap_before_browser_setup()
 {
