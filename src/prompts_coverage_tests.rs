@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(unix)]
 use std::io::ErrorKind;
 
 #[test]
@@ -44,6 +45,7 @@ fn selection_rejects_a_fifo_and_scanning_rejects_a_directory() {
     assert_eq!(scan_file(&root, 0, true).unwrap_err().to_string(), expected);
 }
 
+#[cfg(unix)]
 #[test]
 fn confinement_defers_missing_inputs_but_reports_non_directory_components() {
     let temp = tempfile::tempdir().unwrap();
@@ -80,6 +82,7 @@ fn confinement_defers_missing_inputs_but_reports_non_directory_components() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn directory_and_glob_walks_propagate_ignore_rule_errors() {
     let temp = tempfile::tempdir().unwrap();

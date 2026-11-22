@@ -112,6 +112,7 @@ fn same_directory_compares_native_identities_and_rejects_missing_paths() {
     assert!(!same_directory(&home.path().join("PUBLIC-absent"), &first));
 }
 
+#[cfg(unix)]
 #[test]
 fn atomic_bytes_onto_a_directory_fails_and_removes_its_staging_file() {
     let home = tempfile::tempdir().unwrap();

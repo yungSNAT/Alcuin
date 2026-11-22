@@ -222,6 +222,7 @@ async fn cancelled_token_aborts_before_any_request_through_every_entry_point() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn post_send_failures_map_to_connection_lost_and_timeout() {
     let cancel = CancellationToken::new();
