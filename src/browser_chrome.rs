@@ -2289,7 +2289,16 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
             if let Some(value) = value {
                 use std::os::unix::ffi::OsStrExt;
                 let path = Path::new(std::ffi::OsStr::from_bytes(value));
-                if fs::canonicalize(path)? == profile {
+                let owns = match fs::canonicalize(path) {
+                    Ok(reading) => reading == profile,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() =>
+                    {
+                        open_files_name_profile(&entry.path(), &[path.to_owned()], profile)?
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                if owns {
                     owners.push(pid);
                 }
             }
@@ -2323,14 +2332,28 @@ fn title_names_profile(process: &Path, title: &[u8], profile: &Path) -> Result<b
             let value = words[start..=end].join(&b' ');
             let path = std::ffi::OsStr::from_bytes(&value[b"--user-data-dir=".len()..]);
             // A profile is a directory; a file named by a shorter reading is no evidence.
-            if let Ok(reading) = fs::canonicalize(path)
-                && reading.is_dir()
-                && !readings.contains(&reading)
-            {
+            let reading = match fs::canonicalize(path) {
+                Ok(reading) if reading.is_dir() => reading,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && Path::new(path).is_absolute() =>
+                {
+                    path.into()
+                }
+                _ => continue,
+            };
+            if !readings.contains(&reading) {
                 readings.push(reading);
             }
         }
     }
+    open_files_name_profile(process, &readings, profile)
+}
+/// Whether a browser uses `profile`, given the profile paths its arguments can name. Chromium
+/// outlives a removed profile and recreates it lazily, so an absolute reading that no longer
+/// resolves is kept as written: the kernel still reports the files held open under it.
+#[cfg(target_os = "linux")]
+fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path) -> Result<bool> {
     let open = match open_paths(process) {
         Ok(open) => open,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && !process.try_exists()? => {
