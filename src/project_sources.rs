@@ -1449,8 +1449,8 @@ mod tests {
     }
 }
 #[cfg(test)]
-#[path = "project_sources_coverage_tests.rs"]
-mod coverage_tests;
-#[cfg(test)]
 #[path = "project_sources_coverage2_tests.rs"]
 mod coverage2_tests;
+#[cfg(test)]
+#[path = "project_sources_coverage_tests.rs"]
+mod coverage_tests;
