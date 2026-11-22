@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use super::*;
 
 /// Extracts the field name from a serde "missing field `name`" error message.
