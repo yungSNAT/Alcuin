@@ -2289,7 +2289,16 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
             if let Some(value) = value {
                 use std::os::unix::ffi::OsStrExt;
                 let path = Path::new(std::ffi::OsStr::from_bytes(value));
-                if fs::canonicalize(path)? == profile {
+                let owns = match fs::canonicalize(path) {
+                    Ok(reading) => reading == profile,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() =>
+                    {
+                        open_files_name_profile(&entry.path(), &[path.to_owned()], profile)?
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                if owns {
                     owners.push(pid);
                 }
             }
@@ -2323,14 +2332,28 @@ fn title_names_profile(process: &Path, title: &[u8], profile: &Path) -> Result<b
             let value = words[start..=end].join(&b' ');
             let path = std::ffi::OsStr::from_bytes(&value[b"--user-data-dir=".len()..]);
             // A profile is a directory; a file named by a shorter reading is no evidence.
-            if let Ok(reading) = fs::canonicalize(path)
-                && reading.is_dir()
-                && !readings.contains(&reading)
-            {
+            let reading = match fs::canonicalize(path) {
+                Ok(reading) if reading.is_dir() => reading,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && Path::new(path).is_absolute() =>
+                {
+                    path.into()
+                }
+                _ => continue,
+            };
+            if !readings.contains(&reading) {
                 readings.push(reading);
             }
         }
     }
+    open_files_name_profile(process, &readings, profile)
+}
+/// Whether a browser uses `profile`, given the profile paths its arguments can name. Chromium
+/// outlives a removed profile and recreates it lazily, so an absolute reading that no longer
+/// resolves is kept as written: the kernel still reports the files held open under it.
+#[cfg(target_os = "linux")]
+fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path) -> Result<bool> {
     let open = match open_paths(process) {
         Ok(open) => open,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && !process.try_exists()? => {
@@ -4656,6 +4679,63 @@ mod tests {
             profile_processes_at(&profile, &redirected).unwrap(),
             vec![71]
         );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn browsers_outliving_a_removed_profile_are_placed_by_their_open_files() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("PUBLIC-profile");
+        fs::create_dir(&profile).unwrap();
+        let profile = fs::canonicalize(profile).unwrap();
+        // Chromium keeps running after its profile is removed and recreates it later.
+        let removed = profile.with_file_name("PUBLIC-removed");
+        // One browser per proc root: argv as launched or as a rewritten title, and one open file.
+        let browser = |root: &str, cmdline: String, open: Option<PathBuf>| {
+            let process = home.path().join(root).join("80");
+            fs::create_dir_all(process.join("fd")).unwrap();
+            symlink(home.path().join("chrome"), process.join("exe")).unwrap();
+            fs::write(process.join("cmdline"), cmdline).unwrap();
+            if let Some(open) = open {
+                symlink(open, process.join("fd/3")).unwrap();
+            }
+            home.path().join(root)
+        };
+        let argv = format!(
+            "chrome\0--user-data-dir={}\0about:blank\0",
+            removed.display()
+        );
+        let title = format!(
+            "/opt/google/chrome/chrome --user-data-dir={} about:blank\0",
+            removed.display()
+        );
+        let deleted = PathBuf::from(format!("{}/Default/History (deleted)", removed.display()));
+        for cmdline in [argv, title] {
+            let elsewhere = browser("PUBLIC-elsewhere", cmdline.clone(), Some(deleted.clone()));
+            assert_eq!(
+                profile_processes_at(&profile, &elsewhere).unwrap(),
+                Vec::<u32>::new(),
+                "{cmdline:?}"
+            );
+            let unseen = browser("PUBLIC-unseen", cmdline.clone(), None);
+            assert!(
+                profile_processes_at(&profile, &unseen).is_err(),
+                "Without open files a removed profile cannot establish absence: {cmdline:?}"
+            );
+            let ours = browser(
+                "PUBLIC-ours",
+                cmdline.clone(),
+                Some(profile.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &ours).unwrap(),
+                vec![80],
+                "{cmdline:?}"
+            );
+            for root in ["PUBLIC-elsewhere", "PUBLIC-unseen", "PUBLIC-ours"] {
+                fs::remove_dir_all(home.path().join(root)).unwrap();
+            }
+        }
     }
     #[cfg(target_os = "linux")]
     #[test]

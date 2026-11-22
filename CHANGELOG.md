@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- On Linux, a Chrome that keeps running after its profile folder is deleted no longer stops every Alcuin launch with a bare 'No such file or directory (os error 2)'. Alcuin now places such a browser by the files it still holds open, as it already did for one whose process title hides its profile: files under the profile being launched make it that profile's owner, files under its own deleted folder rule it out, and with neither the launch still refuses, now with 'profile occupancy is unknown'.
+
 ## 0.2.0 (2026-11-19)
 
 The first release with archives for macOS on Apple silicon and Linux on aarch64, and the first under Apache-2.0 for Ryan Duguid's work.
