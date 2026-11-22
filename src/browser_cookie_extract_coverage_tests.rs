@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use super::*;
 
 fn unpartitioned_database(path: &Path) -> Connection {

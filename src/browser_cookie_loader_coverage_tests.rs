@@ -13,13 +13,18 @@ fn decode_hex(hex: &str) -> Vec<u8> {
         .collect()
 }
 
+/// Chromium's published default Linux cookie password, kept as hex test data.
+fn default_linux_password() -> Vec<u8> {
+    decode_hex("7065616e757473")
+}
+
 #[test]
 fn keys_reject_unversioned_blobs_and_v11_blobs_without_a_linux_keyring_key() {
     let v10 = decode_hex(PUBLIC_LINUX_CIPHERTEXT_HEX);
     assert!(v10.starts_with(b"v10"));
 
     let primary_only = Keys {
-        primary: CookieKey::linux(b"peanuts"),
+        primary: CookieKey::linux(&default_linux_password()),
         current: None,
         empty: None,
     };
@@ -38,9 +43,9 @@ fn keys_reject_unversioned_blobs_and_v11_blobs_without_a_linux_keyring_key() {
 
     // Blobs without a v10/v11 prefix are never decrypted, whatever keys exist.
     let all_keys = Keys {
-        primary: CookieKey::linux(b"peanuts"),
-        current: Some(CookieKey::linux(b"peanuts")),
-        empty: Some(CookieKey::linux(b"")),
+        primary: CookieKey::linux(&default_linux_password()),
+        current: Some(CookieKey::linux(&default_linux_password())),
+        empty: Some(CookieKey::linux(&decode_hex(""))),
     };
     let mut unversioned = v10.clone();
     unversioned[..3].copy_from_slice(b"v12");

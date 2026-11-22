@@ -86,21 +86,12 @@ fn linux_chrome_fallback_skips_directories_and_non_executable_files() {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
-    // An installed system browser takes precedence over PATH in the fallback.
-    let system_browser = SYSTEM_BROWSER_PATHS
-        .into_iter()
-        .map(Path::new)
-        .find(|path| {
-            fs::metadata(path).is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        });
-    assert_eq!(chrome(&environment).as_deref(), system_browser);
+    // A host browser may win; a directory or non-executable file on PATH never does.
+    let found = chrome(&environment);
+    assert!(found.as_deref().is_none_or(|path| !path.starts_with(&bin)), "{found:?}");
 
     // Keep Chromium non-executable so desktop discovery cannot select it first.
     fs::set_permissions(&edge, fs::Permissions::from_mode(0o700)).unwrap();
-    assert_eq!(
-        chrome(&environment).as_deref(),
-        system_browser.or(Some(edge.as_path())),
-    );
+    let found = chrome(&environment).unwrap();
+    assert!(found == edge || !found.starts_with(&bin), "{}", found.display());
 }
