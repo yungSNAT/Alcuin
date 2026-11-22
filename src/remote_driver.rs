@@ -416,3 +416,6 @@ mod tests {
 #[cfg(test)]
 #[path = "remote_driver_coverage_tests.rs"]
 mod coverage_tests;
+#[cfg(test)]
+#[path = "remote_driver_coverage2_tests.rs"]
+mod coverage2_tests;
