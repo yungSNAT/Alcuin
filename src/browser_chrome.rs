@@ -4701,7 +4701,10 @@ mod tests {
             }
             home.path().join(root)
         };
-        let argv = format!("chrome\0--user-data-dir={}\0about:blank\0", removed.display());
+        let argv = format!(
+            "chrome\0--user-data-dir={}\0about:blank\0",
+            removed.display()
+        );
         let title = format!(
             "/opt/google/chrome/chrome --user-data-dir={} about:blank\0",
             removed.display()
@@ -4719,7 +4722,11 @@ mod tests {
                 profile_processes_at(&profile, &unseen).is_err(),
                 "Without open files a removed profile cannot establish absence: {cmdline:?}"
             );
-            let ours = browser("PUBLIC-ours", cmdline.clone(), Some(profile.join("Default/History")));
+            let ours = browser(
+                "PUBLIC-ours",
+                cmdline.clone(),
+                Some(profile.join("Default/History")),
+            );
             assert_eq!(
                 profile_processes_at(&profile, &ours).unwrap(),
                 vec![80],
