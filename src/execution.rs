@@ -2066,8 +2066,8 @@ mod failure_tests {
     }
 }
 #[cfg(test)]
-#[path = "execution_coverage_tests.rs"]
-mod coverage_tests;
-#[cfg(test)]
 #[path = "execution_coverage2_tests.rs"]
 mod coverage2_tests;
+#[cfg(test)]
+#[path = "execution_coverage_tests.rs"]
+mod coverage_tests;

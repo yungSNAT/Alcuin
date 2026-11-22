@@ -1012,8 +1012,8 @@ mod tests {
     }
 }
 #[cfg(test)]
-#[path = "session_display_coverage_tests.rs"]
-mod coverage_tests;
-#[cfg(test)]
 #[path = "session_display_coverage2_tests.rs"]
 mod coverage2_tests;
+#[cfg(test)]
+#[path = "session_display_coverage_tests.rs"]
+mod coverage_tests;
