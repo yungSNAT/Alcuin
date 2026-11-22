@@ -264,7 +264,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
         let cfg = json!({"id":"PUBLIC-file-guard","navigation":nav,"selector":"#PUBLIC-file","names":[file.file_name().unwrap().to_str().unwrap()],"fileBytes":std::fs::metadata(file)?.len()});
         let prepared = reservation
             .evaluate_mutation(
-                include_str!("../browser-scripts/file-input-prepare.js"),
+                browser_script!("file-input-prepare.js"),
                 cfg.clone(),
                 SHORT,
                 &cancel,
@@ -379,7 +379,7 @@ async fn cases(page: &Cdp, file: &std::path::Path) -> Result<()> {
     // only after the privacy mode can change, so a preflight-only guard fails.
     let copy = guard(&format!(
         "(cfg)=>{{window.PUBLIC_copyResult=null;({})(cfg).then(value=>window.PUBLIC_copyResult=value,error=>window.PUBLIC_copyResult={{error:String(error)}});return true;}}",
-        include_str!("../browser-scripts/copy-markdown.js")
+        browser_script!("copy-markdown.js")
     ));
     for changed in [false, true] {
         page.evaluate_with_arguments("(cfg)=>{document.querySelector('[data-turn-key]')?.remove();window.PUBLIC_copyClicks=0;return true;}",&json!([{}]),SHORT,&cancel).await?;
@@ -1617,7 +1617,7 @@ async fn unrendered_completion_cases(page: &Cdp) -> Result<()> {
 /// later clears the flag.
 async fn answerless_tracker_cases(page: &Cdp) -> Result<()> {
     let cancel = CancellationToken::new();
-    let install = include_str!("../browser-scripts/completion-install.js");
+    let install = browser_script!("completion-install.js");
     let step = async |script: &str| -> Result<Value> {
         page.evaluate(&format!("(() => {{ {script} }})()"), SHORT, &cancel)
             .await
