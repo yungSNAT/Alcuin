@@ -37,6 +37,7 @@ fn malformed_active_link_is_skipped_but_missing_grok_lookup_is_reported() {
     assert_eq!(format!("{recovery_error:#}"), format!("{lookup_error:#}"));
 }
 
+#[cfg(unix)]
 #[test]
 fn remote_record_preserves_io_error_for_non_directory_session_path() {
     let (_root, store, manifest) = recovery_store(
