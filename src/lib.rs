@@ -115,11 +115,20 @@ mod browser_script_tests {
             browser_script!("submission.js"),
             browser_script!("thinking.js"),
         ]
-        .concat()
-        .replace("\r\n", "\n");
+        .map(|script| {
+            // A spliced prelude takes its script's line ends.
+            let crlf = script.matches("\r\n").count();
+            assert!(
+                crlf == 0 || crlf == script.matches('\n').count(),
+                "mixed line ends"
+            );
+            let lf = script.replace("\r\n", "\n");
+            format!("{}\n{lf}", lf.len())
+        })
+        .concat();
         assert_eq!(
             crate::artifacts::sha256(text.as_bytes()),
-            "5393a262c86501207ac4965adb12469f21953a1a51ff25fbcd6ab6167542429c"
+            "cbebb6be7d02558cbb172047651a312aa85a79a044fa700d5b8bbee91253ae02"
         );
     }
 }

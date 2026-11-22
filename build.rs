@@ -11,13 +11,22 @@ fn main() {
     // includes them with the prelude spliced in, so there is one copy of it to review.
     println!("cargo:rerun-if-changed=browser-scripts");
     let prelude = fs::read_to_string("browser-scripts/ownership-prelude.js").unwrap();
+    let prelude = prelude.trim().replace("\r\n", "\n");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("browser-scripts");
+    // A script that loses its marker must fail to build, not keep an earlier composed copy.
+    let _ = fs::remove_dir_all(&out);
     fs::create_dir_all(&out).unwrap();
     for entry in fs::read_dir("browser-scripts").unwrap() {
         let path = entry.unwrap().path();
         let script = fs::read_to_string(&path).unwrap();
         if script.contains("/* ownership-prelude.js */") {
-            let script = script.replace("/* ownership-prelude.js */", prelude.trim());
+            // The prelude takes the script's line ends, as a pasted copy did.
+            let prelude = if script.contains("\r\n") {
+                prelude.replace('\n', "\r\n")
+            } else {
+                prelude.clone()
+            };
+            let script = script.replace("/* ownership-prelude.js */", &prelude);
             fs::write(out.join(path.file_name().unwrap()), script).unwrap();
         }
     }
