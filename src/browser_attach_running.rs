@@ -540,3 +540,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_attach_running_coverage_tests.rs"]
+mod coverage_tests;

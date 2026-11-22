@@ -273,3 +273,6 @@ mod tests {
         assert!(candidate(&root.path().join("home/../home/grok-browser-profile")).is_err());
     }
 }
+#[cfg(test)]
+#[path = "profile_coverage_tests.rs"]
+mod coverage_tests;

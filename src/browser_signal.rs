@@ -224,5 +224,8 @@ fn default_disposition(number: i32) {
 }
 
 #[cfg(test)]
+#[path = "browser_signal_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_signal_tests.rs"]
 mod tests;
