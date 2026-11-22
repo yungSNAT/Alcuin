@@ -2290,7 +2290,11 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
                 use std::os::unix::ffi::OsStrExt;
                 let path = Path::new(std::ffi::OsStr::from_bytes(value));
                 let owns = match fs::canonicalize(path) {
-                    Ok(reading) => reading == profile,
+                    Ok(reading) if reading == profile => true,
+                    // The browser's profile was moved to the launched path and its old name then
+                    // reused: the kernel reports the moved files under their new path.
+                    Ok(_) => open_paths(&entry.path())?
+                        .is_some_and(|open| open.iter().any(|(_, open)| open.starts_with(profile))),
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() =>
                     {
@@ -2300,6 +2304,7 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
                 };
                 if owns {
                     owners.push(pid);
+                    break;
                 }
             }
         }
@@ -2354,12 +2359,8 @@ fn title_names_profile(process: &Path, title: &[u8], profile: &Path) -> Result<b
 /// resolves is kept as written: the kernel still reports the files held open under it.
 #[cfg(target_os = "linux")]
 fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path) -> Result<bool> {
-    let open = match open_paths(process) {
-        Ok(open) => open,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !process.try_exists()? => {
-            return Ok(false);
-        }
-        Err(error) => return Err(error.into()),
+    let Some(open) = open_paths(process)? else {
+        return Ok(false);
     };
     let holds = |directory: &Path, from: u32| {
         open.iter()
@@ -2385,23 +2386,38 @@ fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path)
     );
     Ok(true)
 }
-/// The descriptors a Linux process holds open, with their paths; descriptors closed during the
-/// scan are skipped.
+/// The descriptors a Linux process holds open, with their paths, or `None` once it has exited;
+/// descriptors closed during the scan are skipped.
 #[cfg(target_os = "linux")]
-fn open_paths(process: &Path) -> std::io::Result<Vec<(u32, PathBuf)>> {
-    let mut paths = vec![];
-    for entry in fs::read_dir(process.join("fd"))? {
-        let entry = entry?;
-        let Ok(descriptor) = entry.file_name().to_string_lossy().parse() else {
-            continue;
-        };
-        match fs::read_link(entry.path()) {
-            Ok(path) => paths.push((descriptor, path)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+fn open_paths(process: &Path) -> Result<Option<Vec<(u32, PathBuf)>>> {
+    let scan = || -> std::io::Result<_> {
+        let mut paths = vec![];
+        for entry in fs::read_dir(process.join("fd"))? {
+            let entry = entry?;
+            let Ok(descriptor) = entry.file_name().to_string_lossy().parse() else {
+                continue;
+            };
+            match fs::read_link(entry.path()) {
+                Ok(path) => paths.push((descriptor, path)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
+        Ok(paths)
+    };
+    match scan() {
+        Ok(paths) => Ok(Some(paths)),
+        // Procfs answers a descriptor link of a process reaped mid-scan with permission denied.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) && !process.try_exists()? =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
     }
-    Ok(paths)
 }
 #[cfg(windows)]
 fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
@@ -4736,6 +4752,71 @@ mod tests {
                 fs::remove_dir_all(home.path().join(root)).unwrap();
             }
         }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn browsers_whose_profile_moved_into_the_launched_path_are_placed_by_their_open_files() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let directory = |name: &str| {
+            let path = home.path().join(name);
+            fs::create_dir(&path).unwrap();
+            fs::canonicalize(path).unwrap()
+        };
+        // The browser started on PUBLIC-old; that folder then moved to PUBLIC-profile, the path
+        // being launched, and a new PUBLIC-old took its name. The kernel reports the moved files.
+        let profile = directory("PUBLIC-profile");
+        let reused = directory("PUBLIC-old");
+        let browser = |root: &str, cmdline: &str, open: Option<PathBuf>| {
+            let process = home.path().join(root).join("90");
+            fs::create_dir_all(process.join("fd")).unwrap();
+            symlink(home.path().join("chrome"), process.join("exe")).unwrap();
+            fs::write(process.join("cmdline"), cmdline).unwrap();
+            if let Some(open) = open {
+                symlink(open, process.join("fd/3")).unwrap();
+            }
+            home.path().join(root)
+        };
+        let argv = format!(
+            "chrome\0--user-data-dir={}\0about:blank\0",
+            reused.display()
+        );
+        let title = format!(
+            "/opt/google/chrome/chrome --user-data-dir={} about:blank\0",
+            reused.display()
+        );
+        // Titles already placed such a browser by its open files; only the argv form was missed.
+        for cmdline in [argv.clone(), title] {
+            let moved = browser(
+                "PUBLIC-moved",
+                &cmdline,
+                Some(profile.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &moved).unwrap(),
+                vec![90],
+                "Files held under the launched path make the browser its owner: {cmdline:?}"
+            );
+            let unmoved = browser(
+                "PUBLIC-unmoved",
+                &cmdline,
+                Some(reused.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &unmoved).unwrap(),
+                Vec::<u32>::new(),
+                "{cmdline:?}"
+            );
+            for root in ["PUBLIC-moved", "PUBLIC-unmoved"] {
+                fs::remove_dir_all(home.path().join(root)).unwrap();
+            }
+        }
+        // Descriptors that cannot be read whilst the process is present establish nothing.
+        let unreadable = browser("PUBLIC-unreadable", &argv, None);
+        fs::remove_dir(unreadable.join("90/fd")).unwrap();
+        assert!(profile_processes_at(&profile, &unreadable).is_err());
+        // A process gone before its descriptors are read holds none.
+        assert_eq!(open_paths(&unreadable.join("91")).unwrap(), None);
     }
     #[cfg(target_os = "linux")]
     #[test]
