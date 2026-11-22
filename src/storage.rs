@@ -4,7 +4,6 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
@@ -586,10 +585,7 @@ impl RecoveryMutex {
         let identity = canonical.to_string_lossy().into_owned();
         #[cfg(windows)]
         let identity = normalise_windows_path_identity(&identity);
-        let digest: String = Sha256::digest(identity.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let digest: String = crate::artifacts::sha256(identity.as_bytes());
         #[cfg(unix)]
         {
             use std::os::unix::{fs::OpenOptionsExt, io::AsRawFd};

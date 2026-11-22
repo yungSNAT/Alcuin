@@ -416,10 +416,7 @@ impl LiveProgress {
             );
             return Ok(None);
         }
-        let hash: String = Sha1::digest(answer(tab).as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let hash: String = crate::artifacts::hex(&Sha1::digest(answer(tab).as_bytes()));
         let changed = self.hash.as_ref() != Some(&hash);
         if changed {
             self.hash = Some(hash);
