@@ -2290,7 +2290,19 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
                 use std::os::unix::ffi::OsStrExt;
                 let path = Path::new(std::ffi::OsStr::from_bytes(value));
                 let owns = match fs::canonicalize(path) {
-                    Ok(reading) => reading == profile,
+                    Ok(reading) if reading == profile => true,
+                    // A profile moved into the launched path after its old name was reused: the
+                    // kernel reports the moved files under their new path.
+                    Ok(_) => match open_paths(&entry.path()) {
+                        Ok(open) => open.iter().any(|(_, open)| open.starts_with(profile)),
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::NotFound
+                                && !entry.path().try_exists()? =>
+                        {
+                            false
+                        }
+                        Err(error) => return Err(error.into()),
+                    },
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() =>
                     {

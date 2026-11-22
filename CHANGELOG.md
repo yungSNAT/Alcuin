@@ -3,6 +3,7 @@
 ## Unreleased
 
 - On Linux, a Chrome that keeps running after its profile folder is deleted no longer stops every Alcuin launch with a bare 'No such file or directory (os error 2)'. Alcuin now places such a browser by the files it still holds open, as it already did for one whose process title hides its profile: files under the profile being launched make it that profile's owner, files under its own deleted folder rule it out, and with neither the launch still refuses, now with 'profile occupancy is unknown'.
+- On Linux, a running Chrome whose profile folder was moved to the path Alcuin is launching, after a new folder took its old name, now counts as that profile's owner, so Alcuin no longer launches a second browser on it. Alcuin checks the browser's open files whenever its `--user-data-dir` names another existing folder.
 - The `url` crate is now 2.5.9, which fixes RUSTSEC-2026-0592: in 2.5.8, `Url::origin()` on a `blob:` URL nested thousands of times deep overflowed the stack and aborted the process.
 
 ## 0.2.0 (2026-11-19)
