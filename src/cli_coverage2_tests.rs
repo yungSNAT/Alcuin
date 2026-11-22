@@ -17,6 +17,7 @@ fn temp_store() -> (tempfile::TempDir, SessionStore) {
     (dir, store)
 }
 
+#[cfg(unix)]
 fn os_args(args: &[&str]) -> Vec<OsString> {
     args.iter().map(OsString::from).collect()
 }
