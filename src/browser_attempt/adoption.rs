@@ -1023,3 +1023,6 @@ mod tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "adoption_coverage_tests.rs"]
+mod coverage_tests;

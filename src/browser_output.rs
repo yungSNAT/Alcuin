@@ -1366,3 +1366,6 @@ mod tests {
         verify_saved_file(&existing[0], &cancel).unwrap();
     }
 }
+#[cfg(test)]
+#[path = "browser_output_coverage_tests.rs"]
+mod coverage_tests;

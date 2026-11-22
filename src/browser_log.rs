@@ -926,3 +926,6 @@ mod tests {
         assert_eq!(off.line(3_600_000, &thinking), None);
     }
 }
+#[cfg(test)]
+#[path = "browser_log_coverage_tests.rs"]
+mod coverage_tests;

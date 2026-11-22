@@ -717,3 +717,6 @@ mod stale_harvest_tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_sessions_coverage_tests.rs"]
+mod coverage_tests;

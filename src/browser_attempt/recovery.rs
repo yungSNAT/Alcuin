@@ -1858,3 +1858,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "recovery_coverage_tests.rs"]
+mod coverage_tests;

@@ -859,5 +859,8 @@ fn settle_creatorless_retirement_until(
 }
 
 #[cfg(test)]
+#[path = "browser_historical_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_historical_tests.rs"]
 mod tests;
