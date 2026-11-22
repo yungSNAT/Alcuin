@@ -14,7 +14,9 @@ fn main() {
     let prelude = prelude.trim().replace("\r\n", "\n");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("browser-scripts");
     // A script that loses its marker must fail to build, not keep an earlier composed copy.
-    let _ = fs::remove_dir_all(&out);
+    if let Err(error) = fs::remove_dir_all(&out) {
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+    }
     fs::create_dir_all(&out).unwrap();
     for entry in fs::read_dir("browser-scripts").unwrap() {
         let path = entry.unwrap().path();
