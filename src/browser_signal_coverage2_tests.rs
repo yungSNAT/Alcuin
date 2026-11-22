@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use super::*;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
