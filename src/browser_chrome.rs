@@ -4659,6 +4659,56 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
+    fn browsers_outliving_a_removed_profile_are_placed_by_their_open_files() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("PUBLIC-profile");
+        fs::create_dir(&profile).unwrap();
+        let profile = fs::canonicalize(profile).unwrap();
+        // Chromium keeps running after its profile is removed and recreates it later.
+        let removed = profile.with_file_name("PUBLIC-removed");
+        // One browser per proc root: argv as launched or as a rewritten title, and one open file.
+        let browser = |root: &str, cmdline: String, open: Option<PathBuf>| {
+            let process = home.path().join(root).join("80");
+            fs::create_dir_all(process.join("fd")).unwrap();
+            symlink(home.path().join("chrome"), process.join("exe")).unwrap();
+            fs::write(process.join("cmdline"), cmdline).unwrap();
+            if let Some(open) = open {
+                symlink(open, process.join("fd/3")).unwrap();
+            }
+            home.path().join(root)
+        };
+        let argv = format!("chrome\0--user-data-dir={}\0about:blank\0", removed.display());
+        let title = format!(
+            "/opt/google/chrome/chrome --user-data-dir={} about:blank\0",
+            removed.display()
+        );
+        let deleted = PathBuf::from(format!("{}/Default/History (deleted)", removed.display()));
+        for cmdline in [argv, title] {
+            let elsewhere = browser("PUBLIC-elsewhere", cmdline.clone(), Some(deleted.clone()));
+            assert_eq!(
+                profile_processes_at(&profile, &elsewhere).unwrap(),
+                Vec::<u32>::new(),
+                "{cmdline:?}"
+            );
+            let unseen = browser("PUBLIC-unseen", cmdline.clone(), None);
+            assert!(
+                profile_processes_at(&profile, &unseen).is_err(),
+                "Without open files a removed profile cannot establish absence: {cmdline:?}"
+            );
+            let ours = browser("PUBLIC-ours", cmdline.clone(), Some(profile.join("Default/History")));
+            assert_eq!(
+                profile_processes_at(&profile, &ours).unwrap(),
+                vec![80],
+                "{cmdline:?}"
+            );
+            for root in ["PUBLIC-elsewhere", "PUBLIC-unseen", "PUBLIC-ours"] {
+                fs::remove_dir_all(home.path().join(root)).unwrap();
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
     #[ignore = "Uses only disposable synthetic profiles and installed Linux Chromium"]
     fn real_chromium_on_prefixed_profiles_owns_only_its_own() {
         let home = tempfile::Builder::new()
