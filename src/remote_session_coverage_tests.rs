@@ -10,14 +10,14 @@ const RUN_ID: &str = "12345678-1234-1234-1234-123456789abc";
 const TOKEN: &str = "PUBLIC-loopback-token";
 const DEADLINE: Duration = Duration::from_secs(4);
 
-fn offline_connection() -> Connection {
+pub(super) fn offline_connection() -> Connection {
     Connection {
         host: "127.0.0.1:1".into(),
         token: None,
     }
 }
 
-fn browser_request(cwd: &Path) -> ResolvedRequest {
+pub(super) fn browser_request(cwd: &Path) -> ResolvedRequest {
     let mut request = crate::execution::resolve(
         &json!({"prompt":"PUBLIC-receiver-prompt","engine":"browser","model":"gpt-6-pro"}),
         &json!({}),
@@ -29,7 +29,7 @@ fn browser_request(cwd: &Path) -> ResolvedRequest {
     request
 }
 
-fn start_session(
+pub(super) fn start_session(
     store: &SessionStore,
     cwd: &Path,
     request: &ResolvedRequest,
@@ -159,7 +159,7 @@ fn install_fallback(
     staged
 }
 
-fn wire_file(name: &str, bytes: &[u8]) -> Value {
+pub(super) fn wire_file(name: &str, bytes: &[u8]) -> Value {
     json!({
         "fileName": name,
         "displayPath": format!("PUBLIC-inputs/{name}"),

@@ -1,3 +1,4 @@
+use super::coverage_tests::{browser_request, offline_connection, start_session, wire_file};
 use super::*;
 use crate::browser_prompt::{BundleFormat, BundleScope, PendingBundle};
 use std::fs;
@@ -5,38 +6,6 @@ use std::fs;
 const PNG: &[u8] = &[
     0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x01,
 ];
-
-fn offline_connection() -> Connection {
-    Connection {
-        host: "127.0.0.1:1".into(),
-        token: None,
-    }
-}
-
-fn browser_request(cwd: &Path) -> ResolvedRequest {
-    let mut request = crate::execution::resolve(
-        &json!({"prompt":"PUBLIC-receiver-prompt","engine":"browser","model":"gpt-6-pro"}),
-        &json!({}),
-        &Environment::new(),
-        cwd,
-    )
-    .unwrap();
-    request.options["browserConfig"] = request.browser.clone();
-    request
-}
-
-fn start_session(
-    store: &SessionStore,
-    cwd: &Path,
-    request: &ResolvedRequest,
-    connection: &Connection,
-) -> (String, ProcessIdentity) {
-    let metadata = prepare(store, request, cwd, connection).unwrap();
-    let id = metadata["id"].as_str().unwrap().to_owned();
-    let identity = ProcessIdentity::current().unwrap();
-    crate::execution::start_owner(store, &id, &identity, false).unwrap();
-    (id, identity)
-}
 
 fn install_fallback(
     store: &SessionStore,
@@ -59,14 +28,6 @@ fn install_fallback(
     )
     .unwrap();
     staged
-}
-
-fn wire_file(name: &str, bytes: &[u8]) -> Value {
-    json!({
-        "fileName": name,
-        "displayPath": format!("PUBLIC-inputs/{name}"),
-        "contentBase64": STANDARD.encode(bytes),
-    })
 }
 
 fn persisted_text(root: &Path) -> String {
