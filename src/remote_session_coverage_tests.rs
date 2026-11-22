@@ -167,6 +167,7 @@ fn wire_file(name: &str, bytes: &[u8]) -> Value {
     })
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn receiver_rejects_an_invalid_run_hint_and_retains_answer_output_with_no_downloads() {
     let home = tempfile::tempdir().unwrap();

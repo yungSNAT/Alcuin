@@ -106,6 +106,7 @@ fn open_respects_native_access_to_a_searchable_parent() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn stream_rejects_a_replaced_parent_before_sending_bytes() {
     let (_home, store, record, path) = fixture(b"PUBLIC retained file");

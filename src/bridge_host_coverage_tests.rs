@@ -97,6 +97,7 @@ fn ssh_args_build_reverse_forward_with_optional_identity_and_extra_args() {
     assert_eq!(full, expected);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn reverse_tunnel_stops_before_spawning_when_cancelled_and_reports_spawn_failure() {
     let home = tempfile::tempdir().unwrap();

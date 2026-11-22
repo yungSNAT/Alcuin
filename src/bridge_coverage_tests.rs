@@ -122,6 +122,7 @@ fn resolve_prefers_trimmed_environment_when_config_is_blank() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn claude_snippet_includes_remote_values_and_default_paths() {
     let env = environment(&[("HOME", "PUBLIC-home")]);
@@ -414,6 +415,7 @@ async fn doctor_lists_project_configs_defaults_and_missing_remote_token() {
     drop(listener);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn doctor_without_remote_reports_local_browser_detection() {
     let dir = tempfile::tempdir().unwrap();

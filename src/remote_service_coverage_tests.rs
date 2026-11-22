@@ -46,6 +46,7 @@ fn read_token_file_accepts_one_trailing_line_ending_and_rejects_bad_files() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn configured_ipv6_hosts_are_bracketed_before_parsing() {
     for (host, expected) in [
@@ -67,6 +68,7 @@ fn configured_ipv6_hosts_are_bracketed_before_parsing() {
     assert_eq!(browser["manualLogin"], false);
 }
 
+#[cfg(unix)]
 #[test]
 fn configured_approval_wait_accepts_numbers_strings_and_blanks() {
     for (configured, expected) in [
