@@ -4953,19 +4953,21 @@ async fn wait_original_answer(
         authority,
         reservation,
     )?;
-    let bounded = recovery.limits(limits);
     let initial = recovery
-        .answer_within(wait_answer(
-            store,
-            id,
-            reservation,
-            receipt,
-            selection,
-            &bounded,
-            false,
-            Some(witness),
-            cancel,
-        ))
+        .answer_within(limits, |bounded| async move {
+            wait_answer(
+                store,
+                id,
+                reservation,
+                receipt,
+                selection,
+                &bounded,
+                false,
+                Some(witness),
+                cancel,
+            )
+            .await
+        })
         .await;
     let observed = recovery
         .observe(initial, &context, limits, cancel, |bounded| async move {
