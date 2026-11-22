@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The `url` crate is now 2.5.9, which fixes RUSTSEC-2026-0592: in 2.5.8, `Url::origin()` on a `blob:` URL nested thousands of times deep overflowed the stack and aborted the process.
+
 ## 0.2.0 (2026-11-19)
 
 The first release with archives for macOS on Apple silicon and Linux on aarch64, and the first under Apache-2.0 for Ryan Duguid's work.
