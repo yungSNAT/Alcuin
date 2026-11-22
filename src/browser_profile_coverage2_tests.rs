@@ -36,7 +36,12 @@ fn abandoned_delivery_releases_unused_admission_but_preserves_target_authority()
     drop(runtime.spawn_blocking(move || send.send(()).unwrap()));
     receive.recv_timeout(Duration::from_secs(2)).unwrap();
 
-    failed_releases().retain(|(path, _)| path != registry.path());
+    assert!(
+        !failed_releases()
+            .iter()
+            .any(|(path, _)| path == registry.path()),
+        "a dropped delivery's release failed"
+    );
     assert_eq!(
         registry.records().unwrap()["leases"],
         json!([before["leases"][1]])
