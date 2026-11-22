@@ -1965,8 +1965,8 @@ mod tests {
     }
 }
 #[cfg(test)]
-#[path = "remote_host_coverage_tests.rs"]
-mod coverage_tests;
-#[cfg(test)]
 #[path = "remote_host_coverage2_tests.rs"]
 mod coverage2_tests;
+#[cfg(test)]
+#[path = "remote_host_coverage_tests.rs"]
+mod coverage_tests;

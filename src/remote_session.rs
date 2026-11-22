@@ -1039,8 +1039,8 @@ mod tests {
     }
 }
 #[cfg(test)]
-#[path = "remote_session_coverage_tests.rs"]
-mod coverage_tests;
-#[cfg(test)]
 #[path = "remote_session_coverage2_tests.rs"]
 mod coverage2_tests;
+#[cfg(test)]
+#[path = "remote_session_coverage_tests.rs"]
+mod coverage_tests;
