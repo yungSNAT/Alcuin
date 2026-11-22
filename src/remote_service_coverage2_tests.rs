@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn cookie_bootstrap_accepts_a_session_from_the_temporary_default_profile() {
     let home = tempfile::tempdir().unwrap();
