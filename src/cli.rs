@@ -3503,3 +3503,6 @@ mod heartbeat_option_tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "cli_coverage_tests.rs"]
+mod coverage_tests;

@@ -633,3 +633,6 @@ mod tests {
         assert!(ResponseAccumulator::default().finish().is_err());
     }
 }
+#[cfg(test)]
+#[path = "response_stream_coverage_tests.rs"]
+mod coverage_tests;

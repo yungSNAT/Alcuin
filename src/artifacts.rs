@@ -824,3 +824,6 @@ mod tests {
         assert_eq!(fs::read(destination).unwrap(), b"PUBLIC");
     }
 }
+#[cfg(test)]
+#[path = "artifacts_coverage_tests.rs"]
+mod coverage_tests;

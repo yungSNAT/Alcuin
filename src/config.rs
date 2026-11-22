@@ -607,3 +607,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "config_coverage_tests.rs"]
+mod coverage_tests;

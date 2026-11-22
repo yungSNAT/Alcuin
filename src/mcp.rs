@@ -1204,3 +1204,6 @@ mod initialize_tests {
         assert_eq!(info["serverInfo"]["name"], "alcuin-mcp");
     }
 }
+#[cfg(test)]
+#[path = "mcp_coverage_tests.rs"]
+mod coverage_tests;

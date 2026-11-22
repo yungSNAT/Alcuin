@@ -347,3 +347,6 @@ pub fn browser_parent(reference: &str, parent: &Value) -> Result<Option<Value>> 
     config["automaticModelPriority"] = json!(false);
     Ok(Some(config))
 }
+#[cfg(test)]
+#[path = "followup_coverage_tests.rs"]
+mod coverage_tests;

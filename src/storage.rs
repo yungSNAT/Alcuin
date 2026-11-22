@@ -938,3 +938,6 @@ mod lock_race_tests {
         assert!(!path.exists());
     }
 }
+#[cfg(test)]
+#[path = "storage_coverage_tests.rs"]
+mod coverage_tests;

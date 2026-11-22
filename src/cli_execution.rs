@@ -865,3 +865,6 @@ mod lifecycle_tests {
         assert!(lifecycle_block(&json!({"id":"public-run","model":"gpt-6-astra"})).is_empty());
     }
 }
+#[cfg(test)]
+#[path = "cli_execution_coverage_tests.rs"]
+mod coverage_tests;

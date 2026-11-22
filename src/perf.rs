@@ -827,3 +827,6 @@ mod trace_tests {
         assert_eq!((args, value), (strings(&["--", "--perf-trace=x"]), None));
     }
 }
+#[cfg(test)]
+#[path = "perf_coverage_tests.rs"]
+mod coverage_tests;
