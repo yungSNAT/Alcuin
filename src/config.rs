@@ -151,6 +151,7 @@ pub fn sanitise_project(config: &Value) -> Value {
         for key in [
             "attachRunning",
             "timeoutMs",
+            "slotWaitMs",
             "inputTimeoutMs",
             "approvalWaitMs",
             "attachmentTimeoutMs",

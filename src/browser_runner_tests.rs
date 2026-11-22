@@ -10110,18 +10110,143 @@ async fn quiet_runs_keep_the_reference_follow_up_and_image_wait_lines() {
 }
 
 #[test]
-fn admission_waits_the_run_timeout_whilst_profile_locks_keep_their_own_budget() {
-    let limits =
-        RunnerLimits::from_config(&json!({"timeoutMs":1_200_000,"profileLockTimeoutMs":300_000}));
-    assert_eq!(limits.admission, Duration::from_secs(1_200));
+fn admission_waits_the_slot_wait_whilst_the_answer_and_profile_locks_keep_their_own_budgets() {
+    let limits = RunnerLimits::from_config(
+        &json!({"timeoutMs":1_200_000,"slotWaitMs":5_400_000,"profileLockTimeoutMs":300_000}),
+    );
+    assert_eq!(limits.admission, Duration::from_secs(5_400));
+    assert_eq!(limits.answer, Duration::from_secs(1_200));
     assert_eq!(limits.profile_lock, Duration::from_secs(300));
     let defaults = RunnerLimits::from_config(&json!({}));
-    assert_eq!(defaults.admission, Duration::from_secs(1_200));
+    assert_eq!(defaults.admission, Duration::from_secs(7_200));
+    assert_eq!(defaults.answer, Duration::from_secs(1_200));
     assert_eq!(defaults.profile_lock, Duration::from_secs(300));
-    assert_eq!(
-        RunnerLimits::from_config(&json!({"researchMode":"deep"})).admission,
-        Duration::from_secs(2_400)
+    let deep = RunnerLimits::from_config(&json!({"researchMode":"deep"}));
+    assert_eq!(deep.admission, Duration::from_secs(7_200));
+    assert_eq!(deep.answer, Duration::from_secs(2_400));
+}
+#[test]
+fn slot_wait_is_one_budget_from_the_mcp_parameter_and_the_config_key() {
+    let home = tempfile::tempdir().unwrap();
+    let env = Environment::new();
+    let base = json!({"engine":"browser","prompt":"PUBLIC slot wait"});
+    let mut mcp = base.clone();
+    mcp["browserSlotWaitMs"] = json!(5_400_000);
+    let resolved = [
+        crate::execution::resolve_mcp(&mcp, &json!({}), &env, home.path()).unwrap(),
+        crate::execution::resolve(
+            &base,
+            &json!({"browser":{"slotWaitMs":5_400_000}}),
+            &env,
+            home.path(),
+        )
+        .unwrap(),
+        // The per-call parameter outranks the config key.
+        crate::execution::resolve_mcp(
+            &mcp,
+            &json!({"browser":{"slotWaitMs":60_000}}),
+            &env,
+            home.path(),
+        )
+        .unwrap(),
+    ];
+    for request in &resolved {
+        assert_eq!(request.browser["slotWaitMs"], 5_400_000);
+        let limits = RunnerLimits::from_config(&request.browser);
+        assert_eq!(limits.admission, Duration::from_secs(5_400));
+        assert_eq!(limits.answer, Duration::from_secs(1_200));
+    }
+}
+/// Holds this fixture's only browser slot for another session.
+async fn hold_the_only_slot(f: &Fixture) -> crate::browser_profile::TabLease {
+    f.store
+        .update(&f.id, |current| {
+            let config = merge_object(
+                &current["browser"]["config"],
+                &json!({"maxConcurrentTabs":1}),
+            );
+            Ok(Some(
+                json!({"browser":merge_object(&current["browser"],&json!({"config":config}))}),
+            ))
+        })
+        .unwrap();
+    f.profile
+        .acquire_with_limit(
+            "PUBLIC-holder",
+            1,
+            Duration::from_secs(5),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+}
+#[tokio::test]
+async fn a_run_queued_past_its_answer_timeout_is_admitted_with_the_whole_answer_budget() {
+    let f = fixture(Fault::None, false).await;
+    let configured = RunnerLimits::from_config(&json!({"timeoutMs":1_000,"slotWaitMs":30_000}));
+    let queued = RunnerLimits {
+        admission: configured.admission,
+        answer: configured.answer,
+        ..limits()
+    };
+    let holder = hold_the_only_slot(&f).await;
+    let held_for = queued.answer + Duration::from_millis(500);
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(held_for).await;
+        holder.release().unwrap();
+    });
+    let started = std::time::Instant::now();
+    let result = execute(
+        &f.store,
+        &f.id,
+        f.profile.clone(),
+        f.cdp.clone(),
+        f.endpoint.clone(),
+        &f.identity,
+        &queued,
+        &f.cancel,
+    )
+    .await;
+    release.await.unwrap();
+    assert!(started.elapsed() >= held_for, "the run must have queued");
+    assert_eq!(result.unwrap()["status"], "completed");
+    assert_eq!(f.sends.load(Ordering::SeqCst), 1);
+    stop(f).await;
+}
+#[tokio::test]
+async fn a_run_queued_past_its_slot_wait_fails_with_nothing_sent() {
+    let f = fixture(Fault::None, false).await;
+    let configured = RunnerLimits::from_config(&json!({"timeoutMs":30_000,"slotWaitMs":300}));
+    let bounded = RunnerLimits {
+        admission: configured.admission,
+        answer: configured.answer,
+        ..limits()
+    };
+    let holder = hold_the_only_slot(&f).await;
+    let error = execute(
+        &f.store,
+        &f.id,
+        f.profile.clone(),
+        f.cdp.clone(),
+        f.endpoint.clone(),
+        &f.identity,
+        &bounded,
+        &f.cancel,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.starts_with("Timed out waiting for ChatGPT browser slot after ")
+            && error.ends_with("; nothing was sent."),
+        "{error}"
     );
+    assert_eq!(f.sends.load(Ordering::SeqCst), 0);
+    let meta = f.store.require(&f.id).unwrap();
+    assert_eq!(meta["errorPhase"], "browser-admission");
+    assert!(meta.get("dispatch").is_none(), "{meta}");
+    holder.release().unwrap();
+    stop(f).await;
 }
 fn journal_disposition(f: &Fixture) -> Value {
     let meta = f.store.require(&f.id).unwrap();
