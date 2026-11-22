@@ -1448,3 +1448,6 @@ mod tests {
         assert_eq!(config["keepBrowser"], false);
     }
 }
+#[cfg(test)]
+#[path = "project_sources_coverage_tests.rs"]
+mod coverage_tests;

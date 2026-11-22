@@ -1056,3 +1056,6 @@ mod tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "session_attach_coverage_tests.rs"]
+mod coverage_tests;

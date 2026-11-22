@@ -281,5 +281,8 @@ async fn open_on_connection(
 }
 
 #[cfg(test)]
+#[path = "browser_recovery_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_recovery_tests.rs"]
 mod tests;
