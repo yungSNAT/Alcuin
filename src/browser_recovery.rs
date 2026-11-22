@@ -286,3 +286,6 @@ mod coverage_tests;
 #[cfg(test)]
 #[path = "browser_recovery_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "browser_recovery_coverage2_tests.rs"]
+mod coverage2_tests;

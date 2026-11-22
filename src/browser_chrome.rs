@@ -5110,3 +5110,6 @@ mod tests {
         assert!(windows_arguments(r#"chrome.exe --user-data-dir="unclosed"#).is_err());
     }
 }
+#[cfg(test)]
+#[path = "browser_chrome_coverage2_tests.rs"]
+mod coverage2_tests;
