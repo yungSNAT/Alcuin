@@ -12,11 +12,11 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-const SUBMISSION: &str = include_str!("../browser-scripts/submission.js");
-const PREPARE: &str = include_str!("../browser-scripts/inspection-prepare.js");
-const FINISH: &str = include_str!("../browser-scripts/inspection-finish.js");
-const MODEL: &str = include_str!("../browser-scripts/model.js");
-const THINKING: &str = include_str!("../browser-scripts/thinking.js");
+const SUBMISSION: &str = browser_script!("submission.js");
+const PREPARE: &str = browser_script!("inspection-prepare.js");
+const FINISH: &str = browser_script!("inspection-finish.js");
+const MODEL: &str = browser_script!("model.js");
+const THINKING: &str = browser_script!("thinking.js");
 /// Node MODEL_BUTTON_WAIT_MS: how long a missing composer pill may take to mount.
 const MODEL_BUTTON_WAIT: Duration = Duration::from_secs(20);
 /// How long one batch of renderer ownership controls (quarantine, release, picker cleanup) may
