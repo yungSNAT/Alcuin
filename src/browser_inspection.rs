@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 pub struct InspectionOptions {
     pub reference: Option<String>,
     pub recover: bool,
+    /// A harvest closes the conversation tab it reopened once the answer it read is complete.
     pub close_recovered: bool,
     /// Receives the reference progress line before a missing tab is reopened.
     pub progress: Option<fn(&str)>,
@@ -246,6 +247,12 @@ impl InspectionTarget {
     }
 }
 
+/// A conversation reopened for a harvest is closed only when the caller asked for that and the
+/// harvested `tab` holds a complete answer: an unfinished one stays open for the next read.
+fn closes_reopened(close_recovered: bool, tab: Option<&Value>) -> bool {
+    close_recovered && tab.is_some_and(|tab| tab["state"] == "completed")
+}
+
 pub async fn harvest(
     store: &SessionStore,
     id: &str,
@@ -297,7 +304,11 @@ pub async fn harvest(
             .await
         }
         .await;
-        target.finish(options.close_recovered, snapshot).await
+        let close = closes_reopened(
+            options.close_recovered,
+            snapshot.as_ref().ok().map(|snapshot| &snapshot.tab),
+        );
+        target.finish(close, snapshot).await
     };
     tokio::pin!(operation);
     tokio::select! {biased;

@@ -568,3 +568,14 @@ fn submitted_source_requires_the_identity_the_saved_hash_was_taken_from() {
     let unknown = json!({"browser":{"runtime":{"submittedPromptHash":"PUBLIC-hash","submittedPromptHashFormat":"PUBLIC-v9"}}});
     assert!(submitted_source_available(&unknown, &json!({})));
 }
+#[test]
+fn a_reopened_tab_closes_only_for_a_harvest_with_a_complete_answer() {
+    let completed = json!({"state":"completed"});
+    assert!(closes_reopened(true, Some(&completed)));
+    // A caller that did not ask, an unfinished answer and a failed harvest all keep the tab.
+    assert!(!closes_reopened(false, Some(&completed)));
+    for state in [json!("generating"), json!("PUBLIC-unknown"), Value::Null] {
+        assert!(!closes_reopened(true, Some(&json!({"state":state}))));
+    }
+    assert!(!closes_reopened(true, None));
+}

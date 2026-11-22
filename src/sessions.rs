@@ -852,6 +852,18 @@ impl SessionStore {
         }
         Ok(mentions)
     }
+    /// The sessions the index names for `target`, without reading the store: every session
+    /// whose metadata named it through this store's writers. A legacy session that was never
+    /// indexed is missing; `list_naming_target` finds those.
+    pub(crate) fn indexed_for_target(&self, target: &str) -> Result<Vec<String>> {
+        if !indexable(target) {
+            return Ok(vec![]);
+        }
+        Ok(names(&self.target_index().join("targets").join(target))?
+            .into_iter()
+            .filter(|id| valid_id(id))
+            .collect())
+    }
     /// Every `list(true)` session whose metadata can name `target` as its
     /// `browser.runtime.chromeTargetId`, unsorted. A covered session is read only when the
     /// index names it; an uncovered one (new, legacy or unreadable) when its text mentions the

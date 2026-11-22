@@ -4190,11 +4190,13 @@ async fn a_missing_or_timed_out_copy_button_saves_the_page_text_and_says_so() {
     }
 }
 #[tokio::test]
-async fn parent_cleanup_retries_once_without_replaying_or_closing_changed_targets() {
+async fn parent_cleanup_retries_without_replaying_or_closing_changed_targets() {
     crate::browser_target::TEST_CLOSE_WAIT.set(Some(REFUSED_CLOSE_WAIT));
+    // A refused close is retried up to 3 times; retries that exhaust are covered by
+    // selected_child_cleanup_retries_three_times_after_its_first_failure.
     for (fault, expected_closes, settled) in [
         (Fault::CloseRefusedOnce, 2, true),
-        (Fault::CloseRefusedTwice, 2, false),
+        (Fault::CloseRefusedTwice, 3, true),
         (Fault::CloseRefusedForeignMarker, 1, false),
         (Fault::CloseRefusedChangedSource, 0, false),
         (Fault::CloseRefusedActiveThinking, 0, false),
@@ -4427,6 +4429,57 @@ async fn parent_adoption_commits_required_parent_outputs_to_child_retirement() {
         "retired"
     );
     stop(f).await;
+}
+#[tokio::test]
+async fn selected_child_cleanup_retries_three_times_after_its_first_failure() {
+    // The first call and 2 retries fail: the third retry still closes the tab. One more
+    // failure exhausts the retries and reports the first failure.
+    for failures in [3, 4] {
+        let mut f = fixture_attempt(
+            Fault::File,
+            false,
+            true,
+            json!({"writeOutputPath":"PUBLIC-adopted.md"}),
+        )
+        .await;
+        let child = run_attempt_capture(&f).await.unwrap();
+        let parent_id = child["browser"]["attempt"]["parentId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        f.coordinator
+            .as_mut()
+            .unwrap()
+            .adopt(&f.id, &f.cancel)
+            .unwrap();
+        f.coordinator.as_ref().unwrap().complete(&f.cancel).unwrap();
+        let calls = &AtomicUsize::new(0);
+        let result = crate::browser_attempt::retry_retirement(
+            &f.store,
+            &parent_id,
+            &f.cancel,
+            || async move {
+                let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                anyhow::ensure!(call > failures, "PUBLIC cleanup failure {call}");
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 4, "{failures}");
+        if failures == 3 {
+            result.unwrap();
+        } else {
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(
+                error.contains(
+                    "Selected child cleanup retry failed after: PUBLIC cleanup failure 1"
+                ),
+                "{error}"
+            );
+            assert!(error.contains("PUBLIC cleanup failure 4"), "{error}");
+        }
+        stop(f).await;
+    }
 }
 #[tokio::test]
 async fn parent_adoption_refuses_a_child_already_completed_by_the_direct_boundary() {
@@ -11077,4 +11130,60 @@ async fn legacy_inline_fallback_keeps_declared_all_source_scope_and_deletes_orig
         assert!(!raw_directory.exists(), "{retain_raw_source}");
         stop(f).await;
     }
+}
+#[tokio::test]
+async fn reconciliation_closes_a_finished_run_tab_the_journal_scan_would_not_reach() {
+    crate::browser_target::TEST_CLOSE_WAIT.set(Some(REFUSED_CLOSE_WAIT));
+    let f = fixture(Fault::CloseRefusedTwice, false).await;
+    let completed = run(&f).await.unwrap();
+    assert_eq!(completed["status"], "completed");
+    let runtime = &completed["browser"]["runtime"];
+    assert_eq!(runtime["targetDispositionPending"], true);
+    let creator = &runtime["ownedRecoveryTarget"]["creator"];
+    let journal = TargetJournal::open(&f.store).unwrap();
+    let record = journal.read(&creator["allocationId"]).unwrap();
+    assert_ne!(record["disposition"]["decision"], "retired");
+    // 5 retired records of other runs, and the scan cursor resting on this run's record: the
+    // scan checks 4 records a call from after the cursor, so it does not reach this one.
+    let directory = f.store.home().join("target-dispositions");
+    for _ in 0..5 {
+        let id = Uuid::new_v4().to_string();
+        let mut row = record.clone();
+        let owner = row["creator"].as_object_mut().unwrap();
+        owner.remove("lease");
+        owner.remove("sessionId");
+        row["creator"]["allocationId"] = json!(id);
+        row["creator"]["controllerPid"] = json!(u32::MAX);
+        row["nativeOwnerIdentity"]["pid"] = json!(u32::MAX);
+        row["disposition"] = json!({"version":1,"allocationId":id,"decision":"retired",
+            "absence":"confirmed-absent","reason":"PUBLIC earlier retirement",
+            "target":row["creator"]["target"]});
+        atomic_json(&directory.join(format!("{id}.json")), &row).unwrap();
+    }
+    let name = format!("{}.json", creator["allocationId"].as_str().unwrap());
+    atomic_json(
+        &directory.join("reconcile-cursor.json"),
+        &json!({"after":name}),
+    )
+    .unwrap();
+    crate::browser_retirement::reconcile(&f.store, &f.cdp, &f.endpoint)
+        .await
+        .unwrap();
+    let after = journal.read(&creator["allocationId"]).unwrap();
+    assert_eq!(after["disposition"]["decision"], "retired");
+    assert_eq!(after["disposition"]["absence"], "confirmed-absent");
+    assert_eq!(f.closes.load(Ordering::SeqCst), 3);
+    let settled = f.store.require(&f.id).unwrap();
+    assert_eq!(
+        settled["browser"]["runtime"]["targetDispositionPending"],
+        false
+    );
+    assert!(
+        f.profile.records().unwrap()["leases"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    stop(f).await;
+    crate::browser_target::TEST_CLOSE_WAIT.set(None);
 }

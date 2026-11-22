@@ -614,44 +614,85 @@ impl TargetJournal {
                 break;
             }
             checked += 1;
-            let record = match self.read(&json!(&name[..36])) {
-                Ok(record) => record,
-                Err(_) => continue,
-            };
-            if !(record["finalisedAt"]
-                .as_str()
-                .is_some_and(|time| !time.is_empty())
-                && record["commit"].is_object())
-                && record["disposition"]["reason"] != "settled-pre-dispatch-close-pending"
-                && record["disposition"]["decision"] != "retired"
-            {
-                continue;
-            }
-            let creator = record["creator"].clone();
-            let own_completed = self.is_current_completed_owner(&record);
-            if creator["controllerStartedAtMs"].is_null() {
-                continue;
-            }
-            if !creator_dead(&record) && !own_completed {
-                continue;
-            }
-            let result = self
-                .retire_record_until(&creator, deadline, |record| retire(record, deadline))
-                .await;
-            if let Ok(disposed) = result {
-                if let Err(error) = release(&creator, &disposed, deadline) {
-                    eprintln!(
-                        "Owned tab is closed but admission cleanup remains pending: {error:#}"
-                    );
-                }
-                results.push(disposed);
-            }
+            results.extend(
+                self.reconcile_record(&name[..36], deadline, retire, release)
+                    .await,
+            );
         }
         if Instant::now() < deadline {
             self.directory.require_matches(&self.path)?;
             let _ = atomic_json_until(&cursor_path, &json!({"after":last}), deadline);
         }
         Ok(results)
+    }
+    /// Reconciles the named allocations, in order, until `deadline`. The cursor scan checks 4
+    /// records a call, so it reaches a given record once in a quarter of the journal's size in
+    /// calls: 1,350 runs for the 5,401 records one machine held on 22 November 2026. A caller
+    /// that knows which records still matter, such as those of tabs a browser still shows,
+    /// names them here. Each gets the scan's own eligibility and authority checks.
+    pub(crate) async fn reconcile_named<F, Fut, R>(
+        &self,
+        allocations: &[String],
+        deadline: Instant,
+        mut retire: F,
+        mut release: R,
+    ) -> Vec<Value>
+    where
+        F: FnMut(Value, Instant) -> Fut,
+        Fut: Future<Output = Result<(String, String)>>,
+        R: FnMut(&Value, &Value, Instant) -> Result<()>,
+    {
+        let mut results = vec![];
+        for allocation in allocations {
+            if Instant::now() >= deadline {
+                break;
+            }
+            results.extend(
+                self.reconcile_record(allocation, deadline, &mut retire, &mut release)
+                    .await,
+            );
+        }
+        results
+    }
+    /// Retires one record that is finalised, pre-dispatch pending or already retired, when its
+    /// creator is dead or is this process's completed run, then releases its admission. `None`
+    /// for any other record and for a retirement that could not be decided.
+    async fn reconcile_record<F, Fut, R>(
+        &self,
+        allocation: &str,
+        deadline: Instant,
+        retire: &mut F,
+        release: &mut R,
+    ) -> Option<Value>
+    where
+        F: FnMut(Value, Instant) -> Fut,
+        Fut: Future<Output = Result<(String, String)>>,
+        R: FnMut(&Value, &Value, Instant) -> Result<()>,
+    {
+        let record = self.read(&json!(allocation)).ok()?;
+        if !(record["finalisedAt"]
+            .as_str()
+            .is_some_and(|time| !time.is_empty())
+            && record["commit"].is_object())
+            && record["disposition"]["reason"] != "settled-pre-dispatch-close-pending"
+            && record["disposition"]["decision"] != "retired"
+        {
+            return None;
+        }
+        let creator = record["creator"].clone();
+        if creator["controllerStartedAtMs"].is_null()
+            || !creator_dead(&record) && !self.is_current_completed_owner(&record)
+        {
+            return None;
+        }
+        let disposed = self
+            .retire_record_until(&creator, deadline, |record| retire(record, deadline))
+            .await
+            .ok()?;
+        if let Err(error) = release(&creator, &disposed, deadline) {
+            eprintln!("Owned tab is closed but admission cleanup remains pending: {error:#}");
+        }
+        Some(disposed)
     }
     /// The allocation the failed-run backstop last tried on the browser `key` identifies.
     pub(crate) fn failed_sweep_cursor(&self, key: &str) -> String {
@@ -2285,5 +2326,118 @@ mod tests {
         let before = fs::read(&path).unwrap();
         assert!(journal.read(&creator["allocationId"]).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    /// A finalised, unretired record whose creator is dead, beside 5 retired records of dead
+    /// creators. The scan cursor rests on the record and a scan never wraps within a call, so
+    /// a plain scan starts after it and does not reach it.
+    fn behind_the_cursor(home: &std::path::Path) -> (TargetJournal, Value) {
+        let (journal, creator, commit) = native(home);
+        journal.commit(&creator, &commit).unwrap();
+        journal.finalise(&commit).unwrap();
+        let unretired = journal.read(&creator["allocationId"]).unwrap();
+        journal
+            .record_disposition(&creator, "confirmed-absent", "PUBLIC earlier retirement")
+            .unwrap();
+        let template = journal.read(&creator["allocationId"]).unwrap();
+        for _ in 0..5 {
+            let mut row = template.clone();
+            let id = json!(Uuid::new_v4().to_string());
+            row["creator"]["allocationId"] = id.clone();
+            row["commit"]["allocationId"] = id.clone();
+            row["disposition"]["allocationId"] = id.clone();
+            atomic_json(&journal.file(&id).unwrap(), &row).unwrap();
+            abandoned(&journal, &row["creator"]);
+        }
+        atomic_json(&journal.file(&creator["allocationId"]).unwrap(), &unretired).unwrap();
+        let creator = abandoned(&journal, &creator);
+        let name = format!("{}.json", creator["allocationId"].as_str().unwrap());
+        atomic_json(
+            &journal.path.join("reconcile-cursor.json"),
+            &json!({"after":name}),
+        )
+        .unwrap();
+        (journal, creator)
+    }
+    #[tokio::test]
+    async fn named_reconciliation_retires_a_record_the_scan_does_not_reach() {
+        let home = tempfile::tempdir().unwrap();
+        let (journal, creator) = behind_the_cursor(home.path());
+        let id = creator["allocationId"].as_str().unwrap().to_owned();
+        journal
+            .reconcile(
+                |_, _| async { panic!("The scan cannot reach the unretired record") },
+                |_, _, _| Ok(()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            journal.read(&json!(id)).unwrap()["disposition"]["decision"],
+            "retired"
+        );
+        let (closes, releases) = (std::cell::Cell::new(0), std::cell::Cell::new(0));
+        // Unknown and malformed names are skipped without failing the rest.
+        let named = [
+            Uuid::new_v4().to_string(),
+            "../PUBLIC-other-record".into(),
+            "PUBLIC-not-an-allocation".into(),
+            String::new(),
+            id.clone(),
+        ];
+        let results = journal
+            .reconcile_named(
+                &named,
+                Instant::now() + Duration::from_secs(5),
+                |record, _| {
+                    assert_eq!(record["creator"], creator);
+                    closes.set(closes.get() + 1);
+                    async { Ok(("confirmed-absent".to_owned(), "PUBLIC closed".to_owned())) }
+                },
+                |owner, disposed, _| {
+                    assert_eq!(owner, &creator);
+                    assert_eq!(disposed["absence"], "confirmed-absent");
+                    releases.set(releases.get() + 1);
+                    Ok(())
+                },
+            )
+            .await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["decision"], "retired");
+        assert_eq!((closes.get(), releases.get()), (1, 1));
+        assert_eq!(journal.read(&json!(id)).unwrap()["disposition"], results[0]);
+    }
+    #[tokio::test]
+    async fn named_reconciliation_skips_a_live_creator_that_is_not_this_process() {
+        let home = tempfile::tempdir().unwrap();
+        let (journal, creator, commit) = native(home.path());
+        journal.commit(&creator, &commit).unwrap();
+        journal.finalise(&commit).unwrap();
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+        } else {
+            std::process::Command::new("sleep").arg("30").spawn()
+        }
+        .unwrap();
+        let foreign = ProcessIdentity::read(child.id()).unwrap().unwrap();
+        let mut record = journal.read(&creator["allocationId"]).unwrap();
+        record["nativeOwnerIdentity"] = json!(foreign);
+        record["creator"]["controllerPid"] = json!(foreign.pid);
+        record["creator"]["controllerStartedAtMs"] = json!(foreign.started_at_ms);
+        atomic_json(&journal.file(&creator["allocationId"]).unwrap(), &record).unwrap();
+        let before = journal.read(&creator["allocationId"]).unwrap();
+        let results = journal
+            .reconcile_named(
+                &[creator["allocationId"].as_str().unwrap().to_owned()],
+                Instant::now() + Duration::from_secs(5),
+                |_, _| async { panic!("A live creator's tab cannot be closed") },
+                |_, _, _| panic!("A live creator's record cannot be released"),
+            )
+            .await;
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(results.is_empty());
+        assert_eq!(journal.read(&creator["allocationId"]).unwrap(), before);
     }
 }

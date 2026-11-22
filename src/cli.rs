@@ -2639,9 +2639,10 @@ fn print_inspected_answer(
     m: &ArgMatches,
     answer: &str,
     cancel: &CancellationToken,
-) -> Result<()> {
+) -> Result<bool> {
     anyhow::ensure!(!cancel.is_cancelled(), "Browser inspection cancelled");
     let shown = crate::cli_format::terminal_text(answer, std::io::stdout().is_terminal());
+    let mut written = false;
     if let Some(destination) = text(view_scope(root, m, "write-output"), "write-output") {
         let meta = store.require(id)?;
         let cwd = Path::new(
@@ -2650,10 +2651,13 @@ fn print_inspected_answer(
                 .context("Browser output has no saved working directory")?,
         );
         match crate::browser_sessions::write_output(store, cwd, destination, answer, cancel)? {
-            Some(path) => println!("Wrote harvested assistant output to {}", path.display()),
+            Some(path) => {
+                println!("Wrote harvested assistant output to {}", path.display());
+                written = true;
+            }
             None => {
                 print!("{shown}{}", if answer.ends_with('\n') { "" } else { "\n" });
-                return Ok(());
+                return Ok(false);
             }
         }
     }
@@ -2661,7 +2665,20 @@ fn print_inspected_answer(
         anyhow::ensure!(!cancel.is_cancelled(), "Browser inspection cancelled");
         print!("{shown}{}", if answer.ends_with('\n') { "" } else { "\n" });
     }
-    Ok(())
+    Ok(written)
+}
+/// The tab a harvest closes once recovery has left the session as it was: a tab goes once
+/// its answer is saved. `saved_from_own_tab` says a `--harvest` wrote the answer to a file
+/// and read it from the session's own tab, not one named with `--browser-tab`, which is the
+/// caller's. The answer must also be complete and verified as that session's.
+fn harvested_tab_to_close<'a>(
+    saved_from_own_tab: bool,
+    tab: &'a Value,
+    integrity: &str,
+) -> Option<&'a str> {
+    tab["targetId"]
+        .as_str()
+        .filter(|_| saved_from_own_tab && tab["state"] == "completed" && integrity == "matched")
 }
 /// A settled completed session's verified saved answer. The owner retires its tab once it has
 /// captured the answer, so a live tail reads this instead of inspecting a closing target.
@@ -2693,9 +2710,9 @@ async fn inspect_session(
         let options = crate::browser_inspection::InspectionOptions {
             reference: reference.map(str::to_owned),
             recover: !flag(m, "no-recover"),
+            close_recovered: flag(m, "harvest"),
             progress: Some(|line| println!("{line}")),
             warning: Some(|line| eprintln!("{line}")),
-            ..Default::default()
         };
         if options.reference.is_none()
             && options.recover
@@ -2756,17 +2773,25 @@ async fn inspect_session(
             .as_str()
             .or_else(|| tab["lastAssistantText"].as_str())
             .unwrap_or("");
-        if !flag(m, "live") || tab["state"] == "completed" {
-            print_inspected_answer(store, id, root, m, answer, &cancel)?;
-        }
+        let written = (!flag(m, "live") || tab["state"] == "completed")
+            && print_inspected_answer(store, id, root, m, answer, &cancel)?;
         if cancel.is_cancelled() {
             bail!("Browser inspection cancelled");
         }
-        if let Some(completion) =
-            crate::browser_historical::complete_owned(store, id, &snapshot, &cancel).await?
-            && let Some(error) = completion.cleanup_error
-        {
-            eprintln!("Recovered answer saved; browser cleanup is incomplete: {error}");
+        // Recovery reads the tab, so it goes first: a session it completes retires its own
+        // tab, and one it fails on keeps the tab for another try.
+        let completion =
+            crate::browser_historical::complete_owned(store, id, &snapshot, &cancel).await?;
+        if let Some(completion) = &completion {
+            if let Some(error) = &completion.cleanup_error {
+                eprintln!("Recovered answer saved; browser cleanup is incomplete: {error}");
+            }
+        } else if let Some(target) = harvested_tab_to_close(
+            flag(m, "harvest") && written && options.reference.is_none(),
+            tab,
+            &snapshot.integrity.status,
+        ) {
+            crate::browser_retirement::close_harvested(store, id, target).await;
         }
         Ok::<_, anyhow::Error>(0)
     }
@@ -3419,7 +3444,7 @@ mod notification_flag_tests {
 }
 #[cfg(test)]
 mod heartbeat_option_tests {
-    use super::{Command, cancelled_inspection, heartbeat_seconds, parser};
+    use super::{Command, cancelled_inspection, harvested_tab_to_close, heartbeat_seconds, parser};
     #[test]
     fn heartbeat_option_follows_reference_parse_heartbeat_option() {
         for (value, seconds) in [
@@ -3441,6 +3466,37 @@ mod heartbeat_option_tests {
                 "{value:?}"
             );
         }
+    }
+    #[test]
+    fn a_harvest_closes_only_its_own_complete_verified_tab() {
+        let tab = |state: &str| serde_json::json!({"targetId":"PUBLIC-TARGET","state":state});
+        assert_eq!(
+            harvested_tab_to_close(true, &tab("completed"), "matched"),
+            Some("PUBLIC-TARGET")
+        );
+        // Not saved to a file, or read from a tab the caller named.
+        assert_eq!(
+            harvested_tab_to_close(false, &tab("completed"), "matched"),
+            None
+        );
+        for state in ["running", "stalled", "detached"] {
+            assert_eq!(
+                harvested_tab_to_close(true, &tab(state), "matched"),
+                None,
+                "{state}"
+            );
+        }
+        for integrity in ["unverified", "mismatch", ""] {
+            assert_eq!(
+                harvested_tab_to_close(true, &tab("completed"), integrity),
+                None,
+                "{integrity}"
+            );
+        }
+        assert_eq!(
+            harvested_tab_to_close(true, &serde_json::json!({"state":"completed"}), "matched"),
+            None
+        );
     }
     #[test]
     fn cancelled_inspections_report_the_reference_notice_and_keep_other_failures() {
