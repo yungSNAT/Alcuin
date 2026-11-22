@@ -4,7 +4,7 @@ From download to a checked answer. Steps 3 and 4 need a signed-in ChatGPT accoun
 
 ## 1. Install
 
-Download and verify the latest release with the Linux or PowerShell block in the README's [Install](../README.md#install) section. Each block checks the archive's SHA-256 checksum and, with the [GitHub CLI](https://cli.github.com/), its build provenance attestation, then prints the version:
+Download and verify the latest release with the Linux, macOS or Windows steps in [Install](install.md). Each checks the archive's SHA-256 checksum and, with the [GitHub CLI](https://cli.github.com/), its build provenance attestation, then prints the version:
 
 ```sh
 alcuin --version

@@ -39,33 +39,7 @@ Windows, in PowerShell, into `%LOCALAPPDATA%\Programs\Alcuin`, which it adds to 
 irm https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.ps1 | iex
 ```
 
-[Install](docs/install.md) covers the scripts' options. To check each step yourself, and the build provenance too, download both binaries from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest), built for Linux (x86_64, glibc 2.39 or later, such as Ubuntu 24.04) and Windows (x86_64); [Install](docs/install.md#macos) covers macOS. Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs. Each block checks the archive's SHA-256 checksum, unpacks it and, with the [GitHub CLI](https://cli.github.com/), verifies its build provenance attestation.
-
-Linux (put `~/.local/bin` on your `PATH`):
-
-```sh
-t=alcuin-x86_64-unknown-linux-gnu
-curl -fsSLO "https://github.com/yungSNAT/Alcuin/releases/latest/download/$t.tar.gz"
-curl -fsSLO "https://github.com/yungSNAT/Alcuin/releases/latest/download/$t.tar.gz.sha256"
-sha256sum -c "$t.tar.gz.sha256"
-gh attestation verify "$t.tar.gz" --repo yungSNAT/Alcuin
-tar -xzf "$t.tar.gz"
-mkdir -p ~/.local/bin && cp "$t/alcuin" "$t/alcuin-mcp" ~/.local/bin/
-alcuin --version
-```
-
-Windows, in PowerShell (then add `%LOCALAPPDATA%\Programs\Alcuin\alcuin-x86_64-pc-windows-msvc` to your `PATH`):
-
-```powershell
-$t = 'alcuin-x86_64-pc-windows-msvc'
-$base = 'https://github.com/yungSNAT/Alcuin/releases/latest/download'
-Invoke-WebRequest "$base/$t.zip" -OutFile "$t.zip"
-Invoke-WebRequest "$base/$t.zip.sha256" -OutFile "$t.zip.sha256"
-if ((Get-FileHash "$t.zip" -Algorithm SHA256).Hash -ne (Get-Content "$t.zip.sha256").Split(' ')[0]) { throw "Checksum mismatch: $t.zip" }
-gh attestation verify "$t.zip" --repo yungSNAT/Alcuin
-Expand-Archive "$t.zip" -DestinationPath "$env:LOCALAPPDATA\Programs\Alcuin" -Force
-& "$env:LOCALAPPDATA\Programs\Alcuin\$t\alcuin.exe" --version
-```
+[Install](docs/install.md) covers the scripts' options and, to check each step yourself, including the build provenance, the manual download for each platform from the [latest release](https://github.com/yungSNAT/Alcuin/releases/latest). Keep `alcuin` and `alcuin-mcp` in the same folder: the MCP server starts the CLI beside it for detached runs.
 
 For Claude Desktop, the same release has [`alcuin.mcpb`](https://github.com/yungSNAT/Alcuin/releases/latest/download/alcuin.mcpb), an MCP bundle holding `alcuin-mcp` for both platforms; open it with Claude Desktop to install the server as an extension.
 
@@ -125,7 +99,7 @@ Then run consultations with `--engine browser`. Each new request opens a Tempora
 
 **Checking an answer's evidence.** `alcuin ground <id>` flags each `path:line` citation in a saved answer that runs past the end of a sent file or names a file the session did not send, and each quote of 8 or more characters found in neither the sent files nor the prompt. It exits 1 when it flags anything, 0 when it flags nothing and 2 when it cannot check; `alcuin ground <id> --json` prints every citation and quote with its status. [Sessions and checking answers](docs/sessions.md#check-an-answers-evidence) has a worked example, the rules and the limits.
 
-**MCP.** `alcuin-mcp` serves `consult`, `wait`, `sessions`, `ground` and `project_sources` to any MCP client. `alcuin bridge codex-config --local-browser` and `alcuin bridge claude-config --local-browser` print a server entry that uses the browser profile you sign in to above; without `--local-browser` they print entries for the remote browser bridge ([Install](#install)). [MCP setup](docs/mcp.md) describes each tool's results.
+**MCP.** `alcuin-mcp` serves `consult`, `wait`, `sessions`, `ground` and `project_sources` to any MCP client; [Install](#install) covers adding it to Claude Desktop, Claude Code and Codex. [MCP setup](docs/mcp.md) describes each tool's results.
 
 **Remote browser.** `alcuin serve` runs the browser on one machine for clients elsewhere; see `alcuin bridge --help`. It listens on 127.0.0.1 unless you pass `--host`. Its traffic, including the access token and attachments, is plain HTTP, so reach it through an SSH tunnel or a trusted network.
 
@@ -171,8 +145,6 @@ cargo test --locked -- --test-threads=1
 [CONTRIBUTING.md](CONTRIBUTING.md) lists the checks a pull request must pass.
 
 ## Credits
-
-Alcuin is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired.
 
 The banner's lettering and emblem are drawn from Cascadia Mono and Besley glyphs (SIL OFL 1.1).
 
