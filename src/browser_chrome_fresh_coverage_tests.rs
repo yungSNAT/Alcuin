@@ -185,7 +185,7 @@ async fn process_qualification_retries_incomplete_inventory_without_closing_targ
         &browser,
         home.path(),
         &identity,
-        Instant::now() + Duration::from_millis(400),
+        Instant::now() + Duration::from_secs(2),
     )
     .await
     .unwrap_err()

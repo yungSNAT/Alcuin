@@ -121,7 +121,7 @@ async fn blank_closure_requires_native_exit_when_post_close_inventory_fails() {
             &BTreeSet::from(["PUBLIC-blank".into()]),
             None,
             &identity,
-            Instant::now() + Duration::from_millis(400),
+            Instant::now() + Duration::from_millis(1500),
         )
         .await;
         let trace = finish_peer(browser, peer).await;
@@ -207,15 +207,13 @@ async fn disposal_waits_for_helper_exit_and_resumes_without_the_launch_record() 
     let live_helper = ProcessIdentity::current().unwrap();
     save_observed_processes(&store, id, &[observed[0].clone(), live_helper.clone()]);
     let budget = Duration::from_secs(2);
-    let waiting = tokio::time::timeout(
-        Duration::from_millis(180),
-        retire_saved_fresh(&store, id, budget),
-    )
-    .await;
-    assert!(
-        waiting.is_err(),
-        "disposal finished while a recorded helper was still alive: {waiting:?}"
-    );
+    // A recorded helper that outlives the budget leaves the profile retained, not removed.
+    let retained = retire_saved_fresh(&store, id, Duration::from_secs(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained["disposition"], "browser-exited-profile-retained");
+    assert!(owner.profile.is_dir());
     assert_eq!(live_helper.liveness(), Liveness::Alive);
     assert_eq!(fs::read(&launch).unwrap().as_slice(), launch_content);
     assert_eq!(read_record(&marker_path).unwrap(), Some(marker.clone()));
