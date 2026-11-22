@@ -49,10 +49,11 @@ async fn run_gate_fixture(
     input: impl FnOnce(u32) -> Vec<u8>,
     deadline: Instant,
 ) -> (String, String) {
-    std::fs::write(
+    tokio::fs::write(
         home.join(OPTIONS_FILE),
         serde_json::to_vec(options).unwrap(),
     )
+    .await
     .unwrap();
     let output = tokio::time::timeout_at(deadline, async {
         let mut child = Command::new(std::env::current_exe().unwrap())
@@ -86,7 +87,9 @@ async fn run_gate_fixture(
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    let error = std::fs::read_to_string(home.join(ERROR_FILE)).unwrap();
+    let error = tokio::fs::read_to_string(home.join(ERROR_FILE))
+        .await
+        .unwrap();
     (error, stdout)
 }
 
