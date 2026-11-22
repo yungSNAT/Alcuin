@@ -1647,3 +1647,6 @@ mod model_button_tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_renderer_coverage_tests.rs"]
+mod coverage_tests;

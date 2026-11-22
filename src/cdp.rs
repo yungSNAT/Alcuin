@@ -810,3 +810,9 @@ mod http_authority_tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "cdp_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
+#[path = "cdp_fake.rs"]
+pub(crate) mod fake;

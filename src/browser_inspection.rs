@@ -584,5 +584,11 @@ async fn live_with_timeout(
 }
 
 #[cfg(test)]
+#[path = "browser_inspection_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_inspection_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "browser_inspection_coverage2_tests.rs"]
+mod coverage2_tests;

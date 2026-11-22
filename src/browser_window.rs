@@ -462,3 +462,6 @@ mod tests {
         assert_eq!(saved(&profile).unwrap().window_state, "maximized");
     }
 }
+#[cfg(test)]
+#[path = "browser_window_coverage_tests.rs"]
+mod coverage_tests;

@@ -520,5 +520,8 @@ async fn recover_connected(
 }
 
 #[cfg(test)]
+#[path = "native_reply_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "native_reply_tests.rs"]
 mod tests;
