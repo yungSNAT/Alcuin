@@ -17,13 +17,13 @@ use std::{
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-const PREPARE: &str = include_str!("../browser-scripts/prompt-prepare.js");
-const CHECK: &str = include_str!("../browser-scripts/prompt-check.js");
-const READY: &str = include_str!("../browser-scripts/attachment-ready.js");
-const EVIDENCE: &str = include_str!("../browser-scripts/attachment-evidence.js");
+const PREPARE: &str = browser_script!("prompt-prepare.js");
+const CHECK: &str = browser_script!("prompt-check.js");
+const READY: &str = browser_script!("attachment-ready.js");
+const EVIDENCE: &str = browser_script!("attachment-evidence.js");
 const RESET_UPLOADS: &str = include_str!("../browser-scripts/upload-reset.js");
-const FILE_PREPARE: &str = include_str!("../browser-scripts/file-input-prepare.js");
-const SEND_FOCUS: &str = include_str!("../browser-scripts/send-focus.js");
+const FILE_PREPARE: &str = browser_script!("file-input-prepare.js");
+const SEND_FOCUS: &str = browser_script!("send-focus.js");
 /// The submission witness collector, `submission-witness.js`, with the Markdown decoder it shares
 /// with the commit probe in scope.
 macro_rules! witness {
@@ -45,11 +45,11 @@ const SEND_PREPARE: &str = concat!(
     "(...args) => {\nconst installWitness = ",
     witness!(),
     ";\nreturn (\n",
-    include_str!("../browser-scripts/send-prepare.js"),
+    browser_script!("send-prepare.js"),
     ")(...args);\n}"
 );
 const WITNESS_CLEAN: &str = "(cfg) => { /* alcuin-dom:submission-witness-clean */ const record=window.__oracleSubmissionWitness; if(!record)return true; if(record.witnessId!==cfg.witnessId || record.dispatchGuardId!==cfg.dispatchGuardId || record.owner.claimId!==cfg.owner.claimId || record.owner.reservationId!==cfg.owner.reservationId) return false; if(typeof record.stop==='function')return cfg.retain===true ? record.stop() : record.cleanup(); if(cfg.retain!==true)delete window.__oracleSubmissionWitness; return true; }";
-const INSTALL: &str = include_str!("../browser-scripts/completion-install.js");
+const INSTALL: &str = browser_script!("completion-install.js");
 /// A fresh completion tracker for a turn about to be retried. The first one stopped watching at
 /// the failed turn's 'Response complete' and would call the retried turn complete from its start.
 pub(crate) async fn rearm_completion(
@@ -801,11 +801,7 @@ fn upload_digest(handle: &mut fs::File, expected: u64) -> Result<String> {
         hash.update(&buffer[..count]);
     }
     anyhow::ensure!(total == expected, "Upload changed during capture");
-    Ok(hash
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(crate::artifacts::hex(&hash.finalize()))
 }
 pub fn attachment_expectation(name: &str) -> Value {
     attachment_expectation_for(name, false)

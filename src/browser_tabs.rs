@@ -164,12 +164,7 @@ fn summary(endpoint: &AttachmentEndpoint, target: &Value, info: &Value) -> Resul
         url,
         answer
     );
-    output["fingerprint"] = json!(
-        Sha1::digest(fingerprint.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
+    output["fingerprint"] = json!(crate::artifacts::hex(&Sha1::digest(fingerprint.as_bytes())));
     Ok(output)
 }
 pub async fn targets(

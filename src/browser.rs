@@ -3,7 +3,7 @@ use crate::{
     artifacts::sha256,
     policy::{self, ModelEvidence, ThinkingEvidence},
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -133,7 +133,7 @@ pub(crate) fn require_original_user_source(metadata: &Value, observed: &Value) -
     let expected_id = runtime["conversationId"]
         .as_str()
         .or_else(|| runtime["ownedRecoveryTarget"]["conversationId"].as_str())
-        .context_pair()?;
+        .context(UNPAIRED)?;
     anyhow::ensure!(
         stable_conversation_id(expected_id),
         "Invalid saved provider conversation identity"
@@ -141,10 +141,10 @@ pub(crate) fn require_original_user_source(metadata: &Value, observed: &Value) -
     let actual_url = observed["currentUrl"]
         .as_str()
         .or_else(|| observed["url"].as_str())
-        .context_pair()?;
-    let actual = conversation_id(actual_url).context_pair()?;
+        .context(UNPAIRED)?;
+    let actual = conversation_id(actual_url).context(UNPAIRED)?;
     let origin = provider_url(actual_url)
-        .context_pair()?
+        .context(UNPAIRED)?
         .origin()
         .ascii_serialization();
     anyhow::ensure!(
@@ -176,18 +176,18 @@ pub(crate) fn require_original_user_source(metadata: &Value, observed: &Value) -
     {
         bail!("Saved request and provider message/turn identity do not match.");
     }
-    let message_id = observed["lastUserMessageId"].as_str().context_pair()?;
+    let message_id = observed["lastUserMessageId"].as_str().context(UNPAIRED)?;
     let source = if runtime["submittedPromptHashFormat"] == "original-source-v1" {
         if observed["lastUserOriginalSourceMessageId"] != message_id {
             bail!("Original source belongs to a different provider message.");
         }
         observed["lastUserOriginalSourceText"]
             .as_str()
-            .context_pair()?
+            .context(UNPAIRED)?
     } else if runtime.get("submittedPromptHashFormat").is_some() {
         bail!("Unsupported saved prompt fingerprint format.");
     } else {
-        observed["lastUserTextRaw"].as_str().context_pair()?
+        observed["lastUserTextRaw"].as_str().context(UNPAIRED)?
     };
     if runtime["submittedPromptHash"] != prompt_fingerprint(source, message_id) {
         bail!("Complete original prompt source does not match the committed request.");
@@ -195,15 +195,17 @@ pub(crate) fn require_original_user_source(metadata: &Value, observed: &Value) -
     Ok(())
 }
 pub fn require_original_source_pair(metadata: &Value, observed: &Value) -> Result<()> {
-    let assistant_identity = assistant_identity(observed).context_pair()?;
+    let assistant_identity = assistant_identity(observed).context(UNPAIRED)?;
     require_original_user_source(metadata, observed)?;
     if observed["assistantFollowsLatestUser"] != true
         || &observed["lastUserMessageId"] == assistant_identity
     {
         bail!("Saved request and provider message/turn identity do not match.");
     }
-    let user = observed["lastUserTurnIndex"].as_u64().context_pair()?;
-    let assistant = observed["lastAssistantTurnIndex"].as_u64().context_pair()?;
+    let user = observed["lastUserTurnIndex"].as_u64().context(UNPAIRED)?;
+    let assistant = observed["lastAssistantTurnIndex"]
+        .as_u64()
+        .context(UNPAIRED)?;
     let shared_exchange = assistant == user
         && observed["sameTurnExchange"] == true
         && provider_identity(&observed["lastUserTurnId"])
@@ -218,16 +220,7 @@ pub fn require_original_source_pair(metadata: &Value, observed: &Value) -> Resul
     }
     Ok(())
 }
-trait PairContext<T> {
-    fn context_pair(self) -> Result<T>;
-}
-impl<T> PairContext<T> for Option<T> {
-    fn context_pair(self) -> Result<T> {
-        self.ok_or_else(|| {
-            anyhow::anyhow!("Provider source or turn evidence is unavailable; refusing result.")
-        })
-    }
-}
+const UNPAIRED: &str = "Provider source or turn evidence is unavailable; refusing result.";
 pub fn accept_answer(metadata: &Value, observed: &Value, result: &Value) -> Result<()> {
     if observed["kind"] == "deep-research-report" {
         crate::browser_research::require_report(metadata, observed)?;
