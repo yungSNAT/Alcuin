@@ -4739,6 +4739,64 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
+    fn browsers_whose_profile_moved_into_the_launched_path_are_placed_by_their_open_files() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let directory = |name: &str| {
+            let path = home.path().join(name);
+            fs::create_dir(&path).unwrap();
+            fs::canonicalize(path).unwrap()
+        };
+        // The browser started on PUBLIC-old; that folder then moved to PUBLIC-profile, the path
+        // being launched, and a new PUBLIC-old took its name. The kernel reports the moved files.
+        let profile = directory("PUBLIC-profile");
+        let reused = directory("PUBLIC-old");
+        let browser = |root: &str, cmdline: &str, open: Option<PathBuf>| {
+            let process = home.path().join(root).join("90");
+            fs::create_dir_all(process.join("fd")).unwrap();
+            symlink(home.path().join("chrome"), process.join("exe")).unwrap();
+            fs::write(process.join("cmdline"), cmdline).unwrap();
+            if let Some(open) = open {
+                symlink(open, process.join("fd/3")).unwrap();
+            }
+            home.path().join(root)
+        };
+        let argv = format!(
+            "chrome\0--user-data-dir={}\0about:blank\0",
+            reused.display()
+        );
+        let title = format!(
+            "/opt/google/chrome/chrome --user-data-dir={} about:blank\0",
+            reused.display()
+        );
+        for cmdline in [argv, title] {
+            let moved = browser(
+                "PUBLIC-moved",
+                &cmdline,
+                Some(profile.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &moved).unwrap(),
+                vec![90],
+                "Files held under the launched path make the browser its owner: {cmdline:?}"
+            );
+            let unmoved = browser(
+                "PUBLIC-unmoved",
+                &cmdline,
+                Some(reused.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &unmoved).unwrap(),
+                Vec::<u32>::new(),
+                "{cmdline:?}"
+            );
+            for root in ["PUBLIC-moved", "PUBLIC-unmoved"] {
+                fs::remove_dir_all(home.path().join(root)).unwrap();
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
     #[ignore = "Uses only disposable synthetic profiles and installed Linux Chromium"]
     fn real_chromium_on_prefixed_profiles_owns_only_its_own() {
         let home = tempfile::Builder::new()
