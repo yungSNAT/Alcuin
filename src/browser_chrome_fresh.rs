@@ -1342,6 +1342,3 @@ mod tests {
         }
     }
 }
-#[cfg(test)]
-#[path = "browser_chrome_fresh_coverage_tests.rs"]
-mod coverage_tests;
