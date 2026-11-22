@@ -17,7 +17,7 @@ const PROBE: &str = concat!(
     include_str!("../browser-scripts/markdown-source.js"),
     include_str!("../browser-scripts/user-source.js"),
     "return (\n",
-    include_str!("../browser-scripts/owned_commit.js"),
+    browser_script!("owned_commit.js"),
     ")(...args);\n}"
 );
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

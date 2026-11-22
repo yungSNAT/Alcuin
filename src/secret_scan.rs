@@ -129,11 +129,7 @@ pub fn scan(mut reader: impl Read) -> io::Result<Scan> {
     }
     Ok(Scan {
         findings,
-        sha256: hash
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
+        sha256: crate::artifacts::hex(&hash.finalize()),
         bytes,
     })
 }

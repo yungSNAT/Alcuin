@@ -415,11 +415,7 @@ mod tests {
             digest.update(block);
         }
         let size = 64 * 1024 * 1024;
-        let hash: String = digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let hash: String = crate::artifacts::hex(&digest.finalize());
         let publication = stage
             .publish(&destination, false, size, &hash, &CancellationToken::new())
             .unwrap();

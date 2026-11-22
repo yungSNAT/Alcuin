@@ -1459,7 +1459,7 @@ async fn observe(
     Ok(observed)
 }
 fn copy_expression() -> String {
-    let (_, body) = include_str!("../browser-scripts/copy-markdown.js")
+    let (_, body) = browser_script!("copy-markdown.js")
         .split_once("return (() => {")
         .expect("Retained copy expression body");
     let body = body

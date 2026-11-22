@@ -1115,7 +1115,7 @@ mod tests {
         let entry = NativeEntry::open(&source, false).unwrap();
         let receipt = json!({
             "path":source,"filename":"PUBLIC-large-artifact.bin",
-            "sizeBytes":MAX_DOWNLOAD_BYTES,"sha256":hasher.finalize().iter().map(|byte|format!("{byte:02x}")).collect::<String>(),
+            "sizeBytes":MAX_DOWNLOAD_BYTES,"sha256":crate::artifacts::hex(&hasher.finalize()),
             "nativeIdentity":entry.identity
         });
         drop(entry);

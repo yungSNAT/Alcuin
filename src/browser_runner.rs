@@ -4831,7 +4831,7 @@ async fn capture_markdown(
     let copied = reservation
         .page()
         .evaluate_with_arguments(
-            &crate::browser_privacy::guard(include_str!("../browser-scripts/copy-markdown.js")),
+            &crate::browser_privacy::guard(browser_script!("copy-markdown.js")),
             &json!([{"owner":reservation.owner(),"meta":meta,"receipt":receipt}]),
             limits.command,
             cancel,
