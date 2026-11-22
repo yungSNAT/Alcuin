@@ -6350,3 +6350,6 @@ mod coverage_tests;
 #[cfg(test)]
 #[path = "browser_runner_tests.rs"]
 pub(crate) mod tests;
+#[cfg(test)]
+#[path = "browser_runner_coverage2_tests.rs"]
+mod coverage2_tests;
