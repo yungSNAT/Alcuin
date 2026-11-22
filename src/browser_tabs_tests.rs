@@ -293,11 +293,7 @@ async fn strict_missing_target_reads_metadata_and_never_attaches_to_other_tabs()
 #[test]
 fn page_identity_checks_accept_project_conversation_routes() {
     // Reference 15c8b9a: a project conversation (/g/g-p-…/project/c/<id>) keeps its identity.
-    for script in [
-        INSPECT,
-        COPY,
-        include_str!("../browser-scripts/copy-markdown.js"),
-    ] {
+    for script in [INSPECT, COPY, browser_script!("copy-markdown.js")] {
         assert!(script.contains(r"pathname.match(/(?:^|\/)c\/([a-zA-Z0-9-]+)/)"));
         assert!(!script.contains(r"pathname.match(/^\/c\/([a-zA-Z0-9-]+)/)"));
     }
