@@ -3179,8 +3179,8 @@ mod tests {
     }
 }
 #[cfg(test)]
-#[path = "browser_profile_coverage_tests.rs"]
-mod coverage_tests;
-#[cfg(test)]
 #[path = "browser_profile_coverage2_tests.rs"]
 mod coverage2_tests;
+#[cfg(test)]
+#[path = "browser_profile_coverage_tests.rs"]
+mod coverage_tests;
