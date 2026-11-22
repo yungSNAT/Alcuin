@@ -413,3 +413,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "remote_driver_coverage_tests.rs"]
+mod coverage_tests;

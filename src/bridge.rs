@@ -657,3 +657,6 @@ mod tests {
         host.shutdown().await.unwrap();
     }
 }
+#[cfg(test)]
+#[path = "bridge_coverage_tests.rs"]
+mod coverage_tests;

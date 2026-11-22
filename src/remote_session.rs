@@ -1038,3 +1038,6 @@ mod tests {
         host.shutdown().await.unwrap();
     }
 }
+#[cfg(test)]
+#[path = "remote_session_coverage_tests.rs"]
+mod coverage_tests;

@@ -510,3 +510,6 @@ mod tests {
         assert!(VerifiedArtifact::open(&store, &record, row, &CancellationToken::new()).is_err());
     }
 }
+#[cfg(test)]
+#[path = "artifact_coverage_tests.rs"]
+mod coverage_tests;
