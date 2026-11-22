@@ -591,5 +591,8 @@ impl HarvestCompletionGate {
 }
 
 #[cfg(test)]
+#[path = "browser_tabs_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_tabs_tests.rs"]
 mod tests;

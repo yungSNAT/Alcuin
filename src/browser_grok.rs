@@ -461,5 +461,8 @@ pub(crate) fn accept_saved_answer(
 }
 
 #[cfg(test)]
+#[path = "browser_grok_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_grok_tests.rs"]
 pub(crate) mod tests;

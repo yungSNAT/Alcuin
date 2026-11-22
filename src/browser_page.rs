@@ -572,5 +572,8 @@ async fn press_chat(
 }
 
 #[cfg(test)]
+#[path = "browser_page_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_page_tests.rs"]
 pub(crate) mod tests;
