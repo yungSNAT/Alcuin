@@ -4924,6 +4924,80 @@ mod tests {
         assert!(owners.unwrap().contains(&browser.id()));
         assert!(!elsewhere.unwrap().contains(&browser.id()));
     }
+    /// As above, but the held file's path outgrows the 1,024 bytes libproc reports.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn overlong_open_paths_never_hide_a_moved_profile_owner_on_macos() {
+        use std::io::BufRead;
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let old = home.join("PUBLIC-old");
+        fs::create_dir(&old).unwrap();
+        let chrome = home.join("chrome");
+        fs::copy("/bin/bash", &chrome).unwrap();
+        let mut browser = Command::new(&chrome)
+            .arg("-c")
+            .arg(
+                "cd \"$1\" || exit 1; for _ in 1 2 3 4 5 6 7 8 9 10 11; do \
+                 mkdir \"$2\" && cd \"$2\" || exit 1; done; exec 3>History; echo ready; read -r _",
+            )
+            .arg(format!("--user-data-dir={}", old.display()))
+            .arg(&old)
+            .arg("d".repeat(100))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(browser.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let profile = home.join("PUBLIC-profile");
+        fs::rename(&old, &profile).unwrap();
+        fs::create_dir(&old).unwrap();
+        let owners = profile_processes(&profile);
+        browser.kill().unwrap();
+        browser.wait().unwrap();
+        assert!(
+            !matches!(&owners, Ok(found) if !found.contains(&browser.id())),
+            "An unreadable open-file path must count as an owner or refuse: {owners:?}"
+        );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn settled_owners_rescans_only_a_starting_browser_until_cancelled() {
+        let calls = std::cell::Cell::new(0);
+        let scan = |answer: fn() -> Result<Vec<u32>>| {
+            calls.set(calls.get() + 1);
+            answer()
+        };
+        let (wait, cancel) = (Duration::from_secs(5), CancellationToken::new());
+        assert_eq!(
+            settled_owners(|| scan(|| Ok(vec![7])), wait, &cancel)
+                .await
+                .unwrap(),
+            vec![7]
+        );
+        let failed = settled_owners(
+            || scan(|| Err(anyhow::anyhow!("Native process list is unavailable"))),
+            wait,
+            &cancel,
+        );
+        assert!(!failed.await.unwrap_err().is::<ProfileStarting>());
+        assert_eq!(calls.get(), 2, "Only a starting browser is scanned again");
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            stop.cancel();
+        });
+        let starting = settled_owners(|| scan(|| Err(ProfileStarting.into())), wait, &cancel);
+        assert!(starting.await.unwrap_err().is::<ProfileStarting>());
+        assert_eq!(
+            calls.get(),
+            3,
+            "Cancellation during the pause stops the next scan"
+        );
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn browsers_outliving_a_removed_profile_are_placed_by_their_open_files() {
