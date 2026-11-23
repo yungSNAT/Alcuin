@@ -31,7 +31,7 @@ jobs:
         with:
           tool: cargo-audit@0.22.2
           fallback: none
-      - run: cargo audit --deny warnings
+      - run: cargo audit ${{ github.event_name == 'schedule' && '--deny warnings' || '--deny unsound --deny yanked' }}
 
   # vendor/hyper is a registry hyper with the files vendor/hyper/PATCH.json lists changed. The
   # patch hides it from Dependabot and from cargo audit, which skips path dependencies, so this
@@ -85,4 +85,4 @@ jobs:
           # Re-resolving hyper alone moves its lock entry to the registry crate at the same version.
           cargo tree --quiet --invert "hyper@$version" --depth 0 > /dev/null
           grep -A2 -x 'name = "hyper"' Cargo.lock | grep -qx 'source = "registry+https://github.com/rust-lang/crates.io-index"'
-          cargo audit --deny warnings
+          cargo audit ${{ github.event_name == 'schedule' && '--deny warnings' || '--deny unsound --deny yanked' }}

@@ -190,10 +190,38 @@ jobs:
           path: ${{ runner.temp }}/registry/server.json
           if-no-files-found: error
 
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: .
+          format: spdx-json
+          syft-version: v1.51.0
+          output-file: ${{ runner.temp }}/sbom/alcuin.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Validate and checksum the SPDX SBOM
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/sbom/alcuin.spdx.json"
+          jq -e '.spdxVersion and (.packages | any(.name == "alcuin"))' "$RUNNER_TEMP/sbom/alcuin.spdx.json" > /dev/null
+          (cd "$RUNNER_TEMP/sbom" && sha256sum alcuin.spdx.json > alcuin.spdx.json.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alcuin-sbom
+          path: ${{ runner.temp }}/sbom/*
+          if-no-files-found: error
+
   # Attestations go to the public Sigstore log, so pull request runs skip this job.
   attest:
     if: github.event_name != 'pull_request'
-    needs: [build, bundle]
+    needs: [build, bundle, sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -212,11 +240,20 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.mcpb
+            dist/*.spdx.json
+      - name: Attest the SPDX SBOM for the release archives
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.mcpb
+          sbom-path: dist/alcuin.spdx.json
 
   release:
     # A tag push only: a manual run on a tag leaves its artefacts unpublished.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [build, bundle, attest]
+    needs: [build, bundle, sbom, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -234,7 +271,7 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Prebuilt alcuin and alcuin-mcp for Linux (x86_64 and aarch64, glibc 2.39 or later), macOS (Apple silicon) and Windows (x86_64), each archive with a SHA-256 checksum and a build provenance attestation, and an MCP bundle (alcuin.mcpb) for Claude Desktop on Linux and Windows. See CHANGELOG.md for what changed."
+            --notes "Prebuilt alcuin and alcuin-mcp for Linux (x86_64 and aarch64, glibc 2.39 or later), macOS (Apple silicon) and Windows (x86_64), each archive with a SHA-256 checksum, a build provenance attestation and an SPDX SBOM (alcuin.spdx.json), and an MCP bundle (alcuin.mcpb) for Claude Desktop on Linux and Windows. See CHANGELOG.md for what changed."
 
   # Lists the release on the MCP Registry. GitHub OIDC proves the io.github.yungSNAT namespace,
   # so no registry secret is stored. It runs after the release job, so the bundle URL resolves.
