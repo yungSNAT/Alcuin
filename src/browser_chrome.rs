@@ -4999,12 +4999,23 @@ mod tests {
             .unwrap();
         let linked = profile_processes(&profile);
         fs::remove_file(&link).unwrap();
+        // The kernel may still name the file by the link last looked up; look up the other.
+        fs::metadata(&held).unwrap();
         let single = profile_processes(&profile);
+        let listing = Command::new("lsof")
+            .args(["+L", "-p", &browser.id().to_string()])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
         browser.kill().unwrap();
         browser.wait().unwrap();
         assert_eq!(ready, "ready\n");
         assert!(linked.unwrap_err().is::<ProfileUnplaced>());
-        assert!(!single.unwrap().contains(&browser.id()));
+        assert!(
+            single
+                .as_ref()
+                .is_ok_and(|owners| !owners.contains(&browser.id())),
+            "{single:?}; {listing:?}"
+        );
     }
     /// A real Chrome on another profile, from startup to steady state, never makes a free
     /// profile look occupied or unknown. CI's native-chrome-macos job runs it.
