@@ -11,11 +11,11 @@ Sends a change and the files it touches to ChatGPT with the `alcuin` CLI, checks
 
 Make a new temporary folder and save the reviewed version of the change there:
 
-- No argument, the uncommitted changes: `git diff HEAD` into `change.diff`. Untracked files are not in that diff: list them with `git status --porcelain` and add them too. The reviewed files are the working copies.
-- A number, that pull request: `gh pr diff <number>` into `change.diff`. Take the head commit from `gh pr view <number> --json headRefOid`.
+- No argument, the uncommitted changes: `git diff HEAD` into `change.diff`. Untracked files are not in that diff: list them with `git ls-files --others --exclude-standard` and add them too. The reviewed files are the working copies.
+- A number, that pull request: `gh pr diff <number>` into `change.diff`. Take the head commit from `gh pr view <number> --json headRefOid`, and fetch it with `git fetch origin pull/<number>/head`.
 - `commit:<sha>`: `git show <sha>` into `change.diff`. The head commit is `<sha>`.
 
-For a pull request or a commit, write each changed file's version at the head commit into the folder with `git show <head>:<path>`, and attach and check those copies, not the working tree's.
+For a pull request or a commit, write each changed file's version at the head commit with `git show <head>:<path>` into a `files/` folder inside the temporary folder, keeping its repository path, and attach and check those copies, not the working tree's.
 
 **Leave out secrets.** Alcuin's scanner refuses only known token formats and private keys; a password or connection string in an ordinary file goes out unseen. Before anything is attached:
 
