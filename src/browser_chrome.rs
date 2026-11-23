@@ -280,19 +280,20 @@ impl std::fmt::Display for ChromeIdentityRefusal {
     }
 }
 impl std::error::Error for ChromeIdentityRefusal {}
-/// A Chromium whose profile its arguments cannot settle, and which has not yet opened a profile
-/// file that would, as when it is starting on another profile.
+/// A Chromium whose profile cannot yet be placed: on Linux, one whose arguments cannot settle it
+/// and which has opened no profile file that would, as when it is starting on another profile; on
+/// macOS, one holding a file whose reported path no longer names it.
 #[derive(Debug)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-struct ProfileStarting;
-impl std::fmt::Display for ProfileStarting {
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+struct ProfileUnplaced;
+impl std::fmt::Display for ProfileUnplaced {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(
             "A Chromium browser's profile cannot be established; profile occupancy is unknown",
         )
     }
 }
-impl std::error::Error for ProfileStarting {}
+impl std::error::Error for ProfileUnplaced {}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LaunchRecord {
@@ -2247,8 +2248,8 @@ fn denied_profile_candidate(
     // shortcut: inaccessible browsers with arbitrarily renamed comm are unsupported; use an explicit borrowed endpoint.
     Ok(())
 }
-/// A profile's owners, scanned again whilst another profile's Chromium is still starting
-/// ([`ProfileStarting`]) until `wait`, at most [`STARTING_BROWSER_WAIT`], has passed.
+/// A profile's owners, scanned again whilst a Chromium cannot yet be placed
+/// ([`ProfileUnplaced`]) until `wait`, at most [`STARTING_BROWSER_WAIT`], has passed.
 async fn settled_owners(
     mut scan: impl FnMut() -> Result<Vec<u32>>,
     wait: Duration,
@@ -2256,15 +2257,19 @@ async fn settled_owners(
 ) -> Result<Vec<u32>> {
     let deadline = Instant::now() + wait.min(STARTING_BROWSER_WAIT);
     loop {
-        match scan() {
-            Err(error)
-                if error.is::<ProfileStarting>()
-                    && Instant::now() < deadline
-                    && !cancel.is_cancelled() =>
-            {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
+        let error = match scan() {
+            Err(error) if error.is::<ProfileUnplaced>() => error,
             owners => return owners,
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || cancel.is_cancelled() {
+            return Err(error);
+        }
+        // One last scan at the deadline, but none once cancelled.
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(error),
+            _ = tokio::time::sleep(left.min(Duration::from_millis(25))) => {}
         }
     }
 }
@@ -2431,7 +2436,7 @@ fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path)
     // shortcut: a profile renamed whilst open also counts for an existing reading of its old path.
     anyhow::ensure!(
         readings.iter().any(|reading| reading == profile),
-        ProfileStarting
+        ProfileUnplaced
     );
     Ok(true)
 }
@@ -2935,6 +2940,11 @@ mod macos_process {
                 return failed(error);
             }
             anyhow::ensure!(read == size, "Native open-file record is malformed");
+            let stat = &info.vnode.vip_vi.vi_stat;
+            // An unlinked file has no path to place it by.
+            if stat.vst_nlink == 0 {
+                continue;
+            }
             let path: Vec<u8> = info
                 .vnode
                 .vip_path
@@ -2943,7 +2953,17 @@ mod macos_process {
                 .take_while(|byte| **byte != 0)
                 .map(|byte| *byte as u8)
                 .collect();
-            paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(&path)));
+            let path = PathBuf::from(std::ffi::OsStr::from_bytes(&path));
+            // The kernel returns a partial path, without an error, when the whole one does not
+            // fit, so only a path that still names the same file counts.
+            anyhow::ensure!(
+                std::fs::metadata(&path).is_ok_and(|found| {
+                    use std::os::unix::fs::MetadataExt;
+                    found.dev() as u32 == stat.vst_dev && found.ino() == stat.vst_ino
+                }),
+                super::ProfileUnplaced
+            );
+            paths.push(path);
         }
         Ok(Some(paths))
     }
@@ -4868,7 +4888,7 @@ mod tests {
             settled_owners(scan, Duration::from_millis(100), &cancel)
                 .await
                 .unwrap_err()
-                .is::<ProfileStarting>(),
+                .is::<ProfileUnplaced>(),
             "A browser that never opens a profile file leaves occupancy unknown"
         );
         // Its first profile file opens 50 ms into the scan.
@@ -4983,15 +5003,15 @@ mod tests {
             wait,
             &cancel,
         );
-        assert!(!failed.await.unwrap_err().is::<ProfileStarting>());
+        assert!(!failed.await.unwrap_err().is::<ProfileUnplaced>());
         assert_eq!(calls.get(), 2, "Only a starting browser is scanned again");
         let stop = cancel.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(5)).await;
             stop.cancel();
         });
-        let starting = settled_owners(|| scan(|| Err(ProfileStarting.into())), wait, &cancel);
-        assert!(starting.await.unwrap_err().is::<ProfileStarting>());
+        let starting = settled_owners(|| scan(|| Err(ProfileUnplaced.into())), wait, &cancel);
+        assert!(starting.await.unwrap_err().is::<ProfileUnplaced>());
         assert_eq!(
             calls.get(),
             3,
