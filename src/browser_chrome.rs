@@ -4915,12 +4915,22 @@ mod tests {
         );
         opener.join().unwrap();
     }
+    /// Each scan reads every process, so a stand-in browser one test leaves unplaced would
+    /// fail another test's scan: the tests that start one take turns.
+    #[cfg(target_os = "macos")]
+    fn macos_scan_lock() -> std::sync::MutexGuard<'static, ()> {
+        static SCANS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        SCANS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     /// A copy of bash named `chrome`, holding open a file of the profile it was launched on, after
     /// that profile was moved to the launched path and its old name reused.
     #[cfg(target_os = "macos")]
     #[test]
     fn browsers_whose_profile_moved_into_the_launched_path_are_owners_on_macos() {
         use std::io::BufRead;
+        let _scans = macos_scan_lock();
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
         let old = home.join("PUBLIC-old");
@@ -4961,6 +4971,7 @@ mod tests {
     #[test]
     fn hard_linked_open_files_leave_occupancy_unknown_on_macos() {
         use std::io::BufRead;
+        let _scans = macos_scan_lock();
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
         let other = home.join("PUBLIC-other");
@@ -5078,6 +5089,7 @@ mod tests {
     #[test]
     fn overlong_open_paths_never_hide_a_moved_profile_owner_on_macos() {
         use std::io::BufRead;
+        let _scans = macos_scan_lock();
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
         let old = home.join("PUBLIC-old");
