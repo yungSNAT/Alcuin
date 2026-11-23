@@ -10,13 +10,13 @@ The skill tells an agent when to consult, how to preview and send, how to read a
 npx skills add yungSNAT/Alcuin --skill alcuin --global --agent "*" --yes
 ```
 
-For the review skill described below, run the same command with `--skill alcuin-review`.
-
 It lands in `~/.agents/skills/alcuin`, linked into each agent's own skills folder. For one project only, drop the global option: the skill then goes into the current project's `.agents/skills/alcuin`, for the agents you name:
 
 ```sh
 npx skills add yungSNAT/Alcuin --skill alcuin --agent claude-code codex --yes
 ```
+
+For the review skill described below, run either command with `--skill alcuin-review`.
 
 The [Claude Code plugin](mcp.md#claude-code-plugin) adds the same skill together with the MCP server, and an `alcuin-review` skill. That one reviews uncommitted changes, a commit or a pull request: it previews and asks before sending, runs `ground` on the answer, opens every cited line, and reports the findings that hold from P0 to P3 without changing code until you approve. For Codex, one `codex mcp add` command adds the server ([Codex in one command](mcp.md#codex-in-one-command)).
 
