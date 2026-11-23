@@ -16,7 +16,7 @@ It lands in `~/.agents/skills/alcuin`, linked into each agent's own skills folde
 npx skills add yungSNAT/Alcuin --skill alcuin --agent claude-code codex --yes
 ```
 
-The [Claude Code plugin](mcp.md#claude-code-plugin) adds the same skill together with the MCP server. For Codex, one `codex mcp add` command adds the server ([Codex in one command](mcp.md#codex-in-one-command)).
+The [Claude Code plugin](mcp.md#claude-code-plugin) adds the same skill together with the MCP server, and an `alcuin-review` skill. That one reviews uncommitted changes, a commit or a pull request: it previews and asks before sending, runs `ground` on the answer, opens every cited line, and reports the findings that hold from P0 to P3 without changing code until you approve. For Codex, one `codex mcp add` command adds the server ([Codex in one command](mcp.md#codex-in-one-command)).
 
 ## What the skill asks of the agent
 
