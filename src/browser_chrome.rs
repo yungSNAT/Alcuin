@@ -2963,14 +2963,18 @@ mod macos_process {
         Ok(Some(paths))
     }
 }
-/// The path of a file a process holds open, given the path the kernel reported for it and the
-/// file's device and inode, or `None` when that path no longer leads to the same file.
+/// The canonical path of a file a process holds open, given the path the kernel reported for it
+/// and the file's device and inode, or `None` when that path no longer leads to the same file.
+/// A partial path can lead back to the file through a symlink, so only its canonical form counts.
 #[cfg(unix)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn held_file_path(reported: &Path, device: u32, inode: u64) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
-    let found = fs::metadata(reported).ok()?;
-    (found.dev() as u32 == device && found.ino() == inode).then(|| reported.to_owned())
+    let real = fs::canonicalize(reported) // NOSONAR: brief local file access
+        .ok()
+        .filter(|_| reported.is_absolute())?;
+    let found = fs::metadata(&real).ok()?;
+    (found.dev() as u32 == device && found.ino() == inode).then_some(real)
 }
 /// Parses `kern.procargs2`: argc as a native int, the executable path, NUL padding, then argc
 /// NUL-terminated arguments. Environment strings follow and are never read.
