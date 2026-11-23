@@ -919,6 +919,7 @@ mod tests {
             json!({"verified":true,"requestedLevel":"extra-high"}),
             json!({"verified":false,"requestedLevel":"extra-high","fallbackFrom":"pro"}),
             json!({"verified":true,"requestedLevel":"pro"}),
+            json!({"verified":true,"requestedLevel":"pro","fallbackFrom":"pro"}),
         ] {
             assert!(completion_warnings(&at(thinking), &request(1_000, None)).is_empty());
         }
