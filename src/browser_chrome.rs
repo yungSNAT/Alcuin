@@ -4955,6 +4955,124 @@ mod tests {
         assert!(owners.unwrap().contains(&browser.id()));
         assert!(!elsewhere.unwrap().contains(&browser.id()));
     }
+    /// A browser on another profile holding a hard-linked file leaves occupancy unknown until
+    /// the extra link goes.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hard_linked_open_files_leave_occupancy_unknown_on_macos() {
+        use std::io::BufRead;
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let other = home.join("PUBLIC-other");
+        fs::create_dir_all(other.join("Default")).unwrap();
+        let held = other.join("Default/History");
+        fs::write(&held, "").unwrap();
+        let link = home.join("PUBLIC-link");
+        fs::hard_link(&held, &link).unwrap();
+        let profile = home.join("PUBLIC-profile");
+        fs::create_dir(&profile).unwrap();
+        let chrome = home.join("chrome");
+        fs::copy("/bin/bash", &chrome).unwrap();
+        let mut browser = Command::new(&chrome)
+            .arg("-c")
+            .arg("exec 3<\"$1\"; echo ready; read -r _")
+            .arg(format!("--user-data-dir={}", other.display()))
+            .arg(&held)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(browser.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        let linked = profile_processes(&profile);
+        fs::remove_file(&link).unwrap();
+        let single = profile_processes(&profile);
+        browser.kill().unwrap();
+        browser.wait().unwrap();
+        assert_eq!(ready, "ready\n");
+        assert!(linked.unwrap_err().is::<ProfileUnplaced>());
+        assert!(!single.unwrap().contains(&browser.id()));
+    }
+    /// A real Chrome on another profile, from startup to steady state, never makes a free
+    /// profile look occupied or unknown. CI's native-chrome-macos job runs it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Requires installed Chrome; reads a running browser's open files"]
+    fn native_chrome_on_another_profile_leaves_a_macos_profile_free() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let environment = ["CHROME_PATH", "PATH"]
+            .into_iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+            .chain([("HOME".to_owned(), home.display().to_string())])
+            .collect();
+        let executable =
+            crate::browser_detect::chrome(&environment).expect("Install Chrome to run this test");
+        let (other, profile) = (home.join("PUBLIC-other"), home.join("PUBLIC-profile"));
+        fs::create_dir(&other).unwrap();
+        fs::create_dir(&profile).unwrap();
+        for headless in [true, false] {
+            let mut command = Command::new(&executable);
+            command
+                .arg(format!("--user-data-dir={}", other.display()))
+                .args([
+                    "--no-first-run",
+                    "--use-mock-keychain",
+                    "--remote-debugging-port=0",
+                    "about:blank",
+                ])
+                .env("HOME", &home)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if headless {
+                command.arg("--headless=new");
+            }
+            let mut browser = command.spawn().unwrap();
+            let started = std::time::Instant::now();
+            let (mut scans, mut failures) = (0, vec![]);
+            // Startup, then steady state once DevTools is up.
+            while started.elapsed() < Duration::from_secs(12) {
+                match profile_processes(&profile) {
+                    Ok(owners) if owners.is_empty() => {}
+                    outcome => {
+                        failures.push(format!("{} ms: {outcome:?}", started.elapsed().as_millis()))
+                    }
+                }
+                scans += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let started_up = other.join("DevToolsActivePort").exists();
+            let listing = Command::new("lsof")
+                .args(["+L", "-p", &browser.id().to_string()])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            browser.kill().unwrap();
+            browser.wait().unwrap();
+            let linked: Vec<_> = listing
+                .lines()
+                .filter(|line| {
+                    line.split_whitespace()
+                        .nth(7)
+                        .and_then(|links| links.parse::<u64>().ok())
+                        .is_some_and(|links| links > 1)
+                })
+                .collect();
+            println!(
+                "headless={headless} scans={scans} failures={} started_up={started_up} \
+                 browser descriptors with more than one link: {}",
+                failures.len(),
+                linked.len()
+            );
+            for line in &linked {
+                println!("  {line}");
+            }
+            assert!(started_up, "Chrome never wrote DevToolsActivePort");
+            assert!(failures.is_empty(), "headless={headless}: {failures:#?}");
+        }
+    }
     /// As above, but the held file's path outgrows the 1,024 bytes libproc reports.
     #[cfg(target_os = "macos")]
     #[test]
