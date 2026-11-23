@@ -280,6 +280,19 @@ impl std::fmt::Display for ChromeIdentityRefusal {
     }
 }
 impl std::error::Error for ChromeIdentityRefusal {}
+/// A Chromium whose profile its arguments cannot settle, and which has not yet opened a profile
+/// file that would, as when it is starting on another profile.
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct ProfileStarting;
+impl std::fmt::Display for ProfileStarting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "A Chromium browser's profile cannot be established; profile occupancy is unknown",
+        )
+    }
+}
+impl std::error::Error for ProfileStarting {}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LaunchRecord {
@@ -899,7 +912,12 @@ impl ChromeConnection {
                 Liveness::Dead => {}
             }
         }
-        let owners = profile_processes(profile.path())?;
+        let owners = settled_owners(
+            || profile_processes(profile.path()),
+            options.timeout,
+            cancel,
+        )
+        .await?;
         if options.borrow_profile_owner && !owners.is_empty() {
             return Self::borrow_profile_owner(
                 profile, &owners, &options, bootstrap, lock, admission, cancel,
@@ -1265,7 +1283,14 @@ impl ChromeConnection {
         );
         profile.check()?;
         anyhow::ensure!(
-            profile_processes(profile.path())? == [pid] && identity.liveness() == Liveness::Alive,
+            settled_owners(
+                || profile_processes(profile.path()),
+                options.timeout,
+                cancel
+            )
+            .await?
+                == [pid]
+                && identity.liveness() == Liveness::Alive,
             ChromeIdentityRefusal("The profile's browser changed during attachment")
         );
         Self::borrowed_process(profile, endpoint, browser, identity, lock, admission).await
@@ -1301,7 +1326,7 @@ impl ChromeConnection {
                 return Ok(false);
             }
         }
-        let owners = profile_processes(profile.path())?;
+        let owners = settled_owners(|| profile_processes(profile.path()), timeout, cancel).await?;
         profile.check()?;
         Ok(owners == [identity.pid] && identity.liveness() == Liveness::Alive)
     }
@@ -2222,6 +2247,16 @@ fn denied_profile_candidate(
     // shortcut: inaccessible browsers with arbitrarily renamed comm are unsupported; use an explicit borrowed endpoint.
     Ok(())
 }
+/// A profile's owners, scanned again whilst another profile's Chromium is still starting
+/// ([`ProfileStarting`]) until `wait` has passed.
+async fn settled_owners(
+    mut scan: impl FnMut() -> Result<Vec<u32>>,
+    wait: Duration,
+    cancel: &CancellationToken,
+) -> Result<Vec<u32>> {
+    let _ = (wait, cancel);
+    scan()
+}
 // Native argv avoids flattened shell quoting and never reads profile contents.
 #[cfg(target_os = "linux")]
 fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
@@ -2382,7 +2417,7 @@ fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path)
     // shortcut: a profile renamed whilst open also counts for an existing reading of its old path.
     anyhow::ensure!(
         readings.iter().any(|reading| reading == profile),
-        "A Chromium browser's profile cannot be established; profile occupancy is unknown"
+        ProfileStarting
     );
     Ok(true)
 }
@@ -4695,6 +4730,90 @@ mod tests {
             profile_processes_at(&profile, &redirected).unwrap(),
             vec![71]
         );
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn launch_scans_wait_for_a_chromium_starting_on_another_profile() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let directory = |name: &str| {
+            let path = home.path().join(name);
+            fs::create_dir(&path).unwrap();
+            fs::canonicalize(path).unwrap()
+        };
+        let other = directory("PUBLIC-other");
+        let profile = directory("PUBLIC-profile");
+        // Chromium starting on the other profile has rewritten its title but opened no profile file.
+        let proc_root = home.path().join("PUBLIC-proc");
+        let process = proc_root.join("90");
+        fs::create_dir_all(process.join("fd")).unwrap();
+        symlink(home.path().join("chromium"), process.join("exe")).unwrap();
+        let title = format!(
+            "/usr/lib/chromium/chromium --user-data-dir={} --no-first-run about:blank\0",
+            other.display()
+        );
+        fs::write(process.join("cmdline"), title).unwrap();
+        let scan = || profile_processes_at(&profile, &proc_root);
+        let cancel = CancellationToken::new();
+        assert!(
+            settled_owners(scan, Duration::from_millis(100), &cancel)
+                .await
+                .unwrap_err()
+                .is::<ProfileStarting>(),
+            "A browser that never opens a profile file leaves occupancy unknown"
+        );
+        // Its first profile file opens 50 ms into the scan.
+        let (opened, file) = (process.join("fd/3"), other.join("Default/History"));
+        let opener = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            symlink(file, opened).unwrap();
+        });
+        assert_eq!(
+            settled_owners(scan, Duration::from_secs(5), &cancel)
+                .await
+                .unwrap(),
+            Vec::<u32>::new()
+        );
+        opener.join().unwrap();
+    }
+    /// A copy of bash named `chrome`, holding open a file of the profile it was launched on, after
+    /// that profile was moved to the launched path and its old name reused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn browsers_whose_profile_moved_into_the_launched_path_are_owners_on_macos() {
+        use std::io::BufRead;
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let old = home.join("PUBLIC-old");
+        fs::create_dir_all(old.join("Default")).unwrap();
+        fs::write(old.join("Default/History"), "").unwrap();
+        let chrome = home.join("chrome");
+        fs::copy("/bin/bash", &chrome).unwrap();
+        let mut browser = Command::new(&chrome)
+            .arg("-c")
+            .arg("exec 3<\"$1\"; echo ready; read -r _")
+            .arg(format!("--user-data-dir={}", old.display()))
+            .arg(old.join("Default/History"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(browser.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let profile = home.join("PUBLIC-profile");
+        fs::rename(&old, &profile).unwrap();
+        fs::create_dir(&old).unwrap();
+        let owners = profile_processes(&profile);
+        let unrelated = home.join("PUBLIC-unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        let elsewhere = profile_processes(&unrelated);
+        browser.kill().unwrap();
+        browser.wait().unwrap();
+        assert!(owners.unwrap().contains(&browser.id()));
+        assert!(!elsewhere.unwrap().contains(&browser.id()));
     }
     #[cfg(target_os = "linux")]
     #[test]
