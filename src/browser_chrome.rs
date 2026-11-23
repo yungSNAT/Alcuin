@@ -5032,10 +5032,12 @@ mod tests {
             .collect();
         let executable =
             crate::browser_detect::chrome(&environment).expect("Install Chrome to run this test");
-        let (other, profile) = (home.join("PUBLIC-other"), home.join("PUBLIC-profile"));
-        fs::create_dir(&other).unwrap();
+        let profile = home.join("PUBLIC-profile");
         fs::create_dir(&profile).unwrap();
         for headless in [true, false] {
+            // A fresh profile each time, so one run's DevToolsActivePort cannot vouch for the next.
+            let other = home.join(format!("PUBLIC-other-{headless}"));
+            fs::create_dir(&other).unwrap();
             let mut command = Command::new(&executable);
             command
                 .arg(format!("--user-data-dir={}", other.display()))
@@ -5066,6 +5068,9 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(20));
             }
             let started_up = other.join("DevToolsActivePort").exists();
+            let alive = browser.try_wait().unwrap().is_none();
+            // The scan recognised the browser, so its descriptors were read every time.
+            let recognised = profile_processes(&other).map(|owners| owners.contains(&browser.id()));
             let listing = Command::new("lsof")
                 .args(["+L", "-p", &browser.id().to_string()])
                 .output()
@@ -5092,6 +5097,11 @@ mod tests {
                 println!("  {line}");
             }
             assert!(started_up, "Chrome never wrote DevToolsActivePort");
+            assert!(alive, "Chrome exited before the scans ended");
+            assert!(
+                matches!(recognised, Ok(true)),
+                "The scan never saw Chrome: {recognised:?}"
+            );
             assert!(failures.is_empty(), "headless={headless}: {failures:#?}");
         }
     }
