@@ -2248,15 +2248,29 @@ fn denied_profile_candidate(
     Ok(())
 }
 /// A profile's owners, scanned again whilst another profile's Chromium is still starting
-/// ([`ProfileStarting`]) until `wait` has passed.
+/// ([`ProfileStarting`]) until `wait`, at most [`STARTING_BROWSER_WAIT`], has passed.
 async fn settled_owners(
     mut scan: impl FnMut() -> Result<Vec<u32>>,
     wait: Duration,
     cancel: &CancellationToken,
 ) -> Result<Vec<u32>> {
-    let _ = (wait, cancel);
-    scan()
+    let deadline = Instant::now() + wait.min(STARTING_BROWSER_WAIT);
+    loop {
+        match scan() {
+            Err(error)
+                if error.is::<ProfileStarting>()
+                    && Instant::now() < deadline
+                    && !cancel.is_cancelled() =>
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            owners => return owners,
+        }
+    }
 }
+/// In testing, Chromium 158 starting on another profile left occupancy unknown for 51 to 102 ms
+/// on an idle host; one still unplaced after this keeps it unknown.
+const STARTING_BROWSER_WAIT: Duration = Duration::from_secs(5);
 // Native argv avoids flattened shell quoting and never reads profile contents.
 #[cfg(target_os = "linux")]
 fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
@@ -2695,10 +2709,16 @@ fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
                     .then(|| args.get(index + 1).map(Vec::as_slice))
                     .flatten()
             });
-            if let Some(value) = value
-                && fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(value)))? == profile
+            let Some(value) = value else {
+                continue;
+            };
+            // A profile moved to the launched path after its old name was reused, as on Linux.
+            if fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(value)))? == profile
+                || macos_process::open_paths(pid)?
+                    .is_some_and(|open| open.iter().any(|path| path.starts_with(profile)))
             {
                 owners.push(pid);
+                break;
             }
         }
     }
@@ -2837,6 +2857,95 @@ mod macos_process {
         }
         raw.truncate(size);
         Ok(Some(super::procargs(&raw)?))
+    }
+    /// The current paths of the files the process holds open; descriptors closed during the
+    /// read are skipped.
+    pub(super) fn open_paths(pid: u32) -> Result<Option<Vec<PathBuf>>> {
+        use std::os::unix::ffi::OsStrExt;
+        // sys/proc_info.h `proc_fileinfo` and `vnode_fdinfowithpath`, which libc lacks.
+        #[repr(C)]
+        struct VnodeWithPath {
+            // proc_fileinfo: 2 u32 flags, an i64 offset, an i32 type and u32 guard flags.
+            _file: [u64; 3],
+            vnode: libc::vnode_info_path,
+        }
+        const PROC_PIDFDVNODEPATHINFO: libc::c_int = 2;
+        let pid = libc::c_int::try_from(pid)?;
+        let failed = |error: std::io::Error| -> Result<Option<Vec<PathBuf>>> {
+            if gone(&error) {
+                Ok(None)
+            } else {
+                Err(error).context("Native open files are unavailable")
+            }
+        };
+        // SAFETY: a null buffer asks only for the size.
+        let needed =
+            unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+        if needed <= 0 {
+            return failed(std::io::Error::last_os_error());
+        }
+        let entry = std::mem::size_of::<libc::proc_fdinfo>();
+        // Room for descriptors opened between the two calls.
+        // SAFETY: proc_fdinfo is plain old data.
+        let mut descriptors =
+            vec![unsafe { std::mem::zeroed::<libc::proc_fdinfo>() }; needed as usize / entry + 64];
+        let bytes = libc::c_int::try_from(std::mem::size_of_val(descriptors.as_slice()))?;
+        // SAFETY: the buffer holds `bytes` bytes of proc_fdinfo records.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDLISTFDS,
+                0,
+                descriptors.as_mut_ptr().cast(),
+                bytes,
+            )
+        };
+        if read <= 0 {
+            return failed(std::io::Error::last_os_error());
+        }
+        // A full buffer may have left descriptors out.
+        anyhow::ensure!(
+            (read as usize) < std::mem::size_of_val(descriptors.as_slice()),
+            "Native open files changed while they were read"
+        );
+        descriptors.truncate(read as usize / entry);
+        let size = libc::c_int::try_from(std::mem::size_of::<VnodeWithPath>())?;
+        let mut paths = vec![];
+        for descriptor in descriptors
+            .iter()
+            .filter(|descriptor| descriptor.proc_fdtype == libc::PROX_FDTYPE_VNODE as u32)
+        {
+            // SAFETY: VnodeWithPath is plain old data.
+            let mut info: VnodeWithPath = unsafe { std::mem::zeroed() };
+            // SAFETY: the buffer holds `size` bytes, and the kernel writes at most that.
+            let read = unsafe {
+                libc::proc_pidfdinfo(
+                    pid,
+                    descriptor.proc_fd,
+                    PROC_PIDFDVNODEPATHINFO,
+                    (&raw mut info).cast(),
+                    size,
+                )
+            };
+            if read <= 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EBADF) {
+                    continue;
+                }
+                return failed(error);
+            }
+            anyhow::ensure!(read == size, "Native open-file record is malformed");
+            let path: Vec<u8> = info
+                .vnode
+                .vip_path
+                .as_flattened()
+                .iter()
+                .take_while(|byte| **byte != 0)
+                .map(|byte| *byte as u8)
+                .collect();
+            paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(&path)));
+        }
+        Ok(Some(paths))
     }
 }
 /// Parses `kern.procargs2`: argc as a native int, the executable path, NUL padding, then argc
