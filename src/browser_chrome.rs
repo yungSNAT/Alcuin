@@ -2965,7 +2965,8 @@ mod macos_process {
 }
 /// The canonical path of a file a process holds open, given the path the kernel reported for it
 /// and the file's device and inode, or `None` when that path no longer leads to the same file.
-/// A partial path can lead back to the file through a symlink, so only its canonical form counts.
+/// A partial path can lead back to the file through a symlink, so only its canonical form counts,
+/// and a hard-linked file has other names it may be held under, so none of them does.
 #[cfg(unix)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn held_file_path(reported: &Path, device: u32, inode: u64) -> Option<PathBuf> {
@@ -2974,7 +2975,8 @@ fn held_file_path(reported: &Path, device: u32, inode: u64) -> Option<PathBuf> {
         .ok()
         .filter(|_| reported.is_absolute())?;
     let found = fs::metadata(&real).ok()?;
-    (found.dev() as u32 == device && found.ino() == inode).then_some(real)
+    (found.dev() as u32 == device && found.ino() == inode && (found.is_dir() || found.nlink() == 1))
+        .then_some(real)
 }
 /// Parses `kern.procargs2`: argc as a native int, the executable path, NUL padding, then argc
 /// NUL-terminated arguments. Environment strings follow and are never read.
