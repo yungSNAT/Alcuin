@@ -41,10 +41,13 @@ fn plugin_ships_the_review_skill() {
     assert_eq!(lines.next(), Some("---"));
     assert_eq!(lines.next(), Some("name: alcuin-review"));
     for step in [
-        "alcuin --dry-run summary --files-report",
-        "wait for approval",
+        "alcuin --engine browser --dry-run summary --files-report",
+        "Show the user the provider and the file list, and wait for approval.",
+        "**Leave out secrets.**",
+        "don't send it again",
         "alcuin ground <id>",
-        "Open every cited",
+        "Exit 2 means the check did not run",
+        "Open every cited file and line yourself",
     ] {
         assert!(skill.contains(step), "{step}");
     }

@@ -10,6 +10,8 @@ The skill tells an agent when to consult, how to preview and send, how to read a
 npx skills add yungSNAT/Alcuin --skill alcuin --global --agent "*" --yes
 ```
 
+For the review skill described below, run the same command with `--skill alcuin-review`.
+
 It lands in `~/.agents/skills/alcuin`, linked into each agent's own skills folder. For one project only, drop the global option: the skill then goes into the current project's `.agents/skills/alcuin`, for the agents you name:
 
 ```sh
