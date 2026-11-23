@@ -4929,7 +4929,7 @@ mod tests {
         let mut browser = Command::new(&chrome)
             .arg("-c")
             // Descriptor 4 is a file unlinked whilst open, which places the browser nowhere.
-            .arg("exec 3<\"$1\" 4>\"$1-journal\"; rm \"$1-journal\"; echo ready; read -r _")
+            .arg("exec 3<\"$1\" 4>\"$1-journal\"; rm \"$1-journal\" || exit 1; echo ready; read -r _")
             .arg(format!("--user-data-dir={}", old.display()))
             .arg(old.join("Default/History"))
             .stdin(Stdio::piped())
@@ -5017,6 +5017,17 @@ mod tests {
         fs::write(&other, "").unwrap();
         assert_eq!(held_file_path(&other, device, inode), None);
         assert_eq!(held_file_path(Path::new("History"), device, inode), None);
+        // A partial path naming another hard link outside the profile cannot place the file.
+        let linked = home.join("PUBLIC-linked");
+        fs::hard_link(&file, &linked).unwrap();
+        assert_eq!(held_file_path(&linked, device, inode), None);
+        assert_eq!(held_file_path(&file, device, inode), None);
+        // A directory's link count is no hard link.
+        let directory = fs::metadata(&profile).unwrap();
+        assert_eq!(
+            held_file_path(&profile, directory.dev() as u32, directory.ino()),
+            Some(profile.clone())
+        );
     }
     #[tokio::test(flavor = "current_thread")]
     async fn settled_owners_rescans_only_a_starting_browser_until_cancelled() {
