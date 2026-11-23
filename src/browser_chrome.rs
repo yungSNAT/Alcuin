@@ -2954,19 +2954,23 @@ mod macos_process {
                 .map(|byte| *byte as u8)
                 .collect();
             let path = PathBuf::from(std::ffi::OsStr::from_bytes(&path));
-            // The kernel returns a partial path, without an error, when the whole one does not
-            // fit, so only a path that still names the same file counts.
-            anyhow::ensure!(
-                std::fs::metadata(&path).is_ok_and(|found| {
-                    use std::os::unix::fs::MetadataExt;
-                    found.dev() as u32 == stat.vst_dev && found.ino() == stat.vst_ino
-                }),
-                super::ProfileUnplaced
+            // The kernel returns a partial path, without an error, when the whole one does not fit.
+            paths.push(
+                super::held_file_path(&path, stat.vst_dev, stat.vst_ino)
+                    .ok_or(super::ProfileUnplaced)?,
             );
-            paths.push(path);
         }
         Ok(Some(paths))
     }
+}
+/// The path of a file a process holds open, given the path the kernel reported for it and the
+/// file's device and inode, or `None` when that path no longer leads to the same file.
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn held_file_path(reported: &Path, device: u32, inode: u64) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let found = fs::metadata(reported).ok()?;
+    (found.dev() as u32 == device && found.ino() == inode).then(|| reported.to_owned())
 }
 /// Parses `kern.procargs2`: argc as a native int, the executable path, NUL padding, then argc
 /// NUL-terminated arguments. Environment strings follow and are never read.
@@ -4920,7 +4924,8 @@ mod tests {
         fs::copy("/bin/bash", &chrome).unwrap();
         let mut browser = Command::new(&chrome)
             .arg("-c")
-            .arg("exec 3<\"$1\"; echo ready; read -r _")
+            // Descriptor 4 is a file unlinked whilst open, which places the browser nowhere.
+            .arg("exec 3<\"$1\" 4>\"$1-journal\"; rm \"$1-journal\"; echo ready; read -r _")
             .arg(format!("--user-data-dir={}", old.display()))
             .arg(old.join("Default/History"))
             .stdin(Stdio::piped())
@@ -4983,6 +4988,31 @@ mod tests {
             !matches!(&owners, Ok(found) if !found.contains(&browser.id())),
             "An unreadable open-file path must count as an owner or refuse: {owners:?}"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn held_files_are_placed_only_by_the_canonical_path_of_the_same_file() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let profile = home.join("PUBLIC-profile");
+        fs::create_dir_all(profile.join("Default")).unwrap();
+        let file = profile.join("Default/History");
+        fs::write(&file, "").unwrap();
+        let found = fs::metadata(&file).unwrap();
+        let (device, inode) = (found.dev() as u32, found.ino());
+        assert_eq!(held_file_path(&file, device, inode), Some(file.clone()));
+        // A partial path that leads back to the file through a symlink.
+        symlink(profile.join("Default"), home.join("PUBLIC-alias")).unwrap();
+        assert_eq!(
+            held_file_path(&home.join("PUBLIC-alias/History"), device, inode),
+            Some(file.clone()),
+            "A path through a symlink is placed by its target"
+        );
+        let other = home.join("PUBLIC-other");
+        fs::write(&other, "").unwrap();
+        assert_eq!(held_file_path(&other, device, inode), None);
+        assert_eq!(held_file_path(Path::new("History"), device, inode), None);
     }
     #[tokio::test(flavor = "current_thread")]
     async fn settled_owners_rescans_only_a_starting_browser_until_cancelled() {
