@@ -882,13 +882,16 @@ impl ChromeConnection {
         let record_path = profile.path().join("oracle-chrome-native.json");
         let raw = read_record(&record_path)?;
         let recorded = raw.is_some();
-        if let Some(raw) = raw {
-            let record = Self::recorded_launch(
+        let record = match raw {
+            Some(raw) => Self::recorded_launch(
                 raw,
                 &profile_entry.identity,
                 &executable,
                 require_executable,
-            )?;
+            )?,
+            None => None,
+        };
+        if let Some(record) = record {
             match record.process_identity.liveness() {
                 Liveness::Alive => {
                     let (endpoint, browser) =
@@ -1144,15 +1147,20 @@ impl ChromeConnection {
         })
     }
     /// The profile's launch record, once its version and the profile and executable identities
-    /// it names still match.
+    /// it names still match, or `None` once the process it names has exited. A browser update
+    /// replaces the executable a stale record names, so its identities prove nothing; the
+    /// occupancy scan that follows still refuses a separately launched owner.
     fn recorded_launch(
         raw: Value,
         profile_identity: &NativeIdentity,
         executable: &Path,
         require_executable: bool,
-    ) -> Result<LaunchRecord> {
+    ) -> Result<Option<LaunchRecord>> {
         let record: LaunchRecord = serde_json::from_value(raw)
             .context("Native Chrome ownership record is malformed; refusing launch")?;
+        if record.version == 1 && record.process_identity.liveness() == Liveness::Dead {
+            return Ok(None);
+        }
         anyhow::ensure!(
             record.version == 1
                 && record.profile_identity == *profile_identity
@@ -1165,7 +1173,7 @@ impl ChromeConnection {
                 "Chrome executable or native profile identity changed; refusing reuse"
             )
         );
-        Ok(record)
+        Ok(Some(record))
     }
     /// Attaches to the live Chrome process a launch record names, once its visibility mode and
     /// debugging endpoint still match. A cookie bootstrap refuses an existing process.
@@ -4456,6 +4464,56 @@ mod tests {
         };
         atomic_json(&fresh.path().join("oracle-chrome-native.json"), &record).unwrap();
         fresh
+    }
+    /// A launch record whose executable identity no longer matches, as after a browser update.
+    fn record_after_browser_update(
+        home: &Path,
+        process: ProcessIdentity,
+    ) -> (Value, NativeIdentity) {
+        let replaced = home.join("replaced-browser");
+        fs::write(&replaced, b"PUBLIC replaced").unwrap();
+        let profile_identity = NativeEntry::open(home, true).unwrap().identity;
+        let record = LaunchRecord {
+            version: 1,
+            process_identity: process,
+            profile_identity: profile_identity.clone(),
+            executable: std::env::current_exe().unwrap(),
+            executable_identity: NativeEntry::open(&replaced, false).unwrap().identity,
+            headless: false,
+            endpoint: None,
+            extra: serde_json::Map::new(),
+        };
+        (serde_json::to_value(record).unwrap(), profile_identity)
+    }
+    #[test]
+    fn a_dead_owners_record_is_stale_after_a_browser_update() {
+        let home = tempfile::tempdir().unwrap();
+        let mut dead = ProcessIdentity::current().unwrap();
+        dead.pid = u32::MAX;
+        dead.started_at_ms = 1.0;
+        assert_eq!(dead.liveness(), Liveness::Dead);
+        let (raw, profile) = record_after_browser_update(home.path(), dead);
+        let executable = std::env::current_exe().unwrap();
+        assert!(
+            ChromeConnection::recorded_launch(raw, &profile, &executable, true)
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn a_live_owners_changed_identity_still_refuses_reuse() {
+        let home = tempfile::tempdir().unwrap();
+        let live = ProcessIdentity::current().unwrap();
+        assert_eq!(live.liveness(), Liveness::Alive);
+        let (raw, profile) = record_after_browser_update(home.path(), live);
+        let executable = std::env::current_exe().unwrap();
+        let error = ChromeConnection::recorded_launch(raw, &profile, &executable, true)
+            .err()
+            .unwrap();
+        assert!(
+            error.downcast_ref::<ChromeIdentityRefusal>().is_some(),
+            "{error:#}"
+        );
     }
     #[test]
     fn chrome_receives_an_ordinary_profile_path() {
