@@ -58,10 +58,11 @@ Alcuin keeps its own ChatGPT sign-in in a profile at `~/.oracle/browser-profile`
 | `--browser-headless` | Run the browser without a window |
 | `--browser-chrome-path <path>` | Use this browser executable; `CHROME_PATH` does the same |
 | `--browser-max-concurrent-tabs <n>` | Most ChatGPT tabs open at once in one profile; further runs wait for a free tab |
+| `--browser-slot-wait <duration>` | Longest a run may wait for a free tab before it starts, 2 hours by default; a run that waits longer stops with 'Timed out waiting for ChatGPT browser slot' and sends nothing |
 | `--browser-tab <ref>` | Reuse an open ChatGPT tab, by `current`, target ID, URL or part of its title |
 | `--browser-attach-running` | Use a browser you already started with remote debugging, instead of launching one |
 | `--chatgpt-url <url>` | Open another ChatGPT address, such as a project's |
-| `--browser-timeout <duration>` | Longest a run may wait for the answer |
+| `--browser-timeout <duration>` | Longest a run may wait for the answer, counted from the send, so time spent waiting for a free tab does not count |
 
 `--browser-attach-running` cannot be combined with options that configure the browser Alcuin would otherwise launch, such as `--browser-manual-login`, `--browser-keep-browser` or `--browser-port`.
 
