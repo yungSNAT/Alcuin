@@ -321,7 +321,7 @@ const SECRET_VALUE_FLAGS: [&str; 9] = [
     "--token",
     "-p",
 ];
-const VALUE_FLAGS: [&str; 50] = [
+const VALUE_FLAGS: [&str; 51] = [
     "--aspect",
     "--azure-api-version",
     "--azure-deployment",
@@ -345,6 +345,7 @@ const VALUE_FLAGS: [&str; 50] = [
     "--browser-recheck-timeout",
     "--browser-research",
     "--browser-reuse-wait",
+    "--browser-slot-wait",
     "--browser-tab",
     "--browser-timeout",
     "--browser-url",

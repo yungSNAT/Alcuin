@@ -29,6 +29,30 @@ fn marketplace_lists_the_repository_root_as_the_alcuin_plugin() {
     assert_eq!(lines.next(), Some("name: alcuin"));
 }
 
+/// The plugin's review skill previews and asks before sending, and checks what the answer
+/// cites before reporting it.
+#[test]
+fn plugin_ships_the_review_skill() {
+    let skill = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/alcuin-review/SKILL.md"),
+    )
+    .unwrap();
+    let mut lines = skill.lines();
+    assert_eq!(lines.next(), Some("---"));
+    assert_eq!(lines.next(), Some("name: alcuin-review"));
+    for step in [
+        "alcuin --engine browser --dry-run summary --files-report",
+        "Show the user the provider and the file list, and wait for approval.",
+        "**Leave out secrets.**",
+        "don't send it again",
+        "alcuin ground <id>",
+        "Exit 2 means the check did not run",
+        "Open every cited file and line yourself",
+    ] {
+        assert!(skill.contains(step), "{step}");
+    }
+}
+
 #[tokio::test]
 async fn plugin_server_matches_the_local_browser_claude_config() {
     let home = tempfile::tempdir().unwrap();

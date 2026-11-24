@@ -207,6 +207,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked native_temporary_chat_predicate_and_retained_send_guard -- --ignored
+      - run: cargo test --locked --lib native_chrome_on_another_profile_leaves_a_macos_profile_free -- --ignored --nocapture
 
   # The upload runs apart from the tests so the OIDC token is never available
   # while test code runs. A Codecov outage fails only this job.

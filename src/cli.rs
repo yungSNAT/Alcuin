@@ -2204,6 +2204,7 @@ const ROOT_RUN_FLAGS: &[&str] = &[
     "remote-chrome",
     "browser-chrome-path",
     "browser-timeout",
+    "browser-slot-wait",
     "browser-input-timeout",
     "browser-max-concurrent-tabs",
     "browser-profile-lock-timeout",
@@ -2377,6 +2378,7 @@ fn browser_runtime_overrides_at_scope(
     }
     for (flag, key, fallback) in [
         ("browser-timeout", "timeoutMs", 1_200_000u64),
+        ("browser-slot-wait", "slotWaitMs", 7_200_000u64),
         ("browser-input-timeout", "inputTimeoutMs", 60_000u64),
     ] {
         if let Some(raw) = text(flag) {
@@ -3131,6 +3133,8 @@ mod browser_options_tests {
                 "PUBLIC Chrome.exe",
                 "--browser-timeout",
                 "1h30m",
+                "--browser-slot-wait",
+                "3h",
                 "--browser-input-timeout",
                 "0",
                 "--browser-max-concurrent-tabs",
@@ -3147,6 +3151,7 @@ mod browser_options_tests {
         assert!(config["remoteChromeBrowserWSEndpoint"].is_null());
         assert_eq!(config["chromePath"], "PUBLIC Chrome.exe");
         assert_eq!(config["timeoutMs"].as_u64(), Some(5_400_000));
+        assert_eq!(config["slotWaitMs"].as_u64(), Some(10_800_000));
         assert_eq!(config["inputTimeoutMs"].as_u64(), Some(0));
         assert_eq!(config["maxConcurrentTabs"], 7);
         assert_eq!(config["attachRunning"], true);

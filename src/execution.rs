@@ -687,6 +687,7 @@ fn browser_settings(
     for (input_key, key) in [
         ("browserModelStrategy", "modelStrategy"),
         ("browserResearchMode", "researchMode"),
+        ("browserSlotWaitMs", "slotWaitMs"),
         ("browserArchive", "archiveConversations"),
         ("browserKeepBrowser", "keepBrowser"),
         ("browserEndMarker", "endMarker"),

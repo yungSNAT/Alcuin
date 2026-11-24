@@ -12,7 +12,8 @@ Browser Options
   --browser-cookie-path <path>                 Use a specific Chrome/Chromium cookie store file.
   --browser-attach-running                     Attach to your current Chrome session through its local remote debugging toggle.
   --browser-url <url>                          Alias for --chatgpt-url.
-  --browser-timeout <ms|s|m>                   Cap total wait time for the assistant response.
+  --browser-timeout <ms|s|m>                   Cap the wait for the assistant response, counted from the send.
+  --browser-slot-wait <ms|s|m|h>               Cap the wait for a free ChatGPT browser slot (default 2h).
   --browser-input-timeout <ms|s|m>             Cap how long we wait for the composer textarea.
   --browser-profile-lock-timeout <ms|s|m|h>    Wait for the manual-login profile lock before sending.
   --browser-cookie-wait <ms|s|m>               Wait before retrying cookie sync when Chrome cookies are empty or locked.

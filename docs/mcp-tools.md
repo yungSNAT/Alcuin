@@ -33,6 +33,7 @@ Runs an Alcuin session through the API or ChatGPT in the browser. Only `prompt` 
 | `browserFallback` | `grok` or `none` | `grok` consults grok.com once if ChatGPT fails ([Browser runs](browser.md#grok)) |
 | `browserKeepBrowser` | boolean | Leave the browser open afterwards |
 | `browserEndMarker` | boolean | As `--browser-end-marker` ([Partial answers](sessions.md#partial-answers)) |
+| `browserSlotWaitMs` | integer | As `--browser-slot-wait`, in milliseconds |
 
 | Output | Meaning |
 | --- | --- |
