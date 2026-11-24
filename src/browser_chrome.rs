@@ -280,6 +280,20 @@ impl std::fmt::Display for ChromeIdentityRefusal {
     }
 }
 impl std::error::Error for ChromeIdentityRefusal {}
+/// A Chromium whose profile cannot yet be placed: on Linux, one whose arguments cannot settle it
+/// and which has opened no profile file that would, as when it is starting on another profile; on
+/// macOS, one holding a file whose reported path no longer names it.
+#[derive(Debug)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+struct ProfileUnplaced;
+impl std::fmt::Display for ProfileUnplaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "A Chromium browser's profile cannot be established; profile occupancy is unknown",
+        )
+    }
+}
+impl std::error::Error for ProfileUnplaced {}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LaunchRecord {
@@ -899,7 +913,12 @@ impl ChromeConnection {
                 Liveness::Dead => {}
             }
         }
-        let owners = profile_processes(profile.path())?;
+        let owners = settled_owners(
+            || profile_processes(profile.path()),
+            options.timeout,
+            cancel,
+        )
+        .await?;
         if options.borrow_profile_owner && !owners.is_empty() {
             return Self::borrow_profile_owner(
                 profile, &owners, &options, bootstrap, lock, admission, cancel,
@@ -1265,7 +1284,14 @@ impl ChromeConnection {
         );
         profile.check()?;
         anyhow::ensure!(
-            profile_processes(profile.path())? == [pid] && identity.liveness() == Liveness::Alive,
+            settled_owners(
+                || profile_processes(profile.path()),
+                options.timeout,
+                cancel
+            )
+            .await?
+                == [pid]
+                && identity.liveness() == Liveness::Alive,
             ChromeIdentityRefusal("The profile's browser changed during attachment")
         );
         Self::borrowed_process(profile, endpoint, browser, identity, lock, admission).await
@@ -1301,7 +1327,7 @@ impl ChromeConnection {
                 return Ok(false);
             }
         }
-        let owners = profile_processes(profile.path())?;
+        let owners = settled_owners(|| profile_processes(profile.path()), timeout, cancel).await?;
         profile.check()?;
         Ok(owners == [identity.pid] && identity.liveness() == Liveness::Alive)
     }
@@ -2222,6 +2248,34 @@ fn denied_profile_candidate(
     // shortcut: inaccessible browsers with arbitrarily renamed comm are unsupported; use an explicit borrowed endpoint.
     Ok(())
 }
+/// A profile's owners, scanned again whilst a Chromium cannot yet be placed
+/// ([`ProfileUnplaced`]) until `wait`, at most [`STARTING_BROWSER_WAIT`], has passed.
+async fn settled_owners(
+    mut scan: impl FnMut() -> Result<Vec<u32>>,
+    wait: Duration,
+    cancel: &CancellationToken,
+) -> Result<Vec<u32>> {
+    let deadline = Instant::now() + wait.min(STARTING_BROWSER_WAIT);
+    loop {
+        let error = match scan() {
+            Err(error) if error.is::<ProfileUnplaced>() => error,
+            owners => return owners,
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || cancel.is_cancelled() {
+            return Err(error);
+        }
+        // One last scan at the deadline, but none once cancelled.
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(error),
+            _ = tokio::time::sleep(left.min(Duration::from_millis(25))) => {}
+        }
+    }
+}
+/// In testing, Chromium 158 starting on another profile left occupancy unknown for 51 to 102 ms
+/// on an idle host; one still unplaced after this keeps it unknown.
+const STARTING_BROWSER_WAIT: Duration = Duration::from_secs(5);
 // Native argv avoids flattened shell quoting and never reads profile contents.
 #[cfg(target_os = "linux")]
 fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
@@ -2290,7 +2344,11 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
                 use std::os::unix::ffi::OsStrExt;
                 let path = Path::new(std::ffi::OsStr::from_bytes(value));
                 let owns = match fs::canonicalize(path) {
-                    Ok(reading) => reading == profile,
+                    Ok(reading) if reading == profile => true,
+                    // The browser's profile was moved to the launched path and its old name then
+                    // reused: the kernel reports the moved files under their new path.
+                    Ok(_) => open_paths(&entry.path())?
+                        .is_some_and(|open| open.iter().any(|(_, open)| open.starts_with(profile))),
                     Err(error)
                         if error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() =>
                     {
@@ -2300,6 +2358,7 @@ fn profile_processes_at(profile: &Path, proc_root: &Path) -> Result<Vec<u32>> {
                 };
                 if owns {
                     owners.push(pid);
+                    break;
                 }
             }
         }
@@ -2354,12 +2413,8 @@ fn title_names_profile(process: &Path, title: &[u8], profile: &Path) -> Result<b
 /// resolves is kept as written: the kernel still reports the files held open under it.
 #[cfg(target_os = "linux")]
 fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path) -> Result<bool> {
-    let open = match open_paths(process) {
-        Ok(open) => open,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !process.try_exists()? => {
-            return Ok(false);
-        }
-        Err(error) => return Err(error.into()),
+    let Some(open) = open_paths(process)? else {
+        return Ok(false);
     };
     let holds = |directory: &Path, from: u32| {
         open.iter()
@@ -2381,27 +2436,42 @@ fn open_files_name_profile(process: &Path, readings: &[PathBuf], profile: &Path)
     // shortcut: a profile renamed whilst open also counts for an existing reading of its old path.
     anyhow::ensure!(
         readings.iter().any(|reading| reading == profile),
-        "A Chromium browser's profile cannot be established; profile occupancy is unknown"
+        ProfileUnplaced
     );
     Ok(true)
 }
-/// The descriptors a Linux process holds open, with their paths; descriptors closed during the
-/// scan are skipped.
+/// The descriptors a Linux process holds open, with their paths, or `None` once it has exited;
+/// descriptors closed during the scan are skipped.
 #[cfg(target_os = "linux")]
-fn open_paths(process: &Path) -> std::io::Result<Vec<(u32, PathBuf)>> {
-    let mut paths = vec![];
-    for entry in fs::read_dir(process.join("fd"))? {
-        let entry = entry?;
-        let Ok(descriptor) = entry.file_name().to_string_lossy().parse() else {
-            continue;
-        };
-        match fs::read_link(entry.path()) {
-            Ok(path) => paths.push((descriptor, path)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+fn open_paths(process: &Path) -> Result<Option<Vec<(u32, PathBuf)>>> {
+    let scan = || -> std::io::Result<_> {
+        let mut paths = vec![];
+        for entry in fs::read_dir(process.join("fd"))? {
+            let entry = entry?;
+            let Ok(descriptor) = entry.file_name().to_string_lossy().parse() else {
+                continue;
+            };
+            match fs::read_link(entry.path()) {
+                Ok(path) => paths.push((descriptor, path)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
+        Ok(paths)
+    };
+    match scan() {
+        Ok(paths) => Ok(Some(paths)),
+        // Procfs answers a descriptor link of a process reaped mid-scan with permission denied.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) && !process.try_exists()? =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
     }
-    Ok(paths)
 }
 #[cfg(windows)]
 fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
@@ -2644,10 +2714,16 @@ fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
                     .then(|| args.get(index + 1).map(Vec::as_slice))
                     .flatten()
             });
-            if let Some(value) = value
-                && fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(value)))? == profile
+            let Some(value) = value else {
+                continue;
+            };
+            // A profile moved to the launched path after its old name was reused, as on Linux.
+            if fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(value)))? == profile
+                || macos_process::open_paths(pid)?
+                    .is_some_and(|open| open.iter().any(|path| path.starts_with(profile)))
             {
                 owners.push(pid);
+                break;
             }
         }
     }
@@ -2787,6 +2863,120 @@ mod macos_process {
         raw.truncate(size);
         Ok(Some(super::procargs(&raw)?))
     }
+    /// The current paths of the files the process holds open; descriptors closed during the
+    /// read are skipped.
+    pub(super) fn open_paths(pid: u32) -> Result<Option<Vec<PathBuf>>> {
+        use std::os::unix::ffi::OsStrExt;
+        // sys/proc_info.h `proc_fileinfo` and `vnode_fdinfowithpath`, which libc lacks.
+        #[repr(C)]
+        struct VnodeWithPath {
+            // proc_fileinfo: 2 u32 flags, an i64 offset, an i32 type and u32 guard flags.
+            _file: [u64; 3],
+            vnode: libc::vnode_info_path,
+        }
+        const PROC_PIDFDVNODEPATHINFO: libc::c_int = 2;
+        let pid = libc::c_int::try_from(pid)?;
+        let failed = |error: std::io::Error| -> Result<Option<Vec<PathBuf>>> {
+            if gone(&error) {
+                Ok(None)
+            } else {
+                Err(error).context("Native open files are unavailable")
+            }
+        };
+        // SAFETY: a null buffer asks only for the size.
+        let needed =
+            unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+        if needed <= 0 {
+            return failed(std::io::Error::last_os_error());
+        }
+        let entry = std::mem::size_of::<libc::proc_fdinfo>();
+        // Room for descriptors opened between the two calls.
+        // SAFETY: proc_fdinfo is plain old data.
+        let mut descriptors =
+            vec![unsafe { std::mem::zeroed::<libc::proc_fdinfo>() }; needed as usize / entry + 64];
+        let bytes = libc::c_int::try_from(std::mem::size_of_val(descriptors.as_slice()))?;
+        // SAFETY: the buffer holds `bytes` bytes of proc_fdinfo records.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDLISTFDS,
+                0,
+                descriptors.as_mut_ptr().cast(),
+                bytes,
+            )
+        };
+        if read <= 0 {
+            return failed(std::io::Error::last_os_error());
+        }
+        // A full buffer may have left descriptors out.
+        anyhow::ensure!(
+            (read as usize) < std::mem::size_of_val(descriptors.as_slice()),
+            "Native open files changed while they were read"
+        );
+        descriptors.truncate(read as usize / entry);
+        let size = libc::c_int::try_from(std::mem::size_of::<VnodeWithPath>())?;
+        let mut paths = vec![];
+        for descriptor in descriptors
+            .iter()
+            .filter(|descriptor| descriptor.proc_fdtype == libc::PROX_FDTYPE_VNODE as u32)
+        {
+            // SAFETY: VnodeWithPath is plain old data.
+            let mut info: VnodeWithPath = unsafe { std::mem::zeroed() };
+            // SAFETY: the buffer holds `size` bytes, and the kernel writes at most that.
+            let read = unsafe {
+                libc::proc_pidfdinfo(
+                    pid,
+                    descriptor.proc_fd,
+                    PROC_PIDFDVNODEPATHINFO,
+                    (&raw mut info).cast(),
+                    size,
+                )
+            };
+            if read <= 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EBADF) {
+                    continue;
+                }
+                return failed(error);
+            }
+            anyhow::ensure!(read == size, "Native open-file record is malformed");
+            let stat = &info.vnode.vip_vi.vi_stat;
+            // An unlinked file has no path to place it by.
+            if stat.vst_nlink == 0 {
+                continue;
+            }
+            let path: Vec<u8> = info
+                .vnode
+                .vip_path
+                .as_flattened()
+                .iter()
+                .take_while(|byte| **byte != 0)
+                .map(|byte| *byte as u8)
+                .collect();
+            let path = PathBuf::from(std::ffi::OsStr::from_bytes(&path));
+            // The kernel returns a partial path, without an error, when the whole one does not fit.
+            paths.push(
+                super::held_file_path(&path, stat.vst_dev, stat.vst_ino)
+                    .ok_or(super::ProfileUnplaced)?,
+            );
+        }
+        Ok(Some(paths))
+    }
+}
+/// The canonical path of a file a process holds open, given the path the kernel reported for it
+/// and the file's device and inode, or `None` when that path no longer leads to the same file.
+/// A partial path can lead back to the file through a symlink, so only its canonical form counts,
+/// and a hard-linked file has other names it may be held under, so none of them does.
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn held_file_path(reported: &Path, device: u32, inode: u64) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let real = fs::canonicalize(reported) // NOSONAR: brief local file access
+        .ok()
+        .filter(|_| reported.is_absolute())?;
+    let found = fs::metadata(&real).ok()?;
+    (found.dev() as u32 == device && found.ino() == inode && (found.is_dir() || found.nlink() == 1))
+        .then_some(real)
 }
 /// Parses `kern.procargs2`: argc as a native int, the executable path, NUL padding, then argc
 /// NUL-terminated arguments. Environment strings follow and are never read.
@@ -4681,6 +4871,352 @@ mod tests {
         );
     }
     #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn launch_scans_wait_for_a_chromium_starting_on_another_profile() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let directory = |name: &str| {
+            let path = home.path().join(name);
+            fs::create_dir(&path).unwrap();
+            fs::canonicalize(path).unwrap()
+        };
+        let other = directory("PUBLIC-other");
+        let profile = directory("PUBLIC-profile");
+        // Chromium starting on the other profile has rewritten its title but opened no profile file.
+        let proc_root = home.path().join("PUBLIC-proc");
+        let process = proc_root.join("90");
+        fs::create_dir_all(process.join("fd")).unwrap();
+        symlink(home.path().join("chromium"), process.join("exe")).unwrap();
+        let title = format!(
+            "/usr/lib/chromium/chromium --user-data-dir={} --no-first-run about:blank\0",
+            other.display()
+        );
+        fs::write(process.join("cmdline"), title).unwrap();
+        let scan = || profile_processes_at(&profile, &proc_root);
+        let cancel = CancellationToken::new();
+        assert!(
+            settled_owners(scan, Duration::from_millis(100), &cancel)
+                .await
+                .unwrap_err()
+                .is::<ProfileUnplaced>(),
+            "A browser that never opens a profile file leaves occupancy unknown"
+        );
+        // Its first profile file opens 50 ms into the scan.
+        let (opened, file) = (process.join("fd/3"), other.join("Default/History"));
+        let opener = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            symlink(file, opened).unwrap();
+        });
+        assert_eq!(
+            settled_owners(scan, Duration::from_secs(5), &cancel)
+                .await
+                .unwrap(),
+            Vec::<u32>::new()
+        );
+        opener.join().unwrap();
+    }
+    /// Each scan reads every process, so a stand-in browser one test leaves unplaced would
+    /// fail another test's scan: the tests that start one take turns.
+    #[cfg(target_os = "macos")]
+    fn macos_scan_lock() -> std::sync::MutexGuard<'static, ()> {
+        static SCANS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        SCANS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// A copy of bash named `chrome`, holding open a file of the profile it was launched on, after
+    /// that profile was moved to the launched path and its old name reused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn browsers_whose_profile_moved_into_the_launched_path_are_owners_on_macos() {
+        use std::io::BufRead;
+        let _scans = macos_scan_lock();
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let old = home.join("PUBLIC-old");
+        fs::create_dir_all(old.join("Default")).unwrap();
+        fs::write(old.join("Default/History"), "").unwrap();
+        let chrome = home.join("chrome");
+        fs::copy("/bin/bash", &chrome).unwrap();
+        let mut browser = Command::new(&chrome)
+            .arg("-c")
+            // Descriptor 4 is a file unlinked whilst open, which places the browser nowhere.
+            .arg("exec 3<\"$1\" 4>\"$1-journal\"; rm \"$1-journal\" || exit 1; echo ready; read -r _")
+            .arg(format!("--user-data-dir={}", old.display()))
+            .arg(old.join("Default/History"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(browser.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let profile = home.join("PUBLIC-profile");
+        fs::rename(&old, &profile).unwrap();
+        fs::create_dir(&old).unwrap();
+        let owners = profile_processes(&profile);
+        let unrelated = home.join("PUBLIC-unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        let elsewhere = profile_processes(&unrelated);
+        browser.kill().unwrap();
+        browser.wait().unwrap();
+        assert!(owners.unwrap().contains(&browser.id()));
+        assert!(!elsewhere.unwrap().contains(&browser.id()));
+    }
+    /// A browser on another profile holding a hard-linked file leaves occupancy unknown until
+    /// the extra link goes.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hard_linked_open_files_leave_occupancy_unknown_on_macos() {
+        use std::io::BufRead;
+        let _scans = macos_scan_lock();
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let other = home.join("PUBLIC-other");
+        fs::create_dir_all(other.join("Default")).unwrap();
+        let held = other.join("Default/History");
+        fs::write(&held, "").unwrap();
+        let link = home.join("PUBLIC-link");
+        fs::hard_link(&held, &link).unwrap();
+        let profile = home.join("PUBLIC-profile");
+        fs::create_dir(&profile).unwrap();
+        let chrome = home.join("chrome");
+        fs::copy("/bin/bash", &chrome).unwrap();
+        let mut browser = Command::new(&chrome)
+            .arg("-c")
+            .arg("exec 3<\"$1\"; echo ready; read -r _")
+            .arg(format!("--user-data-dir={}", other.display()))
+            .arg(&held)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(browser.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        let linked = profile_processes(&profile);
+        fs::remove_file(&link).unwrap();
+        // The kernel may still name the file by the link last looked up; look up the other.
+        fs::metadata(&held).unwrap();
+        let single = profile_processes(&profile);
+        let listing = Command::new("lsof")
+            .args(["+L", "-p", &browser.id().to_string()])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+        browser.kill().unwrap();
+        browser.wait().unwrap();
+        assert_eq!(ready, "ready\n");
+        assert!(linked.unwrap_err().is::<ProfileUnplaced>());
+        assert!(
+            single
+                .as_ref()
+                .is_ok_and(|owners| !owners.contains(&browser.id())),
+            "{single:?}; {listing:?}"
+        );
+    }
+    /// A real Chrome on another profile, from startup to steady state, never makes a free
+    /// profile look occupied or unknown. CI's native-chrome-macos job runs it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Requires installed Chrome; reads a running browser's open files"]
+    fn native_chrome_on_another_profile_leaves_a_macos_profile_free() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let environment = ["CHROME_PATH", "PATH"]
+            .into_iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+            .chain([("HOME".to_owned(), home.display().to_string())])
+            .collect();
+        let executable =
+            crate::browser_detect::chrome(&environment).expect("Install Chrome to run this test");
+        let profile = home.join("PUBLIC-profile");
+        fs::create_dir(&profile).unwrap();
+        for headless in [true, false] {
+            // A fresh profile each time, so one run's DevToolsActivePort cannot vouch for the next.
+            let other = home.join(format!("PUBLIC-other-{headless}"));
+            fs::create_dir(&other).unwrap();
+            let mut command = Command::new(&executable);
+            command
+                .arg(format!("--user-data-dir={}", other.display()))
+                .args([
+                    "--no-first-run",
+                    "--use-mock-keychain",
+                    "--remote-debugging-port=0",
+                    "about:blank",
+                ])
+                .env("HOME", &home)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if headless {
+                command.arg("--headless=new");
+            }
+            let mut browser = command.spawn().unwrap();
+            let started = std::time::Instant::now();
+            let (mut scans, mut failures) = (0, vec![]);
+            // Startup, then steady state once DevTools is up.
+            while started.elapsed() < Duration::from_secs(12) {
+                match profile_processes(&profile) {
+                    Ok(owners) if owners.is_empty() => {}
+                    outcome => {
+                        failures.push(format!("{} ms: {outcome:?}", started.elapsed().as_millis()))
+                    }
+                }
+                scans += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let started_up = other.join("DevToolsActivePort").exists();
+            let alive = browser.try_wait().unwrap().is_none();
+            // The scan recognised the browser, so its descriptors were read every time.
+            let recognised = profile_processes(&other).map(|owners| owners.contains(&browser.id()));
+            let listing = Command::new("lsof")
+                .args(["+L", "-p", &browser.id().to_string()])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            browser.kill().unwrap();
+            browser.wait().unwrap();
+            let linked: Vec<_> = listing
+                .lines()
+                .filter(|line| {
+                    line.split_whitespace()
+                        .nth(7)
+                        .and_then(|links| links.parse::<u64>().ok())
+                        .is_some_and(|links| links > 1)
+                })
+                .collect();
+            println!(
+                "headless={headless} scans={scans} failures={} started_up={started_up} \
+                 browser descriptors with more than one link: {}",
+                failures.len(),
+                linked.len()
+            );
+            for line in &linked {
+                println!("  {line}");
+            }
+            assert!(started_up, "Chrome never wrote DevToolsActivePort");
+            assert!(alive, "Chrome exited before the scans ended");
+            assert!(
+                matches!(recognised, Ok(true)),
+                "The scan never saw Chrome: {recognised:?}"
+            );
+            assert!(failures.is_empty(), "headless={headless}: {failures:#?}");
+        }
+    }
+    /// As above, but the held file's path outgrows the 1,024 bytes libproc reports.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn overlong_open_paths_never_hide_a_moved_profile_owner_on_macos() {
+        use std::io::BufRead;
+        let _scans = macos_scan_lock();
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let old = home.join("PUBLIC-old");
+        fs::create_dir(&old).unwrap();
+        let chrome = home.join("chrome");
+        fs::copy("/bin/bash", &chrome).unwrap();
+        let mut browser = Command::new(&chrome)
+            .arg("-c")
+            .arg(
+                "cd \"$1\" || exit 1; for _ in 1 2 3 4 5 6 7 8 9 10 11; do \
+                 mkdir \"$2\" && cd \"$2\" || exit 1; done; exec 3>History; echo ready; read -r _",
+            )
+            .arg(format!("--user-data-dir={}", old.display()))
+            .arg(&old)
+            .arg("d".repeat(100))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(browser.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let profile = home.join("PUBLIC-profile");
+        fs::rename(&old, &profile).unwrap();
+        fs::create_dir(&old).unwrap();
+        let owners = profile_processes(&profile);
+        browser.kill().unwrap();
+        browser.wait().unwrap();
+        assert!(
+            !matches!(&owners, Ok(found) if !found.contains(&browser.id())),
+            "An unreadable open-file path must count as an owner or refuse: {owners:?}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn held_files_are_placed_only_by_the_canonical_path_of_the_same_file() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let profile = home.join("PUBLIC-profile");
+        fs::create_dir_all(profile.join("Default")).unwrap();
+        let file = profile.join("Default/History");
+        fs::write(&file, "").unwrap();
+        let found = fs::metadata(&file).unwrap();
+        let (device, inode) = (found.dev() as u32, found.ino());
+        assert_eq!(held_file_path(&file, device, inode), Some(file.clone()));
+        // A partial path that leads back to the file through a symlink.
+        symlink(profile.join("Default"), home.join("PUBLIC-alias")).unwrap();
+        assert_eq!(
+            held_file_path(&home.join("PUBLIC-alias/History"), device, inode),
+            Some(file.clone()),
+            "A path through a symlink is placed by its target"
+        );
+        let other = home.join("PUBLIC-other");
+        fs::write(&other, "").unwrap();
+        assert_eq!(held_file_path(&other, device, inode), None);
+        assert_eq!(held_file_path(Path::new("History"), device, inode), None);
+        // A partial path naming another hard link outside the profile cannot place the file.
+        let linked = home.join("PUBLIC-linked");
+        fs::hard_link(&file, &linked).unwrap();
+        assert_eq!(held_file_path(&linked, device, inode), None);
+        assert_eq!(held_file_path(&file, device, inode), None);
+        // A directory's link count is no hard link.
+        let directory = fs::metadata(&profile).unwrap();
+        assert_eq!(
+            held_file_path(&profile, directory.dev() as u32, directory.ino()),
+            Some(profile.clone())
+        );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn settled_owners_rescans_only_a_starting_browser_until_cancelled() {
+        let calls = std::cell::Cell::new(0);
+        let scan = |answer: fn() -> Result<Vec<u32>>| {
+            calls.set(calls.get() + 1);
+            answer()
+        };
+        let (wait, cancel) = (Duration::from_secs(5), CancellationToken::new());
+        assert_eq!(
+            settled_owners(|| scan(|| Ok(vec![7])), wait, &cancel)
+                .await
+                .unwrap(),
+            vec![7]
+        );
+        let failed = settled_owners(
+            || scan(|| Err(anyhow::anyhow!("Native process list is unavailable"))),
+            wait,
+            &cancel,
+        );
+        assert!(!failed.await.unwrap_err().is::<ProfileUnplaced>());
+        assert_eq!(calls.get(), 2, "Only a starting browser is scanned again");
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            stop.cancel();
+        });
+        let starting = settled_owners(|| scan(|| Err(ProfileUnplaced.into())), wait, &cancel);
+        assert!(starting.await.unwrap_err().is::<ProfileUnplaced>());
+        assert_eq!(
+            calls.get(),
+            3,
+            "Cancellation during the pause stops the next scan"
+        );
+    }
+    #[cfg(target_os = "linux")]
     #[test]
     fn browsers_outliving_a_removed_profile_are_placed_by_their_open_files() {
         use std::os::unix::fs::symlink;
@@ -4736,6 +5272,71 @@ mod tests {
                 fs::remove_dir_all(home.path().join(root)).unwrap();
             }
         }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn browsers_whose_profile_moved_into_the_launched_path_are_placed_by_their_open_files() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let directory = |name: &str| {
+            let path = home.path().join(name);
+            fs::create_dir(&path).unwrap();
+            fs::canonicalize(path).unwrap()
+        };
+        // The browser started on PUBLIC-old; that folder then moved to PUBLIC-profile, the path
+        // being launched, and a new PUBLIC-old took its name. The kernel reports the moved files.
+        let profile = directory("PUBLIC-profile");
+        let reused = directory("PUBLIC-old");
+        let browser = |root: &str, cmdline: &str, open: Option<PathBuf>| {
+            let process = home.path().join(root).join("90");
+            fs::create_dir_all(process.join("fd")).unwrap();
+            symlink(home.path().join("chrome"), process.join("exe")).unwrap();
+            fs::write(process.join("cmdline"), cmdline).unwrap();
+            if let Some(open) = open {
+                symlink(open, process.join("fd/3")).unwrap();
+            }
+            home.path().join(root)
+        };
+        let argv = format!(
+            "chrome\0--user-data-dir={}\0about:blank\0",
+            reused.display()
+        );
+        let title = format!(
+            "/opt/google/chrome/chrome --user-data-dir={} about:blank\0",
+            reused.display()
+        );
+        // Titles already placed such a browser by its open files; only the argv form was missed.
+        for cmdline in [argv.clone(), title] {
+            let moved = browser(
+                "PUBLIC-moved",
+                &cmdline,
+                Some(profile.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &moved).unwrap(),
+                vec![90],
+                "Files held under the launched path make the browser its owner: {cmdline:?}"
+            );
+            let unmoved = browser(
+                "PUBLIC-unmoved",
+                &cmdline,
+                Some(reused.join("Default/History")),
+            );
+            assert_eq!(
+                profile_processes_at(&profile, &unmoved).unwrap(),
+                Vec::<u32>::new(),
+                "{cmdline:?}"
+            );
+            for root in ["PUBLIC-moved", "PUBLIC-unmoved"] {
+                fs::remove_dir_all(home.path().join(root)).unwrap();
+            }
+        }
+        // Descriptors that cannot be read whilst the process is present establish nothing.
+        let unreadable = browser("PUBLIC-unreadable", &argv, None);
+        fs::remove_dir(unreadable.join("90/fd")).unwrap();
+        assert!(profile_processes_at(&profile, &unreadable).is_err());
+        // A process gone before its descriptors are read holds none.
+        assert_eq!(open_paths(&unreadable.join("91")).unwrap(), None);
     }
     #[cfg(target_os = "linux")]
     #[test]
