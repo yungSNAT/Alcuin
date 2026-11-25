@@ -3,7 +3,7 @@
 # (Apple silicon):
 #   curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
 # It checks the archive's SHA-256 checksum and that the binary runs before it replaces anything.
-# ALCUIN_VERSION picks a release tag such as v0.1.0 (default: the latest release).
+# ALCUIN_VERSION picks a release tag such as v0.2.0 (default: the latest release).
 # ALCUIN_INSTALL_DIR is the folder for both binaries (default: ~/.local/bin).
 # ALCUIN_DOWNLOAD_URL replaces the release download folder, for an HTTPS mirror.
 set -eu

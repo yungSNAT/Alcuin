@@ -129,10 +129,10 @@ Read [SECURITY.md](SECURITY.md) before attaching files: everything you attach go
 
 Alcuin suits you if you want a model from another vendor to answer about a fixed set of files, and to keep every answer. Other tools fit other needs:
 
-- **A second look from the same family, with nothing to install:** Claude Code's [advisor tool](https://code.claude.com/docs/en/advisor) lets Claude consult a stronger Claude model, which reads the whole conversation.
-- **Review without driving a web page:** OpenAI's [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) runs Codex reviews from Claude Code. Codex reads what it chooses, not a packet you fix in advance.
-- **Several models at once:** [consult-llm](https://github.com/raine/consult-llm) and [pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) consult several providers through their APIs or local CLIs.
-- **Gemini, Claude or an Intel Mac:** [Oracle](https://github.com/steipete/oracle), the tool Alcuin is ported from.
+- **A second look from the same family, with nothing to install:** some coding agents can consult a stronger model of their own family, which reads the whole conversation.
+- **Review without driving a web page:** comparable tools run another vendor's coding agent as a reviewer inside yours. That agent reads what it chooses, not a packet you fix in advance.
+- **Several models at once:** comparable tools consult several providers through their APIs or local CLIs.
+- **Gemini, Claude or an Intel Mac:** the tool Alcuin is ported from, named above.
 
 ## Development
 
