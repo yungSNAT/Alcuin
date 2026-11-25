@@ -2836,13 +2836,37 @@ fn macos_dir_owns_profile(
             if open.iter().any(|open_path| open_path.starts_with(profile)) {
                 return Ok(true);
             }
+            // libproc reports resolved paths (/var is /private/var), so the missing path is
+            // compared as typed and with its longest existing ancestor resolved.
+            let resolved = resolve_existing_ancestor(path);
             anyhow::ensure!(
-                open.iter().any(|open_path| open_path.starts_with(path)),
+                open.iter().any(
+                    |open_path| open_path.starts_with(path) || open_path.starts_with(&resolved)
+                ),
                 ProfileUnplaced
             );
             Ok(false)
         }
         Err(error) => Err(error.into()),
+    }
+}
+/// `path` with its longest existing ancestor canonicalised and the missing rest appended.
+#[cfg(target_os = "macos")]
+fn resolve_existing_ancestor(path: &Path) -> PathBuf {
+    let mut missing = vec![];
+    let mut base = path;
+    loop {
+        if let Ok(mut resolved) = fs::canonicalize(base) {
+            resolved.extend(missing.iter().rev());
+            return resolved;
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                base = parent;
+            }
+            _ => return path.to_owned(),
+        }
     }
 }
 /// macOS process records from libproc and `kern.procargs2`. A process that exits during a read
@@ -6028,6 +6052,17 @@ mod tests {
             .unwrap()
         );
         assert!(!macos_dir_owns_profile(&missing, &profile, || Ok(None)).unwrap());
+        // macOS reports open files by resolved path: /tmp is /private/tmp.
+        let linked = tempfile::Builder::new()
+            .prefix("PUBLIC-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let gone = linked.path().join("PUBLIC-gone");
+        let reported = fs::canonicalize(linked.path())
+            .unwrap()
+            .join("PUBLIC-gone/Default/History");
+        assert!(!reported.starts_with(linked.path()), "{reported:?}");
+        assert!(!macos_dir_owns_profile(&gone, &profile, || Ok(Some(vec![reported]))).unwrap());
         assert!(
             macos_dir_owns_profile(&missing, &profile, || {
                 Ok(Some(vec![profile.join("Default/History")]))
