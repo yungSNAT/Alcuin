@@ -456,11 +456,13 @@ fn fallback_warning(meta: &Value) -> Option<Value> {
     (thinking["verified"] == true
         && thinking["requestedLevel"] == "extra-high"
         && thinking["fallbackFrom"] == "pro")
-        .then(|| {
-            json!({"code":"browser-pro-unavailable-fallback","severity":"warning",
-            "message":"ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro.",
-            "details":{"requestedLevel":"pro","appliedLevel":"extra-high"}})
-        })
+        .then(pro_fallback_warning)
+}
+/// The Pro-unavailable warning, fixed text only, so the MCP result can carry it whole.
+pub(crate) fn pro_fallback_warning() -> Value {
+    json!({"code":"browser-pro-unavailable-fallback","severity":"warning",
+    "message":"ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro.",
+    "details":{"requestedLevel":"pro","appliedLevel":"extra-high"}})
 }
 /// Reference archive decision and its log line. Rust sends only in verified
 /// Temporary Chat, so a run with a conversation is never archived.

@@ -48,7 +48,7 @@ Runs an Alcuin session through the API or ChatGPT in the browser. Only `prompt` 
 | `thinkingSelection` | The thinking level the browser asked for and the label it verified |
 | `artifacts` | Files the run saved, such as the transcript |
 | `images` | Images the run saved |
-| `warnings` | Problems that did not stop the run, such as a staging folder that could not be removed |
+| `warnings` | Problems that did not stop the run, such as a staging folder that could not be removed, or a Pro request that ChatGPT answered at Extra High (`browser-pro-unavailable-fallback`) |
 | `browserCleanup` | Present when the browser tab still needs recovery |
 | `detached` | Whether the run continues in a detached worker |
 

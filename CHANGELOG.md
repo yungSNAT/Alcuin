@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The MCP `consult` and session results now carry the `browser-pro-unavailable-fallback` warning when ChatGPT answered a Pro request at Extra High because it showed Pro as unavailable. Only the CLI said so before, so an agent calling the MCP server read the answer as Pro.
+
 - New `alcuin-review` skill, shipped with the Claude Code plugin: it reviews uncommitted changes, a commit or a pull request through Alcuin, previews and asks before sending, checks every cited file and line, and reports the findings that hold from P0 to P3.
 - A Pro request that ChatGPT answers at Extra High, because it shows Pro as unavailable on the account, now says so: the session gains a `browser-pro-unavailable-fallback` warning, and the CLI prints it above the answer. The thinking evidence records `fallbackFrom: "pro"`. The MCP result does not carry the warning yet, and a follow-up to such a session, which runs at Extra High, does not repeat it.
 - On Linux, a Chrome that keeps running after its profile folder is deleted no longer stops every Alcuin launch with a bare 'No such file or directory (os error 2)'. Alcuin now places such a browser by the files it still holds open, as it already did for one whose process title hides its profile: files under the profile being launched make it that profile's owner, files under its own deleted folder rule it out, and with neither the launch still refuses, now with 'profile occupancy is unknown'.
