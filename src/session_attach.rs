@@ -684,6 +684,74 @@ mod tests {
             assert!(text.contains(message), "{text}");
         }
     }
+    #[tokio::test]
+    async fn attaching_to_incomplete_native_sessions_preserves_answers_and_endpoint_evidence() {
+        let mut dead = ProcessIdentity::current().unwrap();
+        dead.pid = u32::MAX;
+        dead.started_at_ms = 1.0;
+        assert_eq!(dead.liveness(), Liveness::Dead);
+
+        for (runtime, diagnostic) in [
+            (json!({}), "Native recovery endpoint host is missing"),
+            (
+                json!({"chromeHost":"127.0.0.1","chromePort":65536}),
+                "Native recovery endpoint port is missing",
+            ),
+            (
+                json!({"chromeHost":"127.0.0.1","chromePort":9222}),
+                "Native recovery has no pinned browser socket",
+            ),
+            (
+                json!({"chromeHost":"127.0.0.1","chromePort":9222,"chromeBrowserWSEndpoint":"ws://127.0.0.1:9223/devtools/browser/PUBLIC-browser"}),
+                "CDP endpoint identity is invalid or conflicts with its host/port",
+            ),
+            (
+                json!({"chromeHost":"127.0.0.1","chromePort":9222,"chromeBrowserWSEndpoint":"ws://127.0.0.1:9222/devtools/browser/PUBLIC-browser"}),
+                "Native recovery has no recorded admission directory",
+            ),
+        ] {
+            let (_home, store, id) = fixture();
+            store
+                .update(&id, |_| {
+                    Ok(Some(json!({
+                        "mode":"browser", "status":"error", "recoveryRequired":true,
+                        "lifecycle":{"detached":true,"processIdentity":dead,"workerPid":dead.pid,
+                            "workerProcessStartedAtMs":dead.started_at_ms},
+                        "browser":{"runtime":runtime},
+                        "response":{"status":"incomplete","incompleteReason":"incomplete-capture"}
+                    })))
+                })
+                .unwrap();
+            let answer = "PUBLIC saved answer\n";
+            store.append_log(&id, Some("PUBLIC-a"), answer).unwrap();
+            let saved = store.stored_for_update(&id).unwrap();
+            let mut output = Vec::new();
+            let exit = tokio::time::timeout(
+                Duration::from_secs(5),
+                attach(
+                    &store,
+                    &id,
+                    &AttachView {
+                        model: None,
+                        hide_prompt: true,
+                        render: false,
+                    },
+                    &Environment::new(),
+                    &CancellationToken::new(),
+                    &mut output,
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(exit, 0);
+            assert_eq!(store.stored_for_update(&id).unwrap(), saved);
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.matches(answer.trim_end()).count(), 1, "{output}");
+            let expected = format!("Browser recovery is incomplete: {diagnostic}");
+            assert_eq!(output.matches(&expected).count(), 1, "{output}");
+        }
+    }
     #[test]
     fn a_later_write_to_an_earlier_model_never_repeats_another_models_output() {
         let (_home, store, id) = fixture();
@@ -729,6 +797,148 @@ mod tests {
         assert_eq!(whole, "a\r\nb\\u{d}c\\u{1b}[2A\r\nd");
         for end in 1..text.len() {
             assert_eq!(emitted(&[end, text.len()]), whole, "split at {end}");
+        }
+    }
+    #[test]
+    fn a_heading_added_on_a_later_poll_does_not_repeat_the_answer_prefix() {
+        let mut cursor = LogCursor::default();
+        let mut output = vec![];
+        cursor
+            .emit("PUBLIC-a", "PUBLIC first café\n".into(), &mut output)
+            .unwrap();
+        let headed = "=== PUBLIC-a ===\nPUBLIC first café\nPUBLIC final 🦀\n";
+        for _ in 0..2 {
+            cursor.emit("PUBLIC-a", headed.into(), &mut output).unwrap();
+        }
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "PUBLIC first café\nPUBLIC final 🦀\n"
+        );
+    }
+    #[test]
+    fn a_historical_session_without_model_records_keeps_its_root_log() {
+        let (_home, store, id) = fixture();
+        store
+            .append_log(&id, None, "PUBLIC historical answer\n")
+            .unwrap();
+        let historical = json!({"status":"completed","model":"PUBLIC-legacy","models":[]});
+        let mut cursor = LogCursor::default();
+        let mut output = vec![];
+        for _ in 0..2 {
+            cursor
+                .drain(&store, &id, &historical, None, &mut output)
+                .unwrap();
+        }
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "PUBLIC historical answer\n"
+        );
+    }
+    #[tokio::test]
+    async fn completed_large_utf8_logs_stay_complete_when_rendering_is_skipped() {
+        let (_home, store, id) = fixture();
+        let body = "PUBLIC café 🦀\n".repeat(15_000);
+        assert!(body.len() > MAX_RENDER_BYTES);
+        let log = format!("Answer:\n{body}");
+        store.append_log(&id, Some("PUBLIC-a"), &log).unwrap();
+        store
+            .update_model(&id, "PUBLIC-a", &json!({"status":"completed"}))
+            .unwrap();
+        store
+            .update(&id, |_| Ok(Some(json!({"status":"completed"}))))
+            .unwrap();
+        let mut output = vec![];
+        assert_eq!(
+            attach(
+                &store,
+                &id,
+                &AttachView {
+                    model: Some("PUBLIC-a"),
+                    hide_prompt: true,
+                    render: true
+                },
+                &Environment::new(),
+                &CancellationToken::new(),
+                &mut output
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Render skipped (log too large:"));
+        assert!(
+            output.ends_with(log.trim_end()),
+            "The complete answer must be shown; display_log trims trailing whitespace"
+        );
+        assert_eq!(output.matches("PUBLIC café 🦀").count(), 15_000);
+    }
+    #[tokio::test]
+    async fn followed_completion_keeps_final_logs_notices_and_usage() {
+        for (status, elapsed) in [
+            ("completed", true),
+            ("completed", false),
+            ("partial", false),
+        ] {
+            let (_home, store, id) = fixture();
+            let writer_store = store.clone();
+            let writer_id = id.clone();
+            let writer = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                writer_store
+                    .append_log(&writer_id, Some("PUBLIC-a"), "PUBLIC final answer\n")
+                    .unwrap();
+                writer_store
+                    .update_model(&writer_id, "PUBLIC-a", &json!({"status":status}))
+                    .unwrap();
+                writer_store.update(&writer_id, |_| Ok(Some(json!({"status":status,"usage":{"inputTokens":11,"outputTokens":7,"reasoningTokens":2,"totalTokens":20},"elapsedMs":if elapsed {json!(1500)} else {Value::Null},"response":{"status":if status == "partial" {"incomplete"} else {"completed"},"incompleteReason":if status == "partial" {Some("end-marker-missing")} else {None}}})))).unwrap();
+            });
+            let mut output = vec![];
+            assert_eq!(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    attach(
+                        &store,
+                        &id,
+                        &AttachView {
+                            model: Some("PUBLIC-a"),
+                            hide_prompt: true,
+                            render: true
+                        },
+                        &Environment::new(),
+                        &CancellationToken::new(),
+                        &mut output
+                    )
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                0
+            );
+            writer.await.unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(
+                output.contains(
+                    "Render will apply after completion; streaming raw text meanwhile..."
+                ),
+                "{output}"
+            );
+            assert_eq!(output.matches("PUBLIC final answer").count(), 1, "{output}");
+            assert_eq!(
+                output.contains("Answer incomplete (end-marker-missing)"),
+                status == "partial",
+                "{output}"
+            );
+            if elapsed {
+                assert!(output.contains("↑11 ↓7 ↻2 Δ20"), "{output}");
+                assert!(!output.contains("Finished (tok"), "{output}");
+            } else {
+                assert!(
+                    output.contains("Finished (tok i/o/r/t: 11/7/2/20)"),
+                    "{output}"
+                );
+            }
+            assert!(!output.contains("PUBLIC attached session"), "{output}");
         }
     }
     #[test]
@@ -1053,6 +1263,301 @@ mod tests {
             } else {
                 assert_eq!(current, before, "{case}");
             }
+        }
+    }
+    fn dead_worker() -> ProcessIdentity {
+        let mut dead = ProcessIdentity::current().unwrap();
+        dead.pid = u32::MAX;
+        dead.started_at_ms = 1.0;
+        assert_eq!(dead.liveness(), Liveness::Dead);
+        dead
+    }
+    fn plain() -> AttachView<'static> {
+        AttachView {
+            model: None,
+            hide_prompt: true,
+            render: false,
+        }
+    }
+    #[tokio::test]
+    async fn native_recovery_reports_a_refusal_after_reaching_the_recorded_browser() {
+        use futures_util::StreamExt;
+        for case in ["missing-profile", "refused", "cancelled"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let cancel = CancellationToken::new();
+            // The recorded browser accepts the connection and answers nothing. In `cancelled`
+            // the observer is cancelled before the browser completes its handshake.
+            let stop = cancel.clone();
+            let browser = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                if case == "cancelled" {
+                    stop.cancel();
+                }
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(_)) = socket.next().await {}
+            });
+            let (home, store, id) = fixture();
+            let profile = home.path().join("PUBLIC-profile");
+            if case != "missing-profile" {
+                ProfileRegistry::open(&profile).unwrap();
+            }
+            let dead = dead_worker();
+            store
+                .update(&id, |_| {
+                    Ok(Some(json!({
+                        "mode":"browser", "status":"error", "recoveryRequired":true,
+                        "lifecycle":{"detached":true,"processIdentity":dead,"workerPid":dead.pid,
+                            "workerProcessStartedAtMs":dead.started_at_ms},
+                        "browser":{"config":{"inputTimeoutMs":2000},"runtime":{"chromeHost":"127.0.0.1","chromePort":port,
+                            "chromeBrowserWSEndpoint":format!("ws://127.0.0.1:{port}/devtools/browser/PUBLIC-browser"),
+                            "profileDir":profile}},
+                        "response":{"status":"incomplete","incompleteReason":"incomplete-capture"}
+                    })))
+                })
+                .unwrap();
+            let mut output = Vec::new();
+            let exit = tokio::time::timeout(
+                Duration::from_secs(10),
+                attach(
+                    &store,
+                    &id,
+                    &plain(),
+                    &Environment::new(),
+                    &cancel,
+                    &mut output,
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(exit, if case == "cancelled" { 130 } else { 0 }, "{case}");
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(
+                output.matches("Browser recovery is incomplete: ").count(),
+                1,
+                "{case}: {output}"
+            );
+            if case == "missing-profile" {
+                // Without its admission directory the recorded browser is never contacted.
+                browser.abort();
+            } else {
+                // The connection was made and then released.
+                tokio::time::timeout(Duration::from_secs(5), browser)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+    }
+    #[tokio::test]
+    async fn a_launched_attachment_reports_a_cancellation_it_cannot_request() {
+        let (_home, store, id) = fixture();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut output = Vec::new();
+        let exit = attach_launched(
+            &store,
+            &id,
+            &dead_worker(),
+            &Environment::new(),
+            &cancel,
+            &mut output,
+        )
+        .await
+        .unwrap();
+        assert_eq!(exit, 130);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Unable to request cancellation from launched worker: Launched worker ownership changed; cancellation was not requested\n"
+        );
+    }
+    #[tokio::test]
+    async fn a_dead_worker_is_settled_once_and_a_terminal_model_record_preserves_ownership() {
+        for (run, launched) in [
+            ("running", false),
+            ("completed", false),
+            ("completed", true),
+        ] {
+            let (_home, store, id) = fixture();
+            let dead = dead_worker();
+            // A live controller that is not the saved one is no reason to wait.
+            let controller = ProcessIdentity::current().unwrap();
+            store
+                .update(&id, |_| {
+                    Ok(Some(json!({
+                        "mode":"api", "status":"running",
+                        "lifecycle":{"detached":true,"processIdentity":dead,"workerPid":dead.pid,
+                            "workerProcessStartedAtMs":dead.started_at_ms},
+                        "browser":{"runtime":{"controllerPid":controller.pid,"controllerProcessStartedAtMs":1.0}}
+                    })))
+                })
+                .unwrap();
+            store
+                .update_model(&id, "PUBLIC-a", &json!({"status":run}))
+                .unwrap();
+            let before = store.stored_for_update(&id).unwrap();
+            let mut output = Vec::new();
+            let exit = if launched {
+                attach_launched(
+                    &store,
+                    &id,
+                    &dead,
+                    &Environment::new(),
+                    &CancellationToken::new(),
+                    &mut output,
+                )
+                .await
+            } else {
+                attach(
+                    &store,
+                    &id,
+                    &plain(),
+                    &Environment::new(),
+                    &CancellationToken::new(),
+                    &mut output,
+                )
+                .await
+            }
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            let saved = store.stored_for_update(&id).unwrap();
+            if run == "running" {
+                assert_eq!(exit, 0);
+                assert_eq!(saved["status"], "error");
+                assert_eq!(saved["response"]["incompleteReason"], "incomplete-capture");
+                assert!(
+                    output.contains(
+                        "Session failed: Detached worker exited before the session reached a terminal state."
+                    ),
+                    "{output}"
+                );
+            } else {
+                assert_eq!(exit, i32::from(launched));
+                assert_eq!(saved, before);
+                assert!(
+                    output.ends_with(
+                        "\nModel metadata is terminal while the session commit is incomplete. Session ownership was preserved.\n"
+                    ),
+                    "{output}"
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn a_small_finished_log_explains_that_rendering_needs_a_terminal() {
+        let (_home, store, id) = fixture();
+        store
+            .append_log(&id, Some("PUBLIC-a"), "Answer:\nPUBLIC short answer\n")
+            .unwrap();
+        store
+            .update_model(&id, "PUBLIC-a", &json!({"status":"completed"}))
+            .unwrap();
+        store
+            .update(&id, |_| Ok(Some(json!({"status":"completed"}))))
+            .unwrap();
+        let mut output = Vec::new();
+        let exit = attach(
+            &store,
+            &id,
+            &AttachView {
+                model: Some("PUBLIC-a"),
+                hide_prompt: true,
+                render: true,
+            },
+            &Environment::new(),
+            &CancellationToken::new(),
+            &mut output,
+        )
+        .await
+        .unwrap();
+        assert_eq!(exit, 0);
+        let output = String::from_utf8(output).unwrap();
+        // Test output is never a terminal.
+        assert!(
+            output.contains("Render requested but stdout is not a TTY; showing raw text.\n"),
+            "{output}"
+        );
+        assert!(output.ends_with("PUBLIC short answer"), "{output}");
+    }
+    #[tokio::test]
+    async fn legacy_recovery_reports_an_attachment_that_never_answers_without_reopening() {
+        for cancelled in [false, true] {
+            // The recorded endpoint accepts connections and never replies. When `cancelled`,
+            // the observer is cancelled as the first connection arrives.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let cancel = CancellationToken::new();
+            let stop = cancel.clone();
+            let silent = tokio::spawn(async move {
+                let mut held = vec![];
+                while let Ok((stream, _)) = listener.accept().await {
+                    if cancelled {
+                        stop.cancel();
+                    }
+                    held.push(stream);
+                }
+            });
+            let (_home, store, id) = fixture();
+            let dead = dead_worker();
+            // A legacy record names its dead worker without a native process identity.
+            store
+                .update(&id, |_| {
+                    Ok(Some(json!({
+                        "mode":"browser", "status":"error",
+                        "lifecycle":{"detached":true,"workerPid":dead.pid,
+                            "workerProcessStartedAtMs":dead.started_at_ms},
+                        "browser":{"config":{"inputTimeoutMs":200},"runtime":{"chromeHost":"127.0.0.1","chromePort":port,
+                            "chromeBrowserWSEndpoint":format!("ws://127.0.0.1:{port}/devtools/browser/PUBLIC-browser")}},
+                        "response":{"status":"incomplete","incompleteReason":"chrome-disconnected"}
+                    })))
+                })
+                .unwrap();
+            let before = store.stored_for_update(&id).unwrap();
+            let mut output = Vec::new();
+            let exit = tokio::time::timeout(
+                Duration::from_secs(10),
+                attach(
+                    &store,
+                    &id,
+                    &plain(),
+                    &Environment::new(),
+                    &cancel,
+                    &mut output,
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            silent.abort();
+            assert_eq!(exit, if cancelled { 130 } else { 0 });
+            let output = String::from_utf8(output).unwrap();
+            // One attempt for this record, reported once and never reopened.
+            assert_eq!(
+                output
+                    .matches("Attempting to reattach to the existing Chrome session...")
+                    .count(),
+                1,
+                "{output}"
+            );
+            assert_eq!(
+                output.matches("Browser recovery is incomplete: ").count(),
+                1,
+                "{output}"
+            );
+            if !cancelled {
+                assert!(
+                    output.contains(
+                        "Browser recovery is incomplete: Browser attachment timed out after observation cleanup"
+                    ),
+                    "{output}"
+                );
+            }
+            assert!(
+                !output.contains("Attempting recovery by reopening"),
+                "{output}"
+            );
+            assert_eq!(store.stored_for_update(&id).unwrap(), before);
         }
     }
 }
