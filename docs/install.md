@@ -22,7 +22,7 @@ Both read these environment variables:
 
 | Variable | Effect |
 | --- | --- |
-| `ALCUIN_VERSION` | A release tag such as `v0.1.0`, in place of the latest release |
+| `ALCUIN_VERSION` | A release tag such as `v0.2.0`, in place of the latest release |
 | `ALCUIN_INSTALL_DIR` | The folder for both binaries |
 | `ALCUIN_DOWNLOAD_URL` | A folder holding the release archive and its `.sha256` file, such as a mirror; it must be HTTPS, though `install.ps1` also takes plain HTTP from this machine itself |
 | `ALCUIN_NO_MODIFY_PATH` | `1` leaves your Windows user `Path` alone |

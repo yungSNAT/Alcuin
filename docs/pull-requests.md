@@ -58,4 +58,4 @@ What it does and why:
 - The job reads the pull request's files but never runs its code, and the checkout keeps no token. Only the comment step is handed the job's token, which can write to pull requests and nothing else.
 - To review only when someone adds the label `alcuin-review`, give `pull_request:` the line `types: [labeled]` and add `&& github.event.label.name == 'alcuin-review'` to the `if:`.
 
-The install step runs `install.sh` from `main`, which installs the latest release after checking its archive's SHA-256. To pin a release, pipe it to `ALCUIN_VERSION=v0.1.0 sh` instead of `sh`.
+The install step runs `install.sh` from `main`, which installs the latest release after checking its archive's SHA-256. To pin a release, pipe it to `ALCUIN_VERSION=v0.2.0 sh` instead of `sh`.
