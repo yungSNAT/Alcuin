@@ -2809,28 +2809,38 @@ fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
     }
     Ok(owners)
 }
-/// Checks whether a macOS `--user-data-dir` path (or its open files) names `profile`, tolerating
-/// missing directories or broken symlinks without aborting process scans.
+/// Checks whether a macOS `--user-data-dir` path (or its open files) names `profile`. A missing
+/// folder or broken link is placed by the browser's open files, as on Linux: files under
+/// `profile` make it the owner, files under its own missing path rule it out, and with neither
+/// its occupancy is unknown ([`ProfileUnplaced`]).
 #[cfg(target_os = "macos")]
 fn macos_dir_owns_profile(
     path: &Path,
     profile: &Path,
     open_paths: impl FnOnce() -> Result<Option<Vec<PathBuf>>>,
 ) -> Result<bool> {
-    let matches_open = || {
-        Ok(open_paths()?
-            .is_some_and(|open| open.iter().any(|open_path| open_path.starts_with(profile))))
-    };
     match fs::canonicalize(path) {
         Ok(reading) if reading == profile => Ok(true),
-        Ok(_) => matches_open(),
+        Ok(_) => Ok(open_paths()?
+            .is_some_and(|open| open.iter().any(|open_path| open_path.starts_with(profile)))),
         Err(error)
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            matches_open()
+            // A browser that has exited owns nothing.
+            let Some(open) = open_paths()? else {
+                return Ok(false);
+            };
+            if open.iter().any(|open_path| open_path.starts_with(profile)) {
+                return Ok(true);
+            }
+            anyhow::ensure!(
+                open.iter().any(|open_path| open_path.starts_with(path)),
+                ProfileUnplaced
+            );
+            Ok(false)
         }
         Err(error) => Err(error.into()),
     }
