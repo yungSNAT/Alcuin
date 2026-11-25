@@ -37,6 +37,12 @@ fn expression(body: &str) -> String {
     )
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    /// A fake browser connection for tests. Unset, `run` configures Chrome itself.
+    static TEST_CHROME: std::cell::RefCell<Option<crate::browser_chrome::ConfiguredChrome>>;
+}
+
 pub(crate) struct Request<'a> {
     pub operation: &'a str,
     pub project_url: &'a str,
@@ -502,8 +508,17 @@ pub(crate) async fn run(
         .path()
         .trim_end_matches('/')
         .to_owned();
-    let configured =
-        ChromeConnection::configured(config, environment, cwd, command, cancel).await?;
+    #[cfg(test)]
+    let injected = TEST_CHROME
+        .try_with(|chrome| chrome.borrow_mut().take())
+        .ok()
+        .flatten();
+    #[cfg(not(test))]
+    let injected = None;
+    let configured = match injected {
+        Some(configured) => configured,
+        None => ChromeConnection::configured(config, environment, cwd, command, cancel).await?,
+    };
     let mut connection = configured.connection;
     // Reference projectSourcesRunner hooks, removed before cleanup. A copied profile is never kept.
     let termination = crate::browser_signal::register(crate::browser_signal::Hook::new(
@@ -1073,6 +1088,14 @@ mod tests {
             );
         }
         assert!(decode_sources(&json!({"ok":true,"sources":{}})).is_err());
+        let supplied =
+            decode_sources(&json!({"ok":false,"error":"PUBLIC read failure"})).unwrap_err();
+        assert_eq!(supplied.to_string(), "PUBLIC read failure");
+        let fallback = decode_sources(&json!({"ok":false})).unwrap_err();
+        assert_eq!(
+            fallback.to_string(),
+            "Unable to read ChatGPT project sources."
+        );
     }
     #[test]
     fn copied_sources_default_to_disposable_login_without_overriding_explicit_manual_choice() {
@@ -1446,6 +1469,798 @@ mod tests {
         assert_eq!(config["researchMode"], "off");
         assert_eq!(config["desiredModel"], Value::Null);
         assert_eq!(config["keepBrowser"], false);
+    }
+    #[test]
+    fn a_missing_configuration_is_empty_and_an_environment_profile_backs_manual_login() {
+        let env = Environment::from([(
+            "ORACLE_BROWSER_PROFILE_DIR".into(),
+            " PUBLIC-env-profile ".into(),
+        )]);
+        let config = browser_config(&Value::Null, &json!({}), &env).unwrap();
+        assert_eq!(config["manualLogin"], true);
+        assert_eq!(config["manualLoginProfileDir"], "PUBLIC-env-profile");
+        assert_eq!(config["cookieSync"], false);
+        assert_eq!(config["modelStrategy"], "ignore");
+        assert!(config.get("keepBrowser").is_none());
+        assert!(!uploaded_batch(&[], &[], &["PUBLIC-absent.txt".into()]));
+    }
+
+    type Commands = Arc<std::sync::Mutex<Vec<Value>>>;
+    const TARGET: &str = "PUBLIC-sources-target";
+    const PROJECT: &str = "https://chatgpt.com/g/g-p-public/project?tab=sources";
+
+    /// An in-memory DevTools peer: `reply` answers each command, and every command is kept.
+    async fn fake_devtools(
+        mut reply: impl FnMut(&Value) -> Value + Send + 'static,
+    ) -> (crate::cdp::Cdp, Commands, tokio::task::JoinHandle<()>) {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::{
+            WebSocketStream,
+            tungstenite::{Message, protocol::Role},
+        };
+        let (client, peer) = tokio::io::duplex(1024 * 1024);
+        let cdp = crate::cdp::Cdp::from_socket(
+            WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+            Duration::from_secs(1),
+        );
+        let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
+        let commands = Commands::default();
+        let seen = commands.clone();
+        let task = tokio::spawn(async move {
+            while let Some(Ok(Message::Text(text))) = peer.next().await {
+                let command: Value = serde_json::from_str(&text).unwrap();
+                seen.lock().unwrap().push(command.clone());
+                let result = reply(&command);
+                let reply = json!({"id":command["id"],"result":result}).to_string();
+                if peer.send(Message::Text(reply.into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        (cdp, commands, task)
+    }
+    fn evaluated(commands: &Commands, marker: &str) -> Vec<Value> {
+        commands
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|command| {
+                command["method"] == "Runtime.evaluate"
+                    && command["params"]["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains(marker))
+            })
+            .cloned()
+            .collect()
+    }
+    fn methods(commands: &Commands, method: &str) -> Vec<Value> {
+        commands
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|command| command["method"] == method)
+            .map(|command| command["params"].clone())
+            .collect()
+    }
+    /// The JSON arguments `evaluate_with_arguments` appended to an expression.
+    fn arguments(expression: &str) -> Value {
+        let (_, suffix) = expression.rsplit_once(")(...").unwrap();
+        serde_json::from_str(suffix.strip_suffix(')').unwrap()).unwrap()
+    }
+    fn row(name: &str, index: usize) -> Value {
+        json!({"name":name,"index":index,"status":"unknown"})
+    }
+
+    /// A Project Sources page in memory: the Sources tab, the Add dialog, its file input and
+    /// the list. `fault` names the one step that misbehaves.
+    fn sources_page(
+        fault: &'static str,
+        listed: Vec<String>,
+    ) -> impl FnMut(&Value) -> Value + Send + 'static {
+        let mut listed = listed;
+        let mut selected = Vec::<String>::new();
+        let mut batches = 0;
+        let mut confirmed = false;
+        let mut reads_after_confirm = 0;
+        let mut ready_reads = 0;
+        let mut prepare_reads = 0;
+        move |command| {
+            let params = &command["params"];
+            let value = match command["method"].as_str().unwrap() {
+                "Input.dispatchMouseEvent" | "Runtime.releaseObject" => return json!({}),
+                "DOM.getDocument" => return json!({"root":{"nodeId":1}}),
+                "DOM.querySelector" => {
+                    assert_eq!(
+                        params["selector"],
+                        "input[data-oracle-project-sources-input=\"1\"]"
+                    );
+                    return json!({"nodeId":if fault=="node" {0} else {7}});
+                }
+                "DOM.resolveNode" => {
+                    assert_eq!(params["nodeId"], 7);
+                    return if fault == "object" {
+                        json!({"object":{}})
+                    } else {
+                        json!({"object":{"objectId":"PUBLIC-input-object"}})
+                    };
+                }
+                "Runtime.callFunctionOn" => {
+                    assert_eq!(params["objectId"], "PUBLIC-input-object");
+                    json!(fault != "foreign")
+                }
+                "DOM.setFileInputFiles" => {
+                    assert_eq!(params["nodeId"], 7);
+                    batches += 1;
+                    selected = params["files"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|path| {
+                            Path::new(path.as_str().unwrap())
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .into_owned()
+                        })
+                        .collect();
+                    // The first batch lists itself; a later one needs the Upload button.
+                    if batches == 1 {
+                        listed.extend(selected.iter().cloned());
+                    }
+                    return json!({});
+                }
+                "Runtime.evaluate" => {
+                    let expression = params["expression"].as_str().unwrap();
+                    if expression.contains("alcuin-dom:submission") {
+                        json!(true)
+                    } else if expression.contains(ADD) {
+                        assert_eq!(arguments(expression)[0]["click"], false);
+                        if fault == "add" {
+                            json!({"ok":false})
+                        } else {
+                            json!({"ok":true,"x":12.5,"y":30.0})
+                        }
+                    } else if expression.contains(INPUT) {
+                        prepare_reads += 1;
+                        json!({"ok":fault != "input" && prepare_reads % 2 == 0})
+                    } else if expression.contains(CONFIRM) {
+                        assert_eq!(arguments(expression)[0]["names"], json!(selected));
+                        confirmed = true;
+                        json!({"ok":true})
+                    } else if expression.contains(LIST) {
+                        if confirmed && fault != "never" {
+                            reads_after_confirm += 1;
+                            if reads_after_confirm == 2 {
+                                listed.append(&mut selected);
+                            }
+                        }
+                        let rows = listed
+                            .iter()
+                            .enumerate()
+                            .map(|(index, name)| row(name, index))
+                            .collect::<Vec<_>>();
+                        json!({"ok":true,"sources":rows})
+                    } else if expression.contains(READY) {
+                        ready_reads += 1;
+                        json!({"ready":fault != "unready" && ready_reads > 1})
+                    } else if expression.contains(TAB) {
+                        if fault == "unready" {
+                            json!({"ok":false})
+                        } else {
+                            json!({"alreadyOpen":true})
+                        }
+                    } else if expression.contains("JSON.stringify(cfg.names)") {
+                        assert_eq!(arguments(expression)[0]["names"], json!(selected));
+                        json!(fault != "selection")
+                    } else if expression.contains("delete window.__oracleProjectSourcesUpload") {
+                        json!(true)
+                    } else {
+                        panic!(
+                            "Unaccounted Sources expression: {}",
+                            expression.chars().take(120).collect::<String>()
+                        );
+                    }
+                }
+                other => panic!("Unaccounted Sources page method {other}"),
+            };
+            json!({"result":{"value":value}})
+        }
+    }
+    async fn on_sources_page<T>(
+        fault: &'static str,
+        listed: Vec<String>,
+        command: Duration,
+        work: impl AsyncFnOnce(&mut Surface<'_>, &CancellationToken) -> Result<T>,
+    ) -> (Result<T>, Commands) {
+        let (page, commands, peer) = fake_devtools(sources_page(fault, listed)).await;
+        let cancel = CancellationToken::new();
+        let mut reservation = RendererReservation::acquire(
+            page.clone(),
+            "PUBLIC-sources-claim".into(),
+            command,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let mut surface = Surface {
+            reservation: &mut reservation,
+            path: "/g/g-p-public/project".into(),
+            command,
+        };
+        let result = work(&mut surface, &cancel).await;
+        page.disconnect_and_wait(Duration::from_secs(1))
+            .await
+            .unwrap();
+        peer.await.unwrap();
+        (result, commands)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_sources_tab_is_ready_once_open_and_refuses_a_tab_it_cannot_find() {
+        let (ready, commands) = on_sources_page(
+            "",
+            vec![],
+            Duration::from_secs(5),
+            async |surface, cancel| surface.ready(cancel).await,
+        )
+        .await;
+        ready.unwrap();
+        assert_eq!(evaluated(&commands, READY).len(), 2);
+        assert_eq!(evaluated(&commands, TAB).len(), 1);
+        // An already open tab is never clicked again.
+        assert!(methods(&commands, "Input.dispatchMouseEvent").is_empty());
+
+        let (ready, commands) = on_sources_page(
+            "unready",
+            vec![],
+            Duration::from_secs(1),
+            async |surface, cancel| surface.ready(cancel).await,
+        )
+        .await;
+        assert_eq!(
+            ready.unwrap_err().to_string(),
+            "Project Sources tab did not become ready before timeout."
+        );
+        assert!(evaluated(&commands, TAB).len() >= 2);
+        assert!(methods(&commands, "Input.dispatchMouseEvent").is_empty());
+    }
+
+    fn source_files(count: usize) -> (tempfile::TempDir, Vec<UploadFile>) {
+        let home = tempfile::tempdir().unwrap();
+        let files = (1..=count)
+            .map(|index| {
+                let path = home.path().join(format!("PUBLIC-source-{index:02}.txt"));
+                std::fs::write(&path, format!("PUBLIC source {index}\n")).unwrap();
+                UploadFile::open(&path).unwrap()
+            })
+            .collect();
+        (home, files)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn uploads_go_in_batches_of_ten_and_confirm_only_a_batch_not_yet_listed() {
+        let (_home, mut files) = source_files(11);
+        let before = vec![row("PUBLIC-existing.txt", 0)];
+        let (uploaded, commands) = on_sources_page(
+            "",
+            vec!["PUBLIC-existing.txt".into()],
+            Duration::from_secs(5),
+            async |surface, cancel| {
+                surface
+                    .upload(&mut files, &before, Duration::from_secs(1), cancel)
+                    .await
+            },
+        )
+        .await;
+        let uploaded = uploaded.unwrap();
+        let mut expected = vec!["PUBLIC-existing.txt".to_owned()];
+        expected.extend((1..=11).map(|index| format!("PUBLIC-source-{index:02}.txt")));
+        assert_eq!(
+            uploaded
+                .iter()
+                .map(|row| row["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(added_sources(&before, &uploaded).len(), 11, "{uploaded:?}");
+        let selections = methods(&commands, "DOM.setFileInputFiles");
+        assert_eq!(
+            selections
+                .iter()
+                .map(|selection| selection["files"].as_array().unwrap().len())
+                .collect::<Vec<_>>(),
+            [10, 1]
+        );
+        // Only the second batch, which did not list itself, pressed Upload.
+        let confirms = evaluated(&commands, CONFIRM);
+        assert_eq!(confirms.len(), 1);
+        assert_eq!(
+            arguments(confirms[0]["params"]["expression"].as_str().unwrap())[0]["names"],
+            json!(["PUBLIC-source-11.txt"])
+        );
+        // Each Add press is a trusted move, press and release at the control's centre.
+        let presses = methods(&commands, "Input.dispatchMouseEvent");
+        assert_eq!(presses.len(), 6);
+        assert_eq!(presses[1]["type"], "mousePressed");
+        assert_eq!(
+            (presses[1]["x"].as_f64(), presses[1]["y"].as_f64()),
+            (Some(12.5), Some(30.0))
+        );
+        // Every input handle was released, and every upload marker removed.
+        assert_eq!(methods(&commands, "Runtime.releaseObject").len(), 2);
+        assert_eq!(
+            evaluated(&commands, "delete window.__oracleProjectSourcesUpload").len(),
+            2
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_upload_stops_at_the_first_step_it_cannot_confirm() {
+        for (fault, message) in [
+            ("add", "Unable to open the Project Sources Add dialog."),
+            ("input", "Project Sources upload input did not appear."),
+            ("node", "Unable to locate the Project Sources upload input."),
+            ("object", "Project Sources input identity missing"),
+            ("foreign", "Project Sources upload input ownership changed"),
+            ("selection", "Project Sources upload selection changed"),
+            (
+                "never",
+                "Timed out waiting for uploaded project sources: PUBLIC-source-01.txt",
+            ),
+        ] {
+            let (_home, mut files) = source_files(1);
+            let (uploaded, commands) = on_sources_page(
+                fault,
+                vec![],
+                Duration::from_secs(1),
+                async |surface, cancel| {
+                    // A batch that lists itself never waits, so `never` first uploads a
+                    // same-named batch that does; the second then needs a new occurrence.
+                    let mut before = vec![];
+                    if fault == "never" {
+                        let (_placeholder, mut first) = source_files(1);
+                        before = surface
+                            .upload(&mut first, &[], Duration::from_secs(1), cancel)
+                            .await?;
+                    }
+                    surface
+                        .upload(&mut files, &before, Duration::from_secs(1), cancel)
+                        .await
+                },
+            )
+            .await;
+            assert_eq!(uploaded.unwrap_err().to_string(), message, "{fault}");
+            let selected = methods(&commands, "DOM.setFileInputFiles").len();
+            assert_eq!(
+                selected,
+                match fault {
+                    "selection" => 1,
+                    "never" => 2,
+                    _ => 0,
+                },
+                "{fault}"
+            );
+            if fault == "foreign" {
+                assert_eq!(methods(&commands, "Runtime.releaseObject").len(), 1);
+            }
+        }
+    }
+
+    /// The browser a Project Sources run drives, in memory. `fault` names the one step that
+    /// misbehaves.
+    fn sources_browser(fault: &'static str) -> impl FnMut(&Value) -> Value + Send + 'static {
+        let mut url = String::from("about:blank");
+        let mut closed = false;
+        let mut loaded = 0;
+        move |command| {
+            let params = &command["params"];
+            match command["method"].as_str().unwrap() {
+                "Target.createTarget" => json!({"targetId":TARGET}),
+                "Target.attachToTarget" => json!({"sessionId":"PUBLIC-sources-session"}),
+                "Target.getTargetInfo" => {
+                    json!({"targetInfo":{"targetId":TARGET,"type":"page","url":url}})
+                }
+                "Target.getTargets" => {
+                    let mut rows = vec![json!({"targetId":"PUBLIC-other-page","type":"page"})];
+                    if !closed {
+                        rows.push(json!({"targetId":TARGET,"type":"page","url":url}));
+                    }
+                    json!({"targetInfos":rows})
+                }
+                "Target.closeTarget" => {
+                    assert_eq!(params["targetId"], TARGET);
+                    closed = fault != "close";
+                    json!({"success":true})
+                }
+                "Page.enable" => json!({}),
+                "Network.getAllCookies" => json!({"cookies":[]}),
+                "Network.setCookie" => json!({"success":fault != "cookies"}),
+                "Page.navigate" => {
+                    url = params["url"].as_str().unwrap().to_owned();
+                    json!({"frameId":"PUBLIC-frame"})
+                }
+                "Runtime.evaluate" => {
+                    let expression = params["expression"].as_str().unwrap();
+                    let value = if expression == "document.readyState" {
+                        json!("complete")
+                    } else if expression.contains("alcuin-dom:project-sources") {
+                        if expression.contains(READY) {
+                            json!({"ready":true})
+                        } else if expression.contains(LIST) && fault == "list" {
+                            json!({"ok":false,"error":"PUBLIC list failure"})
+                        } else if expression.contains(LIST) {
+                            json!({"ok":true,"sources":[row("PUBLIC-notes.txt",0)]})
+                        } else {
+                            panic!("Unaccounted Sources body")
+                        }
+                    } else if expression.contains("alcuin-dom:submission") {
+                        json!(true)
+                    } else if expression.contains("alcuin-dom:health-login") {
+                        json!({"ok":true,"status":200,"sessionAuthenticated":true})
+                    } else if expression.contains("alcuin-dom:unused-blank") {
+                        json!(url == "about:blank")
+                    } else if expression.contains("searchParams.get('tab')==='sources'") {
+                        // The project page finishes loading on the second look.
+                        loaded += 1;
+                        json!(loaded > 1)
+                    } else {
+                        panic!(
+                            "Unaccounted run expression: {}",
+                            expression.chars().take(120).collect::<String>()
+                        )
+                    };
+                    json!({"result":{"value":value}})
+                }
+                other => panic!("Unaccounted run method {other}"),
+            }
+        }
+    }
+    /// One `run` against `sources_browser`, owning an already exited process when `owned`.
+    async fn run_on_fake_browser(
+        config: Value,
+        environment: &Environment,
+        bootstrap: Option<&crate::browser_auth::CookieBootstrap>,
+        owned: bool,
+        fault: &'static str,
+    ) -> (Result<Value>, Commands, Vec<String>) {
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let (browser, commands, peer) = fake_devtools(sources_browser(fault)).await;
+        let child = owned.then(|| {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "PUBLIC-no-such-test"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            child.wait().unwrap();
+            child
+        });
+        let endpoint = crate::browser_chrome::AttachmentEndpoint {
+            host: "127.0.0.1".into(),
+            port: 9,
+            browser_ws_endpoint: "ws://127.0.0.1:9/devtools/browser/PUBLIC".into(),
+        };
+        let mut configured = crate::browser_chrome::ConfiguredChrome {
+            profile: crate::browser_profile::ProfileRegistry::open(
+                &home.path().join("PUBLIC-profile"),
+            )
+            .unwrap(),
+            connection: ChromeConnection::fixture(endpoint, browser, child, None),
+            source_profile: None,
+            notes: vec![],
+        };
+        let cancel = CancellationToken::new();
+        // `cancelled` stops a run that already holds its seeding lock before it takes a tab.
+        if fault == "cancelled" {
+            let lock = DirectoryLock::acquire(
+                &home.path().join("PUBLIC-bringup.lock"),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            configured.connection = configured.connection.with_bootstrap_lock(lock);
+            cancel.cancel();
+        }
+        let lines = std::sync::Mutex::new(Vec::<String>::new());
+        let result = TEST_CHROME
+            .scope(
+                std::cell::RefCell::new(Some(configured)),
+                run(
+                    Request {
+                        operation: "list",
+                        project_url: PROJECT,
+                        files: &[],
+                        config,
+                    },
+                    environment,
+                    home.path(),
+                    &cancel,
+                    bootstrap,
+                    &|line| lines.lock().unwrap().push(line.to_owned()),
+                ),
+            )
+            .await;
+        peer.await.unwrap();
+        (result, commands, lines.into_inner().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_listed_project_reads_its_sources_on_the_signed_in_page_and_closes_only_its_tab() {
+        let (result, commands, lines) = run_on_fake_browser(
+            json!({"manualLogin":true,"keepBrowser":true}),
+            &Environment::new(),
+            None,
+            false,
+            "",
+        )
+        .await;
+        let value = result.unwrap();
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["operation"], "list");
+        assert_eq!(value["projectUrl"], PROJECT);
+        assert_eq!(value["dryRun"], false);
+        assert_eq!(value["sourcesBefore"], json!([row("PUBLIC-notes.txt", 0)]));
+        assert_eq!(value["sourcesAfter"], value["sourcesBefore"]);
+        assert_eq!(value["added"], json!([]));
+        assert_eq!(value["plannedUploads"], json!([]));
+        assert_eq!(value["warnings"], json!([]));
+        assert!(lines[0].starts_with("Manual login mode enabled; reusing persistent profile at "));
+        assert!(lines.contains(&skipped_cookies_line(&json!({"manualLogin":true})).to_owned()));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("Login check passed"))
+        );
+        assert_eq!(
+            methods(&commands, "Page.navigate"),
+            [
+                json!({"url":"https://chatgpt.com/"}),
+                json!({"url":PROJECT})
+            ]
+        );
+        assert!(methods(&commands, "Network.setCookie").is_empty());
+        assert_eq!(methods(&commands, "Target.closeTarget").len(), 1);
+        // The reservation was taken and released cleanly, never quarantined.
+        let actions = evaluated(&commands, "alcuin-dom:submission")
+            .iter()
+            .map(|command| {
+                arguments(command["params"]["expression"].as_str().unwrap())[0]["action"].clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actions.first(), Some(&json!("acquire")));
+        assert_eq!(
+            actions[actions.len() - 3..],
+            [json!("releasing"), json!("clean"), json!("release")]
+        );
+        assert!(!actions.contains(&json!("quarantine")));
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[tokio::test]
+    async fn extracted_chrome_cookies_seed_an_owned_browser_that_is_retired_then_retained() {
+        let fixture = tempfile::tempdir().unwrap();
+        let (source, environment) = crate::browser_cookie_loader::synthetic_source(fixture.path());
+        let (result, commands, lines) = run_on_fake_browser(
+            json!({"manualLogin":false,"cookieSync":true,"chromeCookiePath":source,"cookieNames":["PUBLIC-session"]}),
+            &environment,
+            None,
+            true,
+            "",
+        )
+        .await;
+        let value = result.unwrap();
+        assert_eq!(value["sourcesBefore"], json!([row("PUBLIC-notes.txt", 0)]));
+        assert_eq!(lines[0], crate::browser_auth::CHROME_COOKIE_SYNC_WARNING);
+        let cookies = methods(&commands, "Network.setCookie");
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0]["name"], "PUBLIC-session");
+        assert_eq!(cookies[0]["domain"], ".chatgpt.com");
+        // The tab closed and its absence was confirmed, but Chrome kept a foreign page, so
+        // the owned process is retained with a warning rather than terminated.
+        assert_eq!(methods(&commands, "Target.closeTarget").len(), 1);
+        let warnings = value["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].as_str().unwrap().starts_with(
+                "Chrome retained because final owned-process termination was unconfirmed: Chrome still contains foreign or unretired targets"
+            ),
+            "{warnings:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_quarantines_its_reservation_or_retires_its_unused_tab() {
+        // A list that cannot be read quarantines the page it reserved.
+        let (result, commands, _) = run_on_fake_browser(
+            json!({"manualLogin":true}),
+            &Environment::new(),
+            None,
+            false,
+            "list",
+        )
+        .await;
+        assert_eq!(result.unwrap_err().to_string(), "PUBLIC list failure");
+        let actions = evaluated(&commands, "alcuin-dom:submission")
+            .iter()
+            .map(|command| {
+                arguments(command["params"]["expression"].as_str().unwrap())[0]["action"].clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actions.last(), Some(&json!("quarantine")));
+        assert!(methods(&commands, "Target.closeTarget").is_empty());
+
+        // Explicit cookies that apply to nothing stop before navigation, and the still blank
+        // tab is retired.
+        let input = json!({"browserInlineCookies":json!([{"name":"PUBLIC-cookie","value":format!("fixture-{}", std::process::id()),"domain":"chatgpt.com"}]).to_string()});
+        let home = tempfile::tempdir().unwrap();
+        let batch = crate::browser_auth::CookieBootstrap::resolve_explicit(
+            &input,
+            &json!({}),
+            &Environment::new(),
+            home.path(),
+        )
+        .unwrap()
+        .unwrap();
+        let (result, commands, _) = run_on_fake_browser(
+            json!({"manualLogin":false,"cookieBootstrapRequired":batch.requirement()}),
+            &Environment::new(),
+            Some(&batch),
+            true,
+            "cookies",
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "No inline cookies were applied; aborting before navigation."
+        );
+        assert_eq!(methods(&commands, "Network.setCookie").len(), 1);
+        assert!(methods(&commands, "Page.navigate").is_empty());
+        assert!(!evaluated(&commands, "alcuin-dom:unused-blank").is_empty());
+        assert_eq!(methods(&commands, "Target.closeTarget").len(), 1);
+
+        // A completed list whose tab never closes reports the cleanup failure.
+        crate::browser_target::TEST_CLOSE_WAIT.set(Some(Duration::from_millis(50)));
+        let (result, _, _) = run_on_fake_browser(
+            json!({"manualLogin":true}),
+            &Environment::new(),
+            None,
+            false,
+            "close",
+        )
+        .await;
+        let owned = run_on_fake_browser(
+            json!({"manualLogin":true}),
+            &Environment::new(),
+            None,
+            true,
+            "close",
+        )
+        .await;
+        crate::browser_target::TEST_CLOSE_WAIT.set(None);
+        // An owned tab that never closes is a cleanup failure too, and Chrome is not terminated.
+        // Which deadline check reports the unconfirmed close depends on scheduling.
+        let owned_error = format!("{:#}", owned.0.unwrap_err());
+        assert!(
+            owned_error.starts_with(&format!(
+                "Project Sources cleanup: target={TARGET}, release=Err("
+            )) && owned_error.contains("retained=Ok(()), disconnect=Ok(())")
+                && owned_error.ends_with("Project Sources completed; browser cleanup failed"),
+            "{owned_error}"
+        );
+        assert_eq!(methods(&owned.1, "Target.closeTarget").len(), 1);
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().starts_with(&format!(
+                "Project Sources cleanup: target={TARGET}, release=Err("
+            )),
+            "{error:#}"
+        );
+        assert!(
+            format!("{error:#}").ends_with("Project Sources completed; browser cleanup failed"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_seeded_run_stops_before_it_takes_a_tab() {
+        let input = json!({"browserInlineCookies":json!([{"name":"PUBLIC-cookie","value":format!("fixture-{}", std::process::id()),"domain":"chatgpt.com"}]).to_string()});
+        let home = tempfile::tempdir().unwrap();
+        let batch = crate::browser_auth::CookieBootstrap::resolve_explicit(
+            &input,
+            &json!({}),
+            &Environment::new(),
+            home.path(),
+        )
+        .unwrap()
+        .unwrap();
+        let (result, commands, _) = run_on_fake_browser(
+            json!({"manualLogin":false,"cookieBootstrapRequired":batch.requirement(),"closeOwnedTabOnCancel":false}),
+            &Environment::new(),
+            Some(&batch),
+            true,
+            "cancelled",
+        )
+        .await;
+        assert!(result.is_err());
+        // No tab was allocated, so none was closed and no cookie was written.
+        assert!(commands.lock().unwrap().is_empty(), "{commands:?}");
+    }
+    #[tokio::test]
+    async fn bootstrap_input_must_match_the_request_and_a_manual_profile_must_be_initialised() {
+        let home = tempfile::tempdir().unwrap();
+        let input = json!({"browserInlineCookies":json!([{"name":"PUBLIC-cookie","value":format!("fixture-{}", std::process::id())}]).to_string()});
+        let batch = crate::browser_auth::CookieBootstrap::resolve_explicit(
+            &input,
+            &json!({}),
+            &Environment::new(),
+            home.path(),
+        )
+        .unwrap()
+        .unwrap();
+        let attempt = async |config: Value, environment: &Environment| {
+            run(
+                Request {
+                    operation: "list",
+                    project_url: PROJECT,
+                    files: &[],
+                    config,
+                },
+                environment,
+                home.path(),
+                &CancellationToken::new(),
+                Some(&batch),
+                &|_| {},
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+        };
+        assert_eq!(
+            attempt(json!({}), &Environment::new()).await,
+            "Project Sources requires fresh cookie bootstrap input"
+        );
+        // A matching, usable batch passes its checks and reaches the browser host check.
+        assert_eq!(
+            attempt(
+                json!({"cookieBootstrapRequired":batch.requirement(),"remoteChrome":{"host":"127.0.0.1","port":9}}),
+                &Environment::new()
+            )
+            .await,
+            "Project Sources v1 uses local browser automation only. Run it on the signed-in browser host."
+        );
+        // Without an injected browser, an uninitialised manual-login profile refuses before
+        // any Chrome starts.
+        let profile = home.path().join("PUBLIC-manual-profile");
+        let error = run(
+            Request {
+                operation: "list",
+                project_url: PROJECT,
+                files: &[],
+                config: json!({"manualLogin":true,"manualLoginProfileDir":profile}),
+            },
+            &Environment::from([
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+                (
+                    "USERPROFILE".into(),
+                    home.path().to_string_lossy().into_owned(),
+                ),
+            ]),
+            home.path(),
+            &CancellationToken::new(),
+            None,
+            &|_| {},
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.starts_with(&format!(
+                "ChatGPT browser manual-login profile is not initialized. Browser mode is using Alcuin's private Chrome profile at {}",
+                profile.display()
+            )),
+            "{error}"
+        );
     }
 }
 #[cfg(test)]
