@@ -90,6 +90,11 @@ fn explicit_missing_paths_refuse_and_default_paths_do_not_visit_unrelated_docume
         docs_check::format_result(&result),
         "Docs/help check: ok (2 flags, 1 files)"
     );
+    // A file named `docs` leaves the default check on the README.
+    fs::write(home.path().join("docs"), "`--stale-flag`\n").unwrap();
+    let result = docs_check::check(home.path(), &[]).unwrap();
+    assert_eq!(result.checked_files, vec!["README.md"]);
+    fs::remove_file(home.path().join("docs")).unwrap();
     fs::create_dir(home.path().join("docs")).unwrap();
     fs::write(
         home.path().join("docs/new-guide.md"),

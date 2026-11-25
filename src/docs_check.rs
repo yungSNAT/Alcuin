@@ -11,7 +11,14 @@ fn default_paths(cwd: &Path) -> Result<Vec<String>> {
     let mut candidates = vec!["README.md".to_owned()];
     let entries = match fs::read_dir(cwd.join("docs")) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidates),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(candidates);
+        }
         Err(error) => return Err(error.into()),
     };
     let mut guides = vec![];
