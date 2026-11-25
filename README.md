@@ -19,7 +19,7 @@ Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/in
 
 </div>
 
-Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows, Linux and macOS (Apple silicon, from the first release after v0.1.0).
+Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows, Linux and macOS (Apple silicon, from v0.2.0).
 
 It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. Use Oracle itself for Gemini, Claude or multi-model runs, or on an Intel Mac: see [When to choose something else](#when-to-choose-something-else).
 
@@ -27,7 +27,7 @@ It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Stein
 
 One command installs both binaries from the latest release, after checking the archive's SHA-256 checksum and that the binary runs on your machine.
 
-Linux, or macOS from the first release after v0.1.0, into `~/.local/bin`:
+Linux, or macOS on Apple silicon, into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
@@ -111,7 +111,7 @@ Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_
 
 ## Known limitations
 
-- Windows, Linux and macOS on Apple silicon; macOS from the first release after v0.1.0. On macOS, CI runs the offline tests and the Chrome fixture test; no browser run has been checked against live ChatGPT there. Intel Macs, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
+- Windows, Linux and macOS on Apple silicon; macOS from v0.2.0. On macOS, CI runs the offline tests and the Chrome fixture test; no browser run has been checked against live ChatGPT there. Intel Macs, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
 - Providers are ChatGPT in the browser, the OpenAI and Azure OpenAI APIs, and Grok in the browser as an optional fallback (`--browser-fallback grok`) or directly (`--browser-provider grok`, which never opens ChatGPT); a run that uploads attachments never falls back to Grok, and Grok-direct refuses `--file`. Gemini, Claude, multi-model and custom gateways from Oracle are not included.
 - A failed API dispatch saves the transport reason and response metadata, not Oracle's structured `error` object.
 - Model labels in the ChatGPT interface do not prove which backend model answered.
