@@ -19,9 +19,9 @@ mod adoption;
 pub(crate) use adoption::{captured_selected, captured_selected_until, require_selected};
 mod completion;
 mod recovery;
-#[cfg(test)]
-pub(crate) use completion::settle_selected;
 pub(crate) use completion::{complete_selected, settle_selected_saved};
+#[cfg(test)]
+pub(crate) use completion::{retry_retirement, settle_selected};
 pub(crate) use recovery::{
     Guard as RecoveryGuard, recover as recover_parent, settle_unsent_switch,
 };

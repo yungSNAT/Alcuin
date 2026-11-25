@@ -228,7 +228,7 @@ pub(super) async fn settle_recovered(
     .await
 }
 
-async fn retry_retirement<F, Fut>(
+pub(crate) async fn retry_retirement<F, Fut>(
     store: &SessionStore,
     id: &str,
     cancel: &CancellationToken,
@@ -244,13 +244,24 @@ where
     };
     // Retry only the durable selected outcome. The original retirement marker and
     // fresh source/owner checks remain mandatory, including after a lost close ACK.
-    acknowledged_parent(store, id, cancel)?;
-    tokio::time::timeout(Duration::from_secs(8), retire())
-        .await
-        .context("Selected child cleanup retry deadline reached")
-        .and_then(|result| result)
-        .with_context(|| format!("Selected child cleanup retry failed after: {first:#}"))
+    // A loaded machine can outlast one retry: with 7 runs at once on 22 November 2026, 2
+    // finished tabs stayed open after it. The answer is already saved by then; a run that
+    // is not detached returns up to 16 s later than with one retry when every retry fails.
+    let mut retry = Ok(());
+    for _ in 0..CLEANUP_RETRIES {
+        acknowledged_parent(store, id, cancel)?;
+        retry = tokio::time::timeout(Duration::from_secs(8), retire())
+            .await
+            .context("Selected child cleanup retry deadline reached")
+            .and_then(|result| result);
+        if retry.is_ok() {
+            break;
+        }
+    }
+    retry.with_context(|| format!("Selected child cleanup retry failed after: {first:#}"))
 }
+/// Retries of a selected child's failed tab cleanup, each within 8 s.
+const CLEANUP_RETRIES: usize = 3;
 
 async fn settle_selected_once(
     store: &SessionStore,
