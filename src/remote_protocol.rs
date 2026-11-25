@@ -124,6 +124,10 @@ pub(crate) fn sanitise(result: &Value, registration_warnings: &[Value]) -> Value
             warnings.push(cleanup_warning(kind, "host", Path::new(path)));
         }
     }
+    // Rebuilt from the thinking evidence the receiver checks, never from the host's text.
+    warnings.extend(crate::browser_log::fallback_warning(
+        &json!({"browser":{"thinkingSelection":result["thinkingSelection"]}}),
+    ));
     warnings.extend_from_slice(registration_warnings);
     if !warnings.is_empty() {
         public["warnings"] = json!(warnings);
