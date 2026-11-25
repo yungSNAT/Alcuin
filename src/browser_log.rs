@@ -451,7 +451,7 @@ pub(crate) fn completion_warnings(meta: &Value, request: &BrowserRequest) -> Vec
 }
 /// A Pro request that ChatGPT answered at Extra High, because it showed Pro as unavailable,
 /// says so in the result rather than reading like a Pro answer.
-fn fallback_warning(meta: &Value) -> Option<Value> {
+pub(crate) fn fallback_warning(meta: &Value) -> Option<Value> {
     let thinking = thinking_evidence(meta);
     (thinking["verified"] == true
         && thinking["requestedLevel"] == "extra-high"

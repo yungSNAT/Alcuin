@@ -656,6 +656,21 @@ mod tests {
         assert!(public["warnings"][0]["details"].get("path").is_none());
     }
     #[test]
+    fn a_host_run_answered_at_extra_high_for_pro_carries_its_fixed_warning() {
+        let fell_back = json!({"verified":true,"requestedLevel":"extra-high","fallbackFrom":"pro"});
+        let captured = json!({"thinkingSelection":fell_back,
+            "warnings":[{"code":"browser-pro-unavailable-fallback","severity":"warning","message":"PUBLIC host text"}]});
+        let public = sanitise(&captured, &[]);
+        assert_eq!(
+            public["warnings"],
+            json!([crate::browser_log::pro_fallback_warning()])
+        );
+        // Without the verified fallback evidence, a host's warning claim does not cross.
+        let claimed = json!({"thinkingSelection":{"verified":true,"requestedLevel":"extra-high"},
+            "warnings":[{"code":"browser-pro-unavailable-fallback","severity":"warning"}]});
+        assert!(sanitise(&claimed, &[]).get("warnings").is_none());
+    }
+    #[test]
     fn registration_rehashes_only_session_artifacts_and_incomplete_images_fail() {
         let home = tempfile::tempdir().unwrap();
         let store = SessionStore::new(home.path().join(".oracle"));

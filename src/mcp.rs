@@ -1046,20 +1046,12 @@ pub fn add_summaries(out: &mut Value, meta: &Value) {
         }
     }
     // Arbitrary warning strings can contain credentials and private paths. Only the
-    // maintained bounded cleanup warning and the fixed Pro-unavailable warning (once) are
-    // allowed across this public boundary.
-    let saved = meta["browser"]["warnings"].as_array().into_iter().flatten();
-    let fell_back = saved
-        .clone()
-        .any(|w| w["code"] == "browser-pro-unavailable-fallback" && w["severity"] == "warning");
-    let mut warnings=saved.filter_map(|w|{
+    // maintained bounded cleanup warning is allowed across this public boundary.
+    let warnings=meta["browser"]["warnings"].as_array().into_iter().flatten().filter_map(|w|{
         if w["code"]!="artifact-staging-cleanup-failed"||w["severity"]!="warning"||!matches!(w["details"]["artifactKind"].as_str(),Some("file"|"image"))||!matches!(w["details"]["origin"].as_str(),Some("local"|"host"|"receiver")){return None;}
         let filename=crate::browser_output::filename(w["details"]["filename"].as_str().filter(|file|!file.is_empty())?);
         Some(json!({"code":"artifact-staging-cleanup-failed","severity":"warning","message":"Artifact publication succeeded and was verified, but staging cleanup failed; residual staging data may remain.","details":{"artifactKind":w["details"]["artifactKind"],"origin":w["details"]["origin"],"filename":filename}}))
     }).collect::<Vec<_>>();
-    if fell_back {
-        warnings.push(crate::browser_log::pro_fallback_warning());
-    }
     if !warnings.is_empty() {
         out["warnings"] = json!(warnings);
     }
