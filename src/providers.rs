@@ -1181,6 +1181,11 @@ mod tests {
             "https://evil-api.openai.com/v1",
             "https://api.openai.com.evil.example/v1",
             "https://api.openai.com@evil.example/v1",
+            "https://user:pass@evil.example/v1?host=api.openai.com",
+            "https://evil.example/api.openai.com/v1",
+            "https://api.openai.com./v1",
+            "https://[::1]/v1",
+            "https://127.0.0.1/v1",
             "http://api.openai.com/v1",
             "not a url",
             "",
@@ -1217,6 +1222,9 @@ mod tests {
             "http://example.com/v1",
             "http://127.0.0.2:8080/v1",
             "http://localhost.example:8080/v1",
+            "http://localhost.:8080/v1",
+            "http://[::2]:8080/v1",
+            "http://user@evil.example@localhost.example/v1",
             "ftp://api.openai.com/v1",
         ] {
             assert!(

@@ -6005,7 +6005,18 @@ mod tests {
 
         assert!(macos_dir_owns_profile(&profile, &profile, || Ok(None)).unwrap());
         assert!(!macos_dir_owns_profile(&other, &profile, || Ok(Some(vec![]))).unwrap());
-        assert!(!macos_dir_owns_profile(&missing, &profile, || Ok(Some(vec![]))).unwrap());
+        // A missing folder with no files that place the browser leaves occupancy unknown.
+        assert!(
+            macos_dir_owns_profile(&missing, &profile, || Ok(Some(vec![])))
+                .unwrap_err()
+                .is::<ProfileUnplaced>()
+        );
+        assert!(
+            !macos_dir_owns_profile(&missing, &profile, || {
+                Ok(Some(vec![missing.join("Default/History")]))
+            })
+            .unwrap()
+        );
         assert!(!macos_dir_owns_profile(&missing, &profile, || Ok(None)).unwrap());
         assert!(
             macos_dir_owns_profile(&missing, &profile, || {
@@ -6015,6 +6026,16 @@ mod tests {
         );
         assert!(macos_dir_owns_profile(&to_profile, &profile, || Ok(None)).unwrap());
         assert!(!macos_dir_owns_profile(&to_other, &profile, || Ok(Some(vec![]))).unwrap());
-        assert!(!macos_dir_owns_profile(&broken, &profile, || Ok(Some(vec![]))).unwrap());
+        assert!(
+            macos_dir_owns_profile(&broken, &profile, || Ok(Some(vec![])))
+                .unwrap_err()
+                .is::<ProfileUnplaced>()
+        );
+        assert!(
+            !macos_dir_owns_profile(&broken, &profile, || {
+                Ok(Some(vec![broken.join("Default/History")]))
+            })
+            .unwrap()
+        );
     }
 }
