@@ -7,14 +7,26 @@ use std::{
     fs,
     path::Path,
 };
-const DEFAULT_PATHS: [&str; 6] = [
-    "README.md",
-    "docs/index.md",
-    "docs/agents.md",
-    "docs/sessions.md",
-    "docs/spec.md",
-    "docs/cli-reference.md",
-];
+fn default_paths(cwd: &Path) -> Result<Vec<String>> {
+    let mut candidates = vec!["README.md".to_owned()];
+    let entries = match fs::read_dir(cwd.join("docs")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidates),
+        Err(error) => return Err(error.into()),
+    };
+    let mut guides = vec![];
+    for entry in entries {
+        let entry = entry?;
+        if let Some(name) = entry.file_name().to_str()
+            && name.ends_with(".md")
+        {
+            guides.push(format!("docs/{name}"));
+        }
+    }
+    guides.sort_by(|left, right| locale_compare(left, right));
+    candidates.extend(guides);
+    Ok(candidates)
+}
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Issue {
     pub file: String,
@@ -127,9 +139,17 @@ fn command_path(line: &str, name: &str) -> Option<String> {
     }
     Some(path.join(" "))
 }
-/// `line` with another command's text inside `$(...)` or PowerShell's `(git ...)` blanked, so
-/// its options are not read as Alcuin's.
-fn without_substitutions(line: &str) -> String {
+fn is_other_tool(text: &str, name: &str) -> bool {
+    let trimmed = text.trim().trim_start_matches(['$', '>']).trim_start();
+    matches!(
+        trimmed.split_whitespace().next(),
+        Some("corepack" | "pnpm" | "npm" | "npx" | "cargo" | "gh" | "codex" | "git")
+    ) && command_path(text, name).is_none()
+}
+/// `line` with another command's text inside `$(...)`, PowerShell's `(git ...)` or inline
+/// backticked commands starting with another tool blanked, so its options are not read as
+/// Alcuin's.
+fn without_substitutions(line: &str, name: &str) -> String {
     let mut line = line.to_owned();
     for open in ["$(", "(git "] {
         let mut from = 0;
@@ -141,13 +161,24 @@ fn without_substitutions(line: &str) -> String {
             from = end;
         }
     }
+    let mut from = 0;
+    while let Some(start) = line[from..].find('`').map(|at| at + from) {
+        let Some(rel_end) = line[start + 1..].find('`') else {
+            break;
+        };
+        let end = start + 1 + rel_end;
+        if is_other_tool(&line[start + 1..end], name) {
+            line.replace_range(start + 1..end, &" ".repeat(end - (start + 1)));
+        }
+        from = end + 1;
+    }
     line
 }
 fn references(markdown: &str, name: &str) -> Vec<Reference> {
     let mut references = vec![];
     let mut section = None;
     for line in markdown.lines() {
-        let line = &without_substitutions(line);
+        let line = &without_substitutions(line, name);
         let hashes = line.bytes().take_while(|b| *b == b'#').count();
         if hashes >= 2
             && line[hashes..].starts_with(char::is_whitespace)
@@ -156,12 +187,7 @@ fn references(markdown: &str, name: &str) -> Vec<Reference> {
             section = Some(line[hashes..].trim().to_owned());
         }
         let command = command_path(line, name);
-        let trimmed = line.trim().trim_start_matches(['$', '>']).trim_start();
-        if matches!(
-            trimmed.split_whitespace().next(),
-            Some("corepack" | "pnpm" | "npm" | "npx" | "cargo" | "gh" | "codex" | "git")
-        ) && command.is_none()
-        {
+        if is_other_tool(line, name) {
             continue;
         }
         let mut flags = slash_flags(line);
@@ -294,10 +320,7 @@ fn surface() -> (
 }
 pub fn check(cwd: &Path, paths: &[String]) -> Result<DocsCheck> {
     let candidates = if paths.is_empty() {
-        DEFAULT_PATHS
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
+        default_paths(cwd)?
     } else {
         paths.to_vec()
     };

@@ -120,20 +120,17 @@ pub fn route_target(raw: &str) -> String {
         }
     }
 }
-/// The reference isCustomBaseUrl negated: an unparseable URL counts as native.
+/// Only HTTPS `api.openai.com` hosts use the native OpenAI Responses adapter.
 fn native(raw: &str) -> bool {
-    reqwest::Url::parse(raw).map_or(true, |url| {
-        url.host_str().is_some_and(|host| {
-            [
-                "api.openai.com",
-                "api.anthropic.com",
-                "generativelanguage.googleapis.com",
-                "api.x.ai",
-            ]
-            .iter()
-            .any(|native| host == *native || host.ends_with(&format!(".{native}")))
-        })
+    reqwest::Url::parse(raw).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url
+                .host_str()
+                .is_some_and(|host| host == "api.openai.com" || host.ends_with(".api.openai.com"))
     })
+}
+fn is_loopback_http(url: &reqwest::Url) -> bool {
+    url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
 }
 fn openrouter(raw: &str) -> bool {
     reqwest::Url::parse(raw).is_ok_and(|u| u.host_str() == Some("openrouter.ai"))
@@ -248,8 +245,8 @@ pub fn resolve_route(
     };
     let url = reqwest::Url::parse(&base).context("Invalid provider base URL")?;
     anyhow::ensure!(
-        matches!(url.scheme(), "https" | "http"),
-        "Provider base URL must use HTTP or HTTPS."
+        url.scheme() == "https" || is_loopback_http(&url),
+        "Provider base URL must use HTTPS (or HTTP on localhost, 127.0.0.1 or [::1])."
     );
     let transport = if !azure && !native(&base) {
         ApiTransport::ChatCompletions
@@ -1161,5 +1158,105 @@ mod tests {
                 .as_f64(),
             1.0 + 0.06 + 0.5 + 0.8,
         );
+    }
+
+    #[test]
+    fn non_openai_and_unparseable_hosts_are_not_treated_as_native_responses() {
+        for url in [
+            "https://api.openai.com/v1",
+            "https://eu.api.openai.com/v1",
+            "https://API.OPENAI.COM/v1",
+        ] {
+            assert!(native(url), "{url}");
+            let (route, _) =
+                resolve_route("gpt-6-astra", &json!({"baseUrl": url}), &Environment::new())
+                    .unwrap();
+            assert_eq!(route.transport, ApiTransport::Responses, "{url}");
+            require_responses(&route).unwrap();
+        }
+        for url in [
+            "https://api.anthropic.com/v1",
+            "https://generativelanguage.googleapis.com/v1",
+            "https://api.x.ai/v1",
+            "https://evil-api.openai.com/v1",
+            "https://api.openai.com.evil.example/v1",
+            "https://api.openai.com@evil.example/v1",
+            "http://api.openai.com/v1",
+            "not a url",
+            "",
+        ] {
+            assert!(!native(url), "{url}");
+        }
+        for url in [
+            "https://api.anthropic.com/v1",
+            "https://generativelanguage.googleapis.com/v1",
+            "https://api.x.ai/v1",
+            "https://evil-api.openai.com/v1",
+            "https://api.openai.com@evil.example/v1",
+        ] {
+            let (route, _) =
+                resolve_route("gpt-6-astra", &json!({"baseUrl": url}), &Environment::new())
+                    .unwrap();
+            assert_eq!(route.transport, ApiTransport::ChatCompletions, "{url}");
+            assert!(require_responses(&route).is_err(), "{url}");
+        }
+        assert!(
+            resolve_route(
+                "gpt-6-astra",
+                &json!({"baseUrl": "not a url"}),
+                &Environment::new(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn remote_http_urls_are_rejected_and_explicit_loopback_http_is_allowed() {
+        for url in [
+            "http://api.openai.com/v1",
+            "http://example.com/v1",
+            "http://127.0.0.2:8080/v1",
+            "http://localhost.example:8080/v1",
+            "ftp://api.openai.com/v1",
+        ] {
+            assert!(
+                resolve_route("gpt-6-astra", &json!({"baseUrl": url}), &Environment::new(),)
+                    .is_err(),
+                "{url}"
+            );
+        }
+        assert!(
+            resolve_route(
+                "openai/gpt-6-astra",
+                &json!({"baseUrl": "http://api.openai.com/v1"}),
+                &Environment::new(),
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_route(
+                "gpt-6-astra",
+                &json!({"azure": {"endpoint": "http://example.openai.azure.com", "deployment": "d"}}),
+                &Environment::new(),
+            )
+            .is_err()
+        );
+        for url in [
+            "http://127.0.0.1:8080/v1",
+            "http://localhost:8080/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            let (route, _) =
+                resolve_route("gpt-6-astra", &json!({"baseUrl": url}), &Environment::new())
+                    .unwrap();
+            assert_eq!(route.transport, ApiTransport::ChatCompletions, "{url}");
+        }
+        let (azure, _) = resolve_route(
+            "gpt-6-astra",
+            &json!({"azure": {"endpoint": "http://127.0.0.1:8080", "deployment": "d"}}),
+            &Environment::new(),
+        )
+        .unwrap();
+        assert_eq!(azure.transport, ApiTransport::Responses);
     }
 }

@@ -55,7 +55,7 @@ fn other_tools_command_lines_keep_their_own_flags() {
     let home = tempfile::tempdir().unwrap();
     fs::write(
         home.path().join("install.md"),
-        "npx skills add yungSNAT/Alcuin --skill alcuin --global --yes\n$ gh attestation verify a.zip --repo yungSNAT/Alcuin\ncodex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp\nnpx @steipete/oracle status --json\n",
+        "npx skills add yungSNAT/Alcuin --skill alcuin --global --yes\n$ gh attestation verify a.zip --repo yungSNAT/Alcuin\ncodex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp\nIn Codex, `codex mcp add alcuin --env ORACLE_ENGINE=browser -- alcuin-mcp` adds it.\nnpx @steipete/oracle status --json\n",
     )
     .unwrap();
     let result = docs_check::check(home.path(), &["install.md".into()]).unwrap();
@@ -90,6 +90,43 @@ fn explicit_missing_paths_refuse_and_default_paths_do_not_visit_unrelated_docume
         docs_check::format_result(&result),
         "Docs/help check: ok (2 flags, 1 files)"
     );
+    fs::create_dir(home.path().join("docs")).unwrap();
+    fs::write(
+        home.path().join("docs/new-guide.md"),
+        "alcuin --stale-guide-flag\n",
+    )
+    .unwrap();
+    fs::write(home.path().join("docs/notes.txt"), "`--ignored`\n").unwrap();
+    let result = docs_check::check(home.path(), &[]).unwrap();
+    assert_eq!(result.checked_files, vec!["README.md", "docs/new-guide.md"]);
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].file, "docs/new-guide.md");
+    assert_eq!(result.issues[0].flag, "--stale-guide-flag");
+}
+#[test]
+fn default_check_covers_readme_and_all_repository_guides() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let result = docs_check::check(root, &[]).unwrap();
+    assert!(
+        result.issues.is_empty(),
+        "{}",
+        docs_check::format_result(&result)
+    );
+    let mut guides: Vec<String> = fs::read_dir(root.join("docs"))
+        .unwrap()
+        .map(|entry| format!("docs/{}", entry.unwrap().file_name().to_str().unwrap()))
+        .filter(|path| path.ends_with(".md"))
+        .collect();
+    guides.sort();
+    let mut checked_guides: Vec<String> = result
+        .checked_files
+        .iter()
+        .filter(|path| path.starts_with("docs/"))
+        .cloned()
+        .collect();
+    checked_guides.sort();
+    assert_eq!(checked_guides, guides);
+    assert!(result.checked_files.contains(&"README.md".to_owned()));
 }
 #[test]
 fn actual_cli_reports_drift_as_exit_one_and_json_stays_parseable() {

@@ -2519,11 +2519,11 @@ fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
                                     .then(|| args.get(index + 1).map(String::as_str))
                                     .flatten()
                             });
-                            if let Some(directory) = directory {
-                                let entry = NativeEntry::open(Path::new(directory), true)?;
-                                if entry.matches(profile) {
-                                    owners.push(record.th32ProcessID);
-                                }
+                            if let Some(directory) = directory
+                                && windows_directory_owns_profile(Path::new(directory), profile)?
+                            {
+                                owners.push(record.th32ProcessID);
+                                break;
                             }
                         }
                     }
@@ -2539,6 +2539,77 @@ fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
         })();
         CloseHandle(snapshot);
         result
+    }
+}
+/// Checks whether a Windows `--user-data-dir` path names `profile`, tolerating missing paths,
+/// non-directory files and directory junctions or symlinks without aborting process scans.
+#[cfg(windows)]
+fn windows_directory_owns_profile(directory: &Path, profile: &Path) -> Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    let is_reparse = |meta: &fs::Metadata| {
+        meta.is_symlink() || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    };
+    let meta = match fs::symlink_metadata(directory) {
+        Ok(meta) => meta,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let resolved;
+    let candidate = if is_reparse(&meta) {
+        resolved = match fs::canonicalize(directory) {
+            Ok(target) => target,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let target_meta = match fs::symlink_metadata(&resolved) {
+            Ok(meta) => meta,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !target_meta.is_dir() {
+            return Ok(false);
+        }
+        if is_reparse(&target_meta) {
+            return Ok(fs::canonicalize(profile).is_ok_and(|canonical| resolved == canonical));
+        }
+        resolved.as_path()
+    } else if !meta.is_dir() {
+        return Ok(false);
+    } else {
+        directory
+    };
+    match NativeEntry::open(candidate, true) {
+        Ok(entry) => Ok(entry.matches(profile)),
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
     }
 }
 #[cfg(all(windows, test))]
@@ -2726,16 +2797,43 @@ fn profile_processes(profile: &Path) -> Result<Vec<u32>> {
                 continue;
             };
             // A profile moved to the launched path after its old name was reused, as on Linux.
-            if fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(value)))? == profile
-                || macos_process::open_paths(pid)?
-                    .is_some_and(|open| open.iter().any(|path| path.starts_with(profile)))
-            {
+            if macos_dir_owns_profile(
+                Path::new(std::ffi::OsStr::from_bytes(value)),
+                profile,
+                || macos_process::open_paths(pid),
+            )? {
                 owners.push(pid);
                 break;
             }
         }
     }
     Ok(owners)
+}
+/// Checks whether a macOS `--user-data-dir` path (or its open files) names `profile`, tolerating
+/// missing directories or broken symlinks without aborting process scans.
+#[cfg(target_os = "macos")]
+fn macos_dir_owns_profile(
+    path: &Path,
+    profile: &Path,
+    open_paths: impl FnOnce() -> Result<Option<Vec<PathBuf>>>,
+) -> Result<bool> {
+    let matches_open = || {
+        Ok(open_paths()?
+            .is_some_and(|open| open.iter().any(|open_path| open_path.starts_with(profile))))
+    };
+    match fs::canonicalize(path) {
+        Ok(reading) if reading == profile => Ok(true),
+        Ok(_) => matches_open(),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            matches_open()
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 /// macOS process records from libproc and `kern.procargs2`. A process that exits during a read
 /// gives `None`.
@@ -5847,5 +5945,76 @@ mod tests {
             assert_eq!(args[1], r"--user-data-dir=C:\PUBLIC profile");
         }
         assert!(windows_arguments(r#"chrome.exe --user-data-dir="unclosed"#).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_owns_profile_handles_missing_files_and_reparse_points() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("PUBLIC-profile");
+        let other = home.path().join("PUBLIC-other");
+        let missing = home.path().join("PUBLIC-missing");
+        let file = home.path().join("PUBLIC-file.txt");
+        let broken_target = home.path().join("PUBLIC-broken-target");
+        fs::create_dir(&profile).unwrap();
+        fs::create_dir(&other).unwrap();
+        fs::create_dir(&broken_target).unwrap();
+        fs::write(&file, b"x").unwrap();
+        let junction = |link: &Path, target: &Path| {
+            let status = Command::new("cmd")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "mklink /J failed: {status}");
+        };
+        let to_profile = home.path().join("PUBLIC-junction-profile");
+        let to_other = home.path().join("PUBLIC-junction-other");
+        let broken_junction = home.path().join("PUBLIC-junction-broken");
+        junction(&to_profile, &profile);
+        junction(&to_other, &other);
+        junction(&broken_junction, &broken_target);
+        fs::remove_dir(&broken_target).unwrap();
+
+        assert!(windows_directory_owns_profile(&profile, &profile).unwrap());
+        assert!(!windows_directory_owns_profile(&other, &profile).unwrap());
+        assert!(!windows_directory_owns_profile(&missing, &profile).unwrap());
+        assert!(!windows_directory_owns_profile(&file, &profile).unwrap());
+        assert!(windows_directory_owns_profile(&to_profile, &profile).unwrap());
+        assert!(!windows_directory_owns_profile(&to_other, &profile).unwrap());
+        assert!(!windows_directory_owns_profile(&broken_junction, &profile).unwrap());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_dir_owns_profile_handles_missing_and_symlinked_dirs() {
+        let home = crate::native_fs::tempdir();
+        let root = fs::canonicalize(home.path()).unwrap();
+        let profile = root.join("PUBLIC-profile");
+        let other = root.join("PUBLIC-other");
+        let missing = root.join("PUBLIC-missing");
+        fs::create_dir(&profile).unwrap();
+        fs::create_dir(&other).unwrap();
+        let to_profile = root.join("PUBLIC-link-profile");
+        let to_other = root.join("PUBLIC-link-other");
+        let broken = root.join("PUBLIC-link-broken");
+        std::os::unix::fs::symlink(&profile, &to_profile).unwrap();
+        std::os::unix::fs::symlink(&other, &to_other).unwrap();
+        std::os::unix::fs::symlink(&missing, &broken).unwrap();
+
+        assert!(macos_dir_owns_profile(&profile, &profile, || Ok(None)).unwrap());
+        assert!(!macos_dir_owns_profile(&other, &profile, || Ok(Some(vec![]))).unwrap());
+        assert!(!macos_dir_owns_profile(&missing, &profile, || Ok(Some(vec![]))).unwrap());
+        assert!(!macos_dir_owns_profile(&missing, &profile, || Ok(None)).unwrap());
+        assert!(
+            macos_dir_owns_profile(&missing, &profile, || {
+                Ok(Some(vec![profile.join("Default/History")]))
+            })
+            .unwrap()
+        );
+        assert!(macos_dir_owns_profile(&to_profile, &profile, || Ok(None)).unwrap());
+        assert!(!macos_dir_owns_profile(&to_other, &profile, || Ok(Some(vec![]))).unwrap());
+        assert!(!macos_dir_owns_profile(&broken, &profile, || Ok(Some(vec![]))).unwrap());
     }
 }
