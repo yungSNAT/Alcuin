@@ -70,7 +70,8 @@ fn home_relative_profile_paths_require_a_database_and_detect_profile_removal() {
 
     fs::rename(&profile, user_data.join("PUBLIC-moved-profile")).unwrap();
     for source in sources {
-        assert!(source.verify().is_err());
+        let error = format!("{:#}", source.verify().unwrap_err());
+        assert!(error.contains("changed"), "{error}");
     }
 }
 

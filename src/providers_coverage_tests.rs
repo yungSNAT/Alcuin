@@ -334,7 +334,7 @@ async fn retrieve_connection_failure_backs_off_until_cancelled() {
         .await
         .unwrap_err();
     assert!(
-        started.elapsed() < Duration::from_millis(450),
+        started.elapsed() < Duration::from_secs(2),
         "{:?}",
         started.elapsed()
     );

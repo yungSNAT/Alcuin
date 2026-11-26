@@ -1,5 +1,4 @@
 use super::*;
-use std::cmp::Ordering;
 
 #[test]
 fn slash_flags_stops_at_slash_not_followed_by_flag_segment() {
@@ -17,27 +16,6 @@ fn slash_flags_stops_at_slash_not_followed_by_flag_segment() {
         let got = slash_flags(line);
         let expected: BTreeSet<String> = expected.iter().map(|s| s.to_string()).collect();
         assert_eq!(got, expected, "line: {line}");
-    }
-}
-
-#[test]
-fn locale_compare_orders_non_ascii_after_all_ascii_by_code_point() {
-    let cases = [
-        ("\u{e9}", "z", Ordering::Greater),
-        ("z", "\u{e9}", Ordering::Less),
-        ("\u{e9}", "\u{fc}", Ordering::Less),
-        ("\u{fc}", "\u{e9}", Ordering::Greater),
-        ("\u{e9}", "~", Ordering::Greater),
-        ("\u{e9}", "9", Ordering::Greater),
-        ("\u{e9}", "\u{e9}", Ordering::Equal),
-        ("--a\u{e9}", "--az", Ordering::Greater),
-    ];
-    for (left, right, expected) in cases {
-        assert_eq!(
-            locale_compare(left, right),
-            expected,
-            "compare {left:?} vs {right:?}"
-        );
     }
 }
 

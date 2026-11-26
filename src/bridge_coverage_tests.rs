@@ -451,11 +451,8 @@ async fn doctor_without_remote_reports_local_browser_detection() {
         text.lines().any(|line| line.starts_with("Cookies DB: ")),
         "{text}"
     );
-    let cookies_missing = has_line(&text, "Cookies DB: not found");
-    assert_eq!(
-        cookies_missing,
-        text.contains("Chrome cookies DB not detected")
-    );
+    assert!(!has_line(&text, "Cookies DB: not found"), "{text}");
+    assert!(!text.contains("Chrome cookies DB not detected"), "{text}");
     assert!(text.contains("[mcp_servers.alcuin]"));
     assert!(has_line(&text, "- PUBLIC-loaded-warning"));
 }

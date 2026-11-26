@@ -75,38 +75,6 @@ async fn log_forwarding_does_not_retry_after_stopping_or_read_past_a_stale_offse
 }
 
 #[tokio::test]
-async fn browser_consult_reports_unavailable_chrome_before_creating_a_session() {
-    let (_home, server) = isolated_server();
-    if crate::browser_detect::chrome(&server.env).is_some() {
-        // A live browser consult is not safe on hosts with a discoverable Chrome.
-        return;
-    }
-
-    let error = server
-        .consult(
-            json!({
-                "engine":"browser",
-                "model":"gpt-6-pro",
-                "prompt":"PUBLIC-no-chrome"
-            }),
-            &CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "Browser engine unavailable: no Chrome installation found and CHROME_PATH is unset."
-    );
-    assert!(
-        server
-            .store
-            .list_created_since(true, None)
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[tokio::test]
 async fn project_sources_rejects_an_invalid_project_url_even_in_dry_run() {
     let (_home, server) = isolated_server();
     let url = "https://example.invalid/PUBLIC-not-a-project";

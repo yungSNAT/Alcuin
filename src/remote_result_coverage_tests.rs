@@ -174,7 +174,15 @@ fn promotion_reports_a_final_record_that_cannot_be_written() {
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
     let _ = fs::remove_file(&probe);
     if let Some(outcome) = outcome {
-        assert!(outcome.is_err());
+        let Err(error) = outcome else {
+            panic!("Promotion wrote a final record into a read-only directory");
+        };
+        assert!(
+            error.chain().any(|cause| cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)),
+            "{error:#}"
+        );
         assert!(!dir.join("remote-result.json").exists());
         assert!(dir.join("remote-capture.json").is_file());
     }

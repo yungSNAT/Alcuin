@@ -133,6 +133,10 @@ fn snapshot_writes_a_verified_durable_copy_and_refuses_changed_sources() {
     )
     .unwrap();
     let refused = root.path().join("PUBLIC-refused.txt");
-    assert!(file.snapshot(&refused).is_err());
+    let Err(error) = file.snapshot(&refused) else {
+        panic!("A snapshot of a changed source succeeded");
+    };
+    let error = format!("{error:#}");
+    assert!(error.contains("changed"), "{error}");
     assert!(!refused.exists());
 }

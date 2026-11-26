@@ -5,7 +5,8 @@ use crate::cdp::fake::{self, Reply};
 use serde_json::json;
 use std::{io::ErrorKind, os::unix::fs::symlink};
 
-const IO_TIMEOUT: Duration = Duration::from_secs(1);
+// A hang guard only: no test here waits for it to expire.
+const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn environment(home: &Path, tmp: &Path) -> Environment {
     Environment::from([
