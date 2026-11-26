@@ -352,3 +352,6 @@ mod tests {
         assert!(stringify(&format!("{}0{}", "[".repeat(130), "]".repeat(130))).is_err());
     }
 }
+#[cfg(test)]
+#[path = "remote_json_coverage_tests.rs"]
+mod coverage_tests;

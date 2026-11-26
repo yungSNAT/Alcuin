@@ -721,3 +721,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "remote_protocol_coverage_tests.rs"]
+mod coverage_tests;
