@@ -4647,6 +4647,30 @@ mod tests {
             "{error:#}"
         );
     }
+    /// Only a version 1 record whose owner is known dead is stale: a dead owner in another
+    /// record version, or an owner of unknown liveness (pid 0), still refuses a changed identity.
+    #[test]
+    fn a_changed_identity_refuses_unless_a_version_1_owner_is_dead() {
+        let home = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut dead = ProcessIdentity::current().unwrap();
+        dead.pid = u32::MAX;
+        dead.started_at_ms = 1.0;
+        let mut unknown = ProcessIdentity::current().unwrap();
+        unknown.pid = 0;
+        assert_eq!(unknown.liveness(), Liveness::Unknown);
+        for (case, process, version) in [("version 2", dead, 2), ("pid 0", unknown, 1)] {
+            let (mut raw, profile) = record_after_browser_update(home.path(), process);
+            raw["version"] = serde_json::json!(version);
+            let error = ChromeConnection::recorded_launch(raw, &profile, &executable, true)
+                .err()
+                .unwrap_or_else(|| panic!("{case}: a changed identity was reused"));
+            assert!(
+                error.downcast_ref::<ChromeIdentityRefusal>().is_some(),
+                "{case}: {error:#}"
+            );
+        }
+    }
     #[test]
     fn chrome_receives_an_ordinary_profile_path() {
         let home = tempfile::tempdir().unwrap();
