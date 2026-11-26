@@ -1268,3 +1268,6 @@ mod tests {
         assert_eq!(azure.transport, ApiTransport::Responses);
     }
 }
+#[cfg(test)]
+#[path = "providers_coverage_tests.rs"]
+mod coverage_tests;

@@ -674,3 +674,6 @@ mod tests {
         assert!(!moved.exists());
     }
 }
+#[cfg(test)]
+#[path = "native_fs_coverage_tests.rs"]
+mod coverage_tests;
