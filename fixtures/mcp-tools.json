@@ -125,6 +125,11 @@
             "type": "boolean",
             "description": "Ask for a line unique to this run at the end of the answer. An answer without it is saved as partial, with response.status incomplete. One turn and a local browser only."
           },
+          "browserSlotWaitMs": {
+            "description": "Browser-only: the longest the run may queue for a free ChatGPT browser slot, in milliseconds (default 7200000, 2 hours). The answer timeout counts only from the send.",
+            "type": "integer",
+            "minimum": 1
+          },
           "waitForCompletion": {
             "description": "When false, start the Alcuin run in a detached worker and return its sessionId immediately. Use the wait tool to block for completion without agent-side polling. Defaults to true for compatibility.",
             "type": "boolean"

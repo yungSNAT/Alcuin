@@ -321,7 +321,7 @@ impl ProfileRegistry {
         let mut last_wait_line: Option<std::time::Instant> = None;
         let slot_timeout = |holding: &str| {
             format!(
-                "Timed out waiting for ChatGPT browser slot after {}s ({max_tabs} max; holdingSessions={holding}).",
+                "Timed out waiting for ChatGPT browser slot after {}s ({max_tabs} max; holdingSessions={holding}); nothing was sent.",
                 (started.elapsed().as_millis() as f64 / 1000.0).round()
             )
         };
@@ -3097,7 +3097,7 @@ mod tests {
             .err()
             .unwrap();
         let expected = format!(
-            "Timed out waiting for ChatGPT browser slot after Ns (1 max; holdingSessions={}:PUBLIC-holder:pid{}:targetpending).",
+            "Timed out waiting for ChatGPT browser slot after Ns (1 max; holdingSessions={}:PUBLIC-holder:pid{}:targetpending); nothing was sent.",
             &holder.id()[..8],
             std::process::id()
         );
@@ -3116,7 +3116,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             elapsed_slot_timeout(&error, started),
-            "Timed out waiting for ChatGPT browser slot after Ns (1 max; holdingSessions=unobserved)."
+            "Timed out waiting for ChatGPT browser slot after Ns (1 max; holdingSessions=unobserved); nothing was sent."
         );
         assert!(
             format!("{error:#}").contains("deadline reached"),
