@@ -193,3 +193,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "transcript_coverage_tests.rs"]
+mod coverage_tests;
