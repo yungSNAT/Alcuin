@@ -356,9 +356,17 @@ fn route_logging_and_custom_base_classification_follow_the_reference() {
         providers::route_target(&long),
         format!("{}\u{2026}LIC-tail", "x".repeat(32))
     );
+    assert!(
+        providers::resolve_route(
+            "openai/gpt-6-astra",
+            &json!({"baseUrl":"not a url"}),
+            &Environment::new(),
+        )
+        .is_err()
+    );
     let (route, _) = providers::resolve_route(
         "openai/gpt-6-astra",
-        &json!({"baseUrl":"not a url"}),
+        &json!({"baseUrl":"https://api.openai.com/v1"}),
         &Environment::new(),
     )
     .unwrap();
