@@ -10,7 +10,12 @@
     {
       "name": "alcuin",
       "description": "Ask ChatGPT about the source files you choose, from Claude Code, and keep each answer as a durable session.",
-      "source": "./",
+      "version": "0.2.0",
+      "source": {
+        "source": "github",
+        "repo": "yungSNAT/Alcuin",
+        "ref": "v0.2.0"
+      },
       "category": "development"
     }
   ]
