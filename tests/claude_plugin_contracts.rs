@@ -11,15 +11,24 @@ fn manifest(name: &str) -> Value {
     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()
 }
 
+/// The plugin installs from this version's release tag, so its skills and server entry match
+/// the released binaries. The marketplace entry carries the version, as the tagged
+/// `plugin.json` has none.
 #[test]
-fn marketplace_lists_the_repository_root_as_the_alcuin_plugin() {
+fn marketplace_installs_the_plugin_from_this_versions_tag() {
     let marketplace = manifest("marketplace.json");
     let plugin = manifest("plugin.json");
     assert_eq!(marketplace["name"], "alcuin");
     let entries = marketplace["plugins"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["name"], plugin["name"]);
-    assert_eq!(entries[0]["source"], "./");
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(entries[0]["version"], version);
+    assert_eq!(
+        entries[0]["source"],
+        serde_json::json!({"source":"github","repo":"yungSNAT/Alcuin","ref":format!("v{version}")})
+    );
+    assert!(plugin.get("version").is_none(), "{plugin}");
     let skill = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/alcuin/SKILL.md"),
     )
