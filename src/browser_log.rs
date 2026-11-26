@@ -451,16 +451,18 @@ pub(crate) fn completion_warnings(meta: &Value, request: &BrowserRequest) -> Vec
 }
 /// A Pro request that ChatGPT answered at Extra High, because it showed Pro as unavailable,
 /// says so in the result rather than reading like a Pro answer.
-fn fallback_warning(meta: &Value) -> Option<Value> {
+pub(crate) fn fallback_warning(meta: &Value) -> Option<Value> {
     let thinking = thinking_evidence(meta);
     (thinking["verified"] == true
         && thinking["requestedLevel"] == "extra-high"
         && thinking["fallbackFrom"] == "pro")
-        .then(|| {
-            json!({"code":"browser-pro-unavailable-fallback","severity":"warning",
-            "message":"ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro.",
-            "details":{"requestedLevel":"pro","appliedLevel":"extra-high"}})
-        })
+        .then(pro_fallback_warning)
+}
+/// The Pro-unavailable warning, fixed text only, so the MCP result can carry it whole.
+pub(crate) fn pro_fallback_warning() -> Value {
+    json!({"code":"browser-pro-unavailable-fallback","severity":"warning",
+    "message":"ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro.",
+    "details":{"requestedLevel":"pro","appliedLevel":"extra-high"}})
 }
 /// Reference archive decision and its log line. Rust sends only in verified
 /// Temporary Chat, so a run with a conversation is never archived.

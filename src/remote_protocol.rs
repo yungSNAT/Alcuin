@@ -124,6 +124,10 @@ pub(crate) fn sanitise(result: &Value, registration_warnings: &[Value]) -> Value
             warnings.push(cleanup_warning(kind, "host", Path::new(path)));
         }
     }
+    // Rebuilt from the thinking evidence the receiver checks, never from the host's text.
+    warnings.extend(crate::browser_log::fallback_warning(
+        &json!({"browser":{"thinkingSelection":result["thinkingSelection"]}}),
+    ));
     warnings.extend_from_slice(registration_warnings);
     if !warnings.is_empty() {
         public["warnings"] = json!(warnings);
@@ -654,6 +658,21 @@ mod tests {
         assert_eq!(public["warnings"].as_array().unwrap().len(), 1);
         assert_eq!(public["warnings"][0]["details"]["origin"], "host");
         assert!(public["warnings"][0]["details"].get("path").is_none());
+    }
+    #[test]
+    fn a_host_run_answered_at_extra_high_for_pro_carries_its_fixed_warning() {
+        let fell_back = json!({"verified":true,"requestedLevel":"extra-high","fallbackFrom":"pro"});
+        let captured = json!({"thinkingSelection":fell_back,
+            "warnings":[{"code":"browser-pro-unavailable-fallback","severity":"warning","message":"PUBLIC host text"}]});
+        let public = sanitise(&captured, &[]);
+        assert_eq!(
+            public["warnings"],
+            json!([crate::browser_log::pro_fallback_warning()])
+        );
+        // Without the verified fallback evidence, a host's warning claim does not cross.
+        let claimed = json!({"thinkingSelection":{"verified":true,"requestedLevel":"extra-high"},
+            "warnings":[{"code":"browser-pro-unavailable-fallback","severity":"warning"}]});
+        assert!(sanitise(&claimed, &[]).get("warnings").is_none());
     }
     #[test]
     fn registration_rehashes_only_session_artifacts_and_incomplete_images_fail() {
