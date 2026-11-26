@@ -8,19 +8,13 @@ return (() => { const throttle=(() => {
       const text = (value || '').toLowerCase();
       return PHRASES.some((phrase) => text.includes(phrase));
     };
-    // Dialogs first, because that is what this notice is; the body sweep is a
-    // fallback for a variant that does not carry the role.
-    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]'));
-    for (const dialog of dialogs) {
-      const text = (dialog.innerText || '').trim();
-      if (matches(text)) return { message: text.slice(0, 400) };
-    }
-    // The sweep skips the conversation, as ui-warnings.js does: an answer or prompt about
-    // throttling is not the notice.
+    // Neither the dialogs nor the sweep read the conversation, as ui-warnings.js does not: an
+    // answer or prompt about throttling is not the notice.
     const user = '[data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]';
     const reply = '[data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]';
     const answer = '[data-markdown-text-style="assistant-message"], .markdown, [data-message-content], .prose, [class*="MarkdownRoot"]';
-    const conversation = Array.from(document.querySelectorAll(`${user}, ${reply}, #prompt-textarea`))
+    const turn = `${user}, ${reply}, #prompt-textarea`;
+    const conversation = Array.from(document.querySelectorAll(turn))
       .flatMap((node) => {
         const roots = node.matches(reply) ? Array.from(node.querySelectorAll(answer)) : [];
         return roots.length ? roots : [node];
@@ -34,6 +28,17 @@ return (() => { const throttle=(() => {
       const root = box?.closest(answer);
       return Boolean(message) && !(root && message.contains(root)) && !box.querySelector(answer);
     };
+    // Text in a message, its answer roots included, is conversation unless it sits in that
+    // turn's notice box; plain text beside the roots is not a notice either.
+    const inConversation = (element) => Boolean(element?.closest(turn)) && !turnNotice(element);
+    // Dialogs first, because that is what this notice is; the body sweep is a
+    // fallback for a variant that does not carry the role.
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]'));
+    for (const dialog of dialogs) {
+      if (inConversation(dialog) || conversation.some((node) => dialog.contains(node))) continue;
+      const text = (dialog.innerText || '').trim();
+      if (matches(text)) return { message: text.slice(0, 400) };
+    }
     // Navigation holds chat titles, which ChatGPT takes from prompts. Conversation subtrees are
     // rejected before any text is read, except a rootless message that holds a notice.
     const skipped = 'nav, a[href*="/c/"]';
@@ -41,8 +46,7 @@ return (() => { const throttle=(() => {
       acceptNode(node) {
         if (node.nodeType === Node.TEXT_NODE) {
           if (!/request|quick|limit/i.test(node.data)) return NodeFilter.FILTER_SKIP;
-          const holder = conversation.find((item) => item.contains(node));
-          return !holder || turnNotice(node.parentElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+          return inConversation(node.parentElement) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_ACCEPT;
         }
         if (node.matches(skipped)) return NodeFilter.FILTER_REJECT;
         if (conversation.includes(node) && !(node.matches(reply) && node.querySelector(ui))) return NodeFilter.FILTER_REJECT;
@@ -55,7 +59,7 @@ return (() => { const throttle=(() => {
       for (let depth = 0; line && depth < 3 && !matches(line.innerText) && !conversation.includes(line); depth++) line = line.parentElement;
       if (!line || !matches(line.innerText)) continue;
       if (!line.checkVisibility({ visibilityProperty: true })) continue;
-      if (conversation.some((node) => line.contains(node) || (node.contains(line) && !turnNotice(line)))) continue;
+      if (inConversation(line) || conversation.some((node) => line.contains(node))) continue;
       return { message: line.innerText.trim().slice(0, 400) };
     }
     return null;

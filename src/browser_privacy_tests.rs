@@ -2408,6 +2408,16 @@ async fn blocker_words_cases(page: &Cdp) -> Result<()> {
             ),
         ),
         (
+            "dialog inside the answer root",
+            format!(
+                "{user}<article><div data-message-author-role='assistant'><div class='markdown'><p>{words}</p><div role='dialog'>Too many requests</div></div></div></article>"
+            ),
+        ),
+        (
+            "page title beside the answer root",
+            format!("{user}{}", answer("<div>429 Too Many Requests</div>", "")),
+        ),
+        (
             "hidden notice",
             format!(
                 "{user}{}<div style='display:none'>You are making requests too quickly.</div>",
@@ -2488,6 +2498,17 @@ async fn blocker_words_cases(page: &Cdp) -> Result<()> {
                 answer("", "")
             ),
             "You are making requests too quickly.",
+        ),
+        (
+            "notice beside the answer root",
+            format!(
+                "{user}{}",
+                answer(
+                    "<div role='alert'>Too many requests. Wait a few minutes.</div>",
+                    ""
+                )
+            ),
+            "Too many requests. Wait a few minutes.",
         ),
         (
             "notice in a message with no answer root",
