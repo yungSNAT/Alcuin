@@ -2380,21 +2380,38 @@ async fn blocker_words_cases(page: &Cdp) -> Result<()> {
     let user = format!(
         "<article data-turn-key='PUBLIC-user-turn'><div data-message-author-role='user' data-message-id='PUBLIC-user'>Explain {words}</div></article>"
     );
-    let answer = |extra: &str| {
+    let answer = |inner: &str, extra: &str| {
         format!(
-            "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><div class='markdown'><p>{words}</p><div class='banner'>Rate limit reached</div></div></div>{extra}</article>"
+            "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><div class='markdown'><p>{words}</p><div class='banner'>Rate limit reached</div></div>{inner}</div>{extra}</article>"
         )
     };
+    let rootless = |inner: &str| {
+        format!("{user}<article><div data-message-author-role='assistant'>{inner}</div></article>")
+    };
     for (case, turns) in [
-        ("answer", format!("{user}{}", answer(""))),
+        ("answer", format!("{user}{}", answer("", ""))),
         (
             "answer in a live region",
-            format!("<div aria-live='polite'>{user}{}</div>", answer("")),
+            format!("<div aria-live='polite'>{user}{}</div>", answer("", "")),
         ),
         (
             "answer with no marked root",
             format!(
                 "{user}<article><div data-message-author-role='assistant' role='status'>{words}</div></article>"
+            ),
+        ),
+        (
+            "chat title in the sidebar",
+            format!(
+                "<nav><a href='/c/PUBLIC-chat'><div>Fix 429 Too many requests</div></a></nav>{user}{}",
+                answer("", "")
+            ),
+        ),
+        (
+            "hidden notice",
+            format!(
+                "{user}{}<div style='display:none'>You are making requests too quickly.</div>",
+                answer("", "")
             ),
         ),
     ] {
@@ -2409,31 +2426,89 @@ async fn blocker_words_cases(page: &Cdp) -> Result<()> {
             "Conversation text was read as throttling ({case}): {found}"
         );
     }
-    for (case, notice, kind) in [
+    // The composer holds a draft about the same words, inside a wrapper the warning selectors match.
+    let draft = ACTIVE.replace(
+        "<textarea id='prompt-textarea' name='prompt-textarea'></textarea>",
+        &format!(
+            "<div class='composer-banner'><div id='prompt-textarea' contenteditable='true'><p>{words}</p></div></div>"
+        ),
+    );
+    let cancel = CancellationToken::new();
+    mount(page, &draft, "/", "").await?;
+    let raw = page
+        .evaluate_with_arguments(warnings, &json!([{}]), SHORT, &cancel)
+        .await?;
+    let found = page
+        .evaluate_with_arguments(guard, &json!([{}]), SHORT, &cancel)
+        .await?;
+    anyhow::ensure!(
+        raw == json!([]) && found["throttled"] == false,
+        "A composer draft was read as a notice: {raw} {found}"
+    );
+    let limit = "<div role='alert'>You have reached your usage_limit for GPT-6 Pro.</div>";
+    for (case, turns, kind) in [
         (
             "usage limit in the turn",
-            "<div role='alert'>You have reached your usage_limit for GPT-6 Pro.</div>",
+            format!("{user}{}", answer("", limit)),
+            "rate_limit",
+        ),
+        (
+            "usage limit beside the answer root",
+            format!("{user}{}", answer(limit, "")),
+            "rate_limit",
+        ),
+        (
+            "usage limit in a message with no answer root",
+            rootless(limit),
             "rate_limit",
         ),
         (
             "CAPTCHA dialog",
-            "<div role='dialog'><div class='markdown'>Complete the CAPTCHA to continue.</div></div>",
+            format!(
+                "{user}{}",
+                answer(
+                    "",
+                    "<div role='dialog'><div class='markdown'>Complete the CAPTCHA to continue.</div></div>"
+                )
+            ),
             "auth_or_challenge",
         ),
     ] {
-        let raw = run(warnings, &format!("{user}{}", answer(notice))).await?;
+        let raw = run(warnings, &turns).await?;
         anyhow::ensure!(
             crate::browser_page::first_ui_warning(&raw).map(|(found, _)| found) == Some(kind),
             "A real blocker was missed ({case}): {raw}"
         );
     }
-    let notice = "<div>You are making requests <b>too quickly</b>.</div>";
-    let found = run(guard, &format!("{user}{}{notice}", answer(""))).await?;
-    anyhow::ensure!(
-        found["throttled"] == true
-            && found["throttleMessage"] == "You are making requests too quickly.",
-        "A throttling notice beside the conversation was missed: {found}"
-    );
+    for (case, turns, message) in [
+        (
+            "split notice beside the conversation",
+            format!(
+                "{user}{}<div>You are making requests <b>too quickly</b>.</div>",
+                answer("", "")
+            ),
+            "You are making requests too quickly.",
+        ),
+        (
+            "notice in a message with no answer root",
+            rootless("<div role='alert'>Too many requests. Wait a few minutes.</div>"),
+            "Too many requests. Wait a few minutes.",
+        ),
+        (
+            "dialog",
+            format!(
+                "{user}{}<div role='dialog'>Too many requests</div>",
+                answer("", "")
+            ),
+            "Too many requests",
+        ),
+    ] {
+        let found = run(guard, &turns).await?;
+        anyhow::ensure!(
+            found["throttled"] == true && found["throttleMessage"] == message,
+            "A throttling notice was missed ({case}): {found}"
+        );
+    }
     Ok(())
 }
 
