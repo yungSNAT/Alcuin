@@ -195,8 +195,18 @@ mod tool_list {
     fn checks_every_tool_the_server_lists_and_the_bundle_declares() {
         let mut checked = super::TOOLS.map(str::to_owned).to_vec();
         checked.sort();
-        let listed = names(include_str!("../../../fixtures/mcp-tools.json"), "      ");
-        let declared = names(include_str!("../../mcpb/manifest.json"), "    { ");
+        let fixture = include_str!("../../../fixtures/mcp-tools.json");
+        let manifest = include_str!("../../mcpb/manifest.json");
+        let listed = names(fixture, "      ");
+        let declared = names(manifest, "    { ");
+        // Every tool has one input schema and one manifest entry, so an entry laid out
+        // differently from the rest cannot drop out of the comparison unnoticed.
+        assert_eq!(listed.len(), fixture.matches("\"inputSchema\"").count());
+        let entries = manifest
+            .lines()
+            .filter(|line| line.contains("{ \"name\"") && line.contains("\"description\""))
+            .count();
+        assert_eq!(declared.len(), entries);
         assert_eq!(checked, listed, "fixtures/mcp-tools.json");
         assert_eq!(checked, declared, "packaging/mcpb/manifest.json");
     }
