@@ -463,6 +463,25 @@ fn warning_filenames_and_log_tails_follow_the_reference_units() {
     assert_eq!(log_tail("PUBLIC", 4000), "PUBLIC");
 }
 
+#[test]
+fn a_pro_request_answered_at_extra_high_says_so_in_the_mcp_result() {
+    let mut out = json!({});
+    add_summaries(
+        &mut out,
+        &json!({"browser":{"warnings":[
+            {"code":"browser-pro-unavailable-fallback","severity":"warning","message":"PUBLIC changed text","details":{"requestedLevel":"pro","appliedLevel":"extra-high","extra":"PUBLIC-private"}},
+            {"code":"browser-pro-unavailable-fallback","severity":"info","details":{"requestedLevel":"pro","appliedLevel":"extra-high"}}
+        ]}}),
+    );
+    // Only the fixed wording and levels cross the MCP boundary, once.
+    assert_eq!(
+        out["warnings"],
+        json!([{"code":"browser-pro-unavailable-fallback","severity":"warning",
+            "message":"ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro.",
+            "details":{"requestedLevel":"pro","appliedLevel":"extra-high"}}])
+    );
+}
+
 #[tokio::test]
 async fn inline_api_consults_log_the_reference_run_and_trace() {
     let home = tempfile::tempdir().unwrap();
