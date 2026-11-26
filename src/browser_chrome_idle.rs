@@ -376,6 +376,9 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         let timeout = Duration::from_secs(10);
+        // This is the first native fixture to start Chrome. A cold start on a hosted runner has
+        // taken 6 to 9 s to print Chrome's first log line, so 10 s did not cover its endpoint.
+        let startup = Duration::from_secs(30);
         for case in [
             "clean",
             "foreign-blank",
@@ -405,7 +408,7 @@ mod tests {
                 &config,
                 &environment,
                 home.path(),
-                timeout,
+                startup,
                 &cancel,
             )
             .await?;

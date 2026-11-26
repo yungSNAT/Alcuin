@@ -445,8 +445,24 @@ pub(crate) fn completion_warnings(meta: &Value, request: &BrowserRequest) -> Vec
             ))
         })
         .collect::<Vec<_>>();
+    warnings.extend(fallback_warning(meta));
     warnings.extend(run_warnings(meta, request));
     warnings
+}
+/// A Pro request that ChatGPT answered at Extra High, because it showed Pro as unavailable,
+/// says so in the result rather than reading like a Pro answer.
+pub(crate) fn fallback_warning(meta: &Value) -> Option<Value> {
+    let thinking = thinking_evidence(meta);
+    (thinking["verified"] == true
+        && thinking["requestedLevel"] == "extra-high"
+        && thinking["fallbackFrom"] == "pro")
+        .then(pro_fallback_warning)
+}
+/// The Pro-unavailable warning, fixed text only, so the MCP result can carry it whole.
+pub(crate) fn pro_fallback_warning() -> Value {
+    json!({"code":"browser-pro-unavailable-fallback","severity":"warning",
+    "message":"ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro.",
+    "details":{"requestedLevel":"pro","appliedLevel":"extra-high"}})
 }
 /// Reference archive decision and its log line. Rust sends only in verified
 /// Temporary Chat, so a run with a conversation is never archived.
@@ -873,6 +889,42 @@ mod tests {
         };
         assert!(run_warnings(&at(true), &request(30_000, None)).is_empty());
         assert_eq!(run_warnings(&at(false), &request(30_000, None)).len(), 1);
+    }
+
+    #[test]
+    fn a_pro_request_answered_at_extra_high_says_so() {
+        let at = |thinking: Value| {
+            json!({"model":"gpt-6","startedAt":started(600_000),
+            "browser":{"runtime":{"thinkingSelection":thinking}}})
+        };
+        let fell_back =
+            at(json!({"verified":true,"requestedLevel":"extra-high","fallbackFrom":"pro"}));
+        let warnings = completion_warnings(&fell_back, &request(1_000, None));
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["code"], "browser-pro-unavailable-fallback");
+        assert_eq!(
+            warnings[0]["details"],
+            json!({"requestedLevel":"pro","appliedLevel":"extra-high"})
+        );
+        let message = warnings[0]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            "ChatGPT showed Pro as unavailable on this account, so this answer ran at Extra High, not Pro."
+        );
+        let block = completion(&fell_back, &request(1_000, None), &warnings, "x");
+        assert!(
+            block.contains(&format!("\n[browser] {message}\n")),
+            "{block}"
+        );
+        // Extra High that was asked for, or an unverified selection, adds no such warning.
+        for thinking in [
+            json!({"verified":true,"requestedLevel":"extra-high"}),
+            json!({"verified":false,"requestedLevel":"extra-high","fallbackFrom":"pro"}),
+            json!({"verified":true,"requestedLevel":"pro"}),
+            json!({"verified":true,"requestedLevel":"pro","fallbackFrom":"pro"}),
+        ] {
+            assert!(completion_warnings(&at(thinking), &request(1_000, None)).is_empty());
+        }
     }
 
     #[test]

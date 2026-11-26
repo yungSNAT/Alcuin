@@ -1,6 +1,6 @@
 {
   "name": "alcuin",
-  "description": "Ask ChatGPT about the source files you choose, from Claude Code, and keep each answer as a durable session. Runs the alcuin-mcp server and adds the alcuin skill; install the alcuin and alcuin-mcp binaries on your PATH first.",
+  "description": "Ask ChatGPT about the source files you choose, from Claude Code, and keep each answer as a durable session. Runs the alcuin-mcp server and adds the alcuin and alcuin-review skills; install the alcuin and alcuin-mcp binaries on your PATH first.",
   "author": {
     "name": "yungSNAT",
     "url": "https://github.com/yungSNAT"

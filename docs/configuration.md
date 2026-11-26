@@ -66,7 +66,8 @@ alcuin --dry-run json -p "Review main.rs please" --file src/main.rs
 | `browser.manualLoginProfileDir` | Where that profile lives | `--browser-manual-login-profile-dir` |
 | `browser.chromePath` | Chrome or Chromium executable | `--browser-chrome-path` |
 | `browser.chatgptUrl` | ChatGPT URL, such as a project's | `--chatgpt-url` |
-| `browser.timeoutMs` | Longest a browser run may take, in milliseconds | `--browser-timeout` |
+| `browser.timeoutMs` | Longest a browser run may wait for the answer after the send, in milliseconds | `--browser-timeout` |
+| `browser.slotWaitMs` | Longest a browser run may wait for a free tab before it starts, in milliseconds (7,200,000, 2 hours, by default) | `--browser-slot-wait` |
 | `browser.maxConcurrentTabs` | Most ChatGPT tabs open at once in one profile | `--browser-max-concurrent-tabs` |
 | `browser.archiveConversations` | `auto`, `always` or `never` | `--browser-archive` |
 | `browser.endMarker` | Ask for an end line and save an answer without it as `partial` | `--browser-end-marker` |
@@ -92,7 +93,7 @@ When both are set, the lower cap applies, so a run or an MCP client can tighten 
 A project file comes with the code you are reviewing, so Alcuin reads only these keys from it and ignores the rest:
 
 - `engine`, only as `browser`; and `model`, `search`, `maxFileSizeBytes`, `notify`, `heartbeatSeconds`, `filesReport` and `background`;
-- under `browser`: `attachRunning`, `timeoutMs`, `inputTimeoutMs`, `approvalWaitMs`, `attachmentTimeoutMs`, `profileLockTimeoutMs`, `maxConcurrentTabs`, `cookieSyncWaitMs`, `hideWindow`, `keepBrowser`, `modelStrategy`, `thinkingTime`, `researchMode`, `archiveConversations` and `manualLogin`;
+- under `browser`: `attachRunning`, `timeoutMs`, `slotWaitMs`, `inputTimeoutMs`, `approvalWaitMs`, `attachmentTimeoutMs`, `profileLockTimeoutMs`, `maxConcurrentTabs`, `cookieSyncWaitMs`, `hideWindow`, `keepBrowser`, `modelStrategy`, `thinkingTime`, `researchMode`, `archiveConversations` and `manualLogin`;
 - `browser.chatgptUrl`, only when it is a ChatGPT address.
 
 Keys such as `browser.chromePath`, `apiBaseUrl`, `azure` and `promptSuffix`, and `engine` set to `api`, are read from the user file only, so a cloned repository cannot point Alcuin at another program or endpoint, make a run a paid API run or add text to every prompt.

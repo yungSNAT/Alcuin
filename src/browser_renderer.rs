@@ -1242,30 +1242,28 @@ impl RendererReservation {
         let mut model = self.select_model(strategy, false, timeout, cancel).await?;
         model.requested_model = Some(requested.to_owned());
         // A requested Extra High never opens the Pro step, so it leaves Pro's usage alone.
-        let (level, outcome) = if level == "extra-high" {
+        let (level, outcome, fell_back) = if level == "extra-high" {
             (
                 "extra-high",
                 self.select_effort("extra-high", timeout, cancel).await?,
+                false,
             )
         } else {
             match self.select_pro(timeout, cancel).await? {
-                Ok(outcome) => ("pro", outcome),
+                Ok(outcome) => ("pro", outcome, false),
                 Err(permit) => {
                     self.note(format!(
                         "[browser] Confirmed owned Pro unavailability; trying {requested} with Extra High."
                     ));
-                    ("extra-high", self.fallback(permit, timeout, cancel).await?)
+                    (
+                        "extra-high",
+                        self.fallback(permit, timeout, cancel).await?,
+                        true,
+                    )
                 }
             }
         };
-        // Node ensureThinkingTime evidence: a selection that closed the picker verified as
-        // already selected, and the later verification keeps a switched status. Only GPT-6 and
-        // Latest reach here, and inferThinkingTargetModelKind finds no kind in either.
-        let selection = json!({
-            "status": if outcome["status"] == "switched" {"switched"} else {"already-selected"},
-            "targetModelKind": null,
-            "observedModelKind": outcome["modelKind"].as_str(),
-        });
+        let selection = pair_selection(&outcome, fell_back);
         self.observe_pair(model, level, selection, timeout, cancel)
             .await
     }
@@ -1352,6 +1350,21 @@ impl RendererReservation {
         policy::assert_browser_completion(Some(&model), Some(&thinking), Some(effective))?;
         Ok((model, thinking, effective.into()))
     }
+}
+/// Node ensureThinkingTime evidence: a selection that closed the picker verified as already
+/// selected, and the later verification keeps a switched status. Only GPT-6 and Latest reach
+/// here, and inferThinkingTargetModelKind finds no kind in either. A Pro request answered at
+/// Extra High records `fallbackFrom`, so the result can say it is not a Pro answer.
+fn pair_selection(outcome: &Value, fell_back: bool) -> Value {
+    let mut selection = json!({
+        "status": if outcome["status"] == "switched" {"switched"} else {"already-selected"},
+        "targetModelKind": null,
+        "observedModelKind": outcome["modelKind"].as_str(),
+    });
+    if fell_back {
+        selection["fallbackFrom"] = json!("pro");
+    }
+    selection
 }
 /// Node PickerSelectionError wording.
 fn picker(reason: &str) -> anyhow::Error {
@@ -1599,6 +1612,26 @@ mod cleanup_detail_tests {
         assert_eq!(
             cleanup_detail(&Err(anyhow::anyhow!("timed out")), true),
             "finish did not answer"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pair_selection_tests {
+    use serde_json::json;
+
+    #[test]
+    fn a_pro_fallback_is_recorded_in_the_selection() {
+        let outcome = json!({"status":"switched","modelKind":"thinking"});
+        let fell_back = super::pair_selection(&outcome, true);
+        assert_eq!(
+            fell_back,
+            json!({"status":"switched","targetModelKind":null,"observedModelKind":"thinking","fallbackFrom":"pro"})
+        );
+        let asked = super::pair_selection(&json!({"status":"already-selected"}), false);
+        assert_eq!(
+            asked,
+            json!({"status":"already-selected","targetModelKind":null,"observedModelKind":null})
         );
     }
 }

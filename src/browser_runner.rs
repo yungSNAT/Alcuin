@@ -1530,7 +1530,7 @@ fn flush_notes(store: &SessionStore, id: &str, reservation: &mut RendererReserva
 #[derive(Clone, Debug)]
 pub struct RunnerLimits {
     pub command: Duration,
-    /// Slot admission waits the run's `timeoutMs` (reference `acquireBrowserTabLease`).
+    /// Slot admission waits `slotWaitMs` (`--browser-slot-wait`), not the answer timeout.
     pub admission: Duration,
     /// Profile locks (bring-up, automation) wait `profileLockTimeoutMs`.
     pub profile_lock: Duration,
@@ -1580,6 +1580,16 @@ pub(crate) fn answer_timeout(config: &Value) -> Duration {
         }
     }))
 }
+/// How long a run may queue for a browser slot: `slotWaitMs`, 2 hours by default. It is
+/// separate from `timeoutMs`, which counts only from the send.
+pub(crate) fn slot_wait(config: &Value) -> Duration {
+    Duration::from_millis(
+        config["slotWaitMs"]
+            .as_u64()
+            .unwrap_or(DEFAULT_SLOT_WAIT_MS),
+    )
+}
+pub(crate) const DEFAULT_SLOT_WAIT_MS: u64 = 7_200_000;
 pub(crate) type CaptureHook = Arc<dyn Fn(Value) -> Result<()> + Send + Sync>;
 enum CaptureBoundary {
     Direct,
@@ -2037,7 +2047,7 @@ impl RunnerLimits {
         let command = Duration::from_millis(config["inputTimeoutMs"].as_u64().unwrap_or(60_000));
         Self {
             command,
-            admission: answer_timeout(config),
+            admission: slot_wait(config),
             profile_lock: Duration::from_millis(
                 config["profileLockTimeoutMs"].as_u64().unwrap_or(300_000),
             ),
@@ -2052,7 +2062,7 @@ impl Default for RunnerLimits {
     fn default() -> Self {
         Self {
             command: Duration::from_secs(60),
-            admission: Duration::from_secs(1_200),
+            admission: Duration::from_millis(DEFAULT_SLOT_WAIT_MS),
             profile_lock: Duration::from_secs(300),
             commit: Duration::from_secs(60),
             answer: Duration::from_secs(1_200),

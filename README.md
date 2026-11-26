@@ -10,7 +10,7 @@
 <div align="center">
 
 [![tests](https://github.com/yungSNAT/Alcuin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yungSNAT/Alcuin/actions/workflows/ci.yml) [![Codecov](https://codecov.io/gh/yungSNAT/Alcuin/graph/badge.svg)](https://codecov.io/gh/yungSNAT/Alcuin) [![CodeQL](https://github.com/yungSNAT/Alcuin/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/yungSNAT/Alcuin/actions/workflows/codeql.yml) [![OSV-Scanner](https://github.com/yungSNAT/Alcuin/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/yungSNAT/Alcuin/actions/workflows/osv-scanner.yml) [![SonarCloud](https://sonarcloud.io/api/project_badges/measure?project=EquityBot_Industrious&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=EquityBot_Industrious) [![Codacy code quality](https://app.codacy.com/project/badge/Grade/64b01c5d3b174763951ce4fa40124a84)](https://app.codacy.com/gh/yungSNAT/Alcuin/dashboard)<br>
-[![OpenSSF Scorecard](https://raw.githubusercontent.com/ryanduguid/.github/badges/yungSNAT/Alcuin.svg)](https://scorecard.dev/viewer/?uri=github.com/yungSNAT/Alcuin) [![SLSA build provenance](.github/assets/badges/slsa.svg)](https://github.com/yungSNAT/Alcuin/attestations)<br>
+[![OpenSSF Scorecard](https://raw.githubusercontent.com/ryanduguid/.github/badges/yungSNAT/Alcuin.svg)](https://scorecard.dev/viewer/?uri=github.com/yungSNAT/Alcuin) [![SLSA build provenance](.github/assets/badges/slsa.svg)](https://github.com/yungSNAT/Alcuin/attestations) [![VirusTotal](.github/assets/badges/virustotal.svg)](https://github.com/yungSNAT/Alcuin/releases/latest)<br>
 [![Latest release](https://img.shields.io/github/v/release/yungSNAT/Alcuin?style=flat&label=release&labelColor=000000&color=66023C)](https://github.com/yungSNAT/Alcuin/releases/latest) [![rust: 1.99+](.github/assets/badges/rust.svg)](https://www.rust-lang.org/) [![licence: Apache-2.0](.github/assets/badges/licence.svg)](LICENSE)
 
 [Install](#install) · [Use](#use) · [Settings and storage](#settings-and-storage) · [Known limitations](#known-limitations) · [Security](#security) · [When to choose something else](#when-to-choose-something-else) · [Development](#development) · [Credits](#credits) · [Licence](#licence)
@@ -19,7 +19,7 @@ Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/in
 
 </div>
 
-Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows, Linux and macOS (Apple silicon, from the first release after v0.1.0).
+Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows, Linux and macOS (Apple silicon, from v0.2.0).
 
 It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. Use Oracle itself for Gemini, Claude or multi-model runs, or on an Intel Mac: see [When to choose something else](#when-to-choose-something-else).
 
@@ -27,7 +27,7 @@ It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Stein
 
 One command installs both binaries from the latest release, after checking the archive's SHA-256 checksum and that the binary runs on your machine.
 
-Linux, or macOS from the first release after v0.1.0, into `~/.local/bin`:
+Linux, or macOS on Apple silicon, into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.sh | sh
@@ -111,7 +111,7 @@ Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_
 
 ## Known limitations
 
-- Windows, Linux and macOS on Apple silicon; macOS from the first release after v0.1.0. On macOS, CI runs the offline tests and the Chrome fixture test; no browser run has been checked against live ChatGPT there. Intel Macs, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
+- Windows, Linux and macOS on Apple silicon; macOS from v0.2.0. On macOS, CI runs the offline tests and the Chrome fixture test; no browser run has been checked against live ChatGPT there. Intel Macs, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
 - Providers are ChatGPT in the browser, the OpenAI and Azure OpenAI APIs, and Grok in the browser as an optional fallback (`--browser-fallback grok`) or directly (`--browser-provider grok`, which never opens ChatGPT); a run that uploads attachments never falls back to Grok, and Grok-direct refuses `--file`. Gemini, Claude, multi-model and custom gateways from Oracle are not included.
 - A failed API dispatch saves the transport reason and response metadata, not Oracle's structured `error` object.
 - Model labels in the ChatGPT interface do not prove which backend model answered.
@@ -129,10 +129,10 @@ Read [SECURITY.md](SECURITY.md) before attaching files: everything you attach go
 
 Alcuin suits you if you want a model from another vendor to answer about a fixed set of files, and to keep every answer. Other tools fit other needs:
 
-- **A second look from the same family, with nothing to install:** Claude Code's [advisor tool](https://code.claude.com/docs/en/advisor) lets Claude consult a stronger Claude model, which reads the whole conversation.
-- **Review without driving a web page:** OpenAI's [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) runs Codex reviews from Claude Code. Codex reads what it chooses, not a packet you fix in advance.
-- **Several models at once:** [consult-llm](https://github.com/raine/consult-llm) and [pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) consult several providers through their APIs or local CLIs.
-- **Gemini, Claude or an Intel Mac:** [Oracle](https://github.com/steipete/oracle), the tool Alcuin is ported from.
+- **A second look from the same family, with nothing to install:** some coding agents can consult a stronger model of their own family, which reads the whole conversation.
+- **Review without driving a web page:** comparable tools run another vendor's coding agent as a reviewer inside yours. That agent reads what it chooses, not a packet you fix in advance.
+- **Several models at once:** comparable tools consult several providers through their APIs or local CLIs.
+- **Gemini, Claude or an Intel Mac:** the tool Alcuin is ported from, named above.
 
 ## Development
 

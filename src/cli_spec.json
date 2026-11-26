@@ -201,6 +201,9 @@
     "flags": "--browser-timeout <ms|s|m>"
   },
   {
+    "flags": "--browser-slot-wait <ms|s|m|h>"
+  },
+  {
     "flags": "--browser-input-timeout <ms|s|m>"
   },
   {

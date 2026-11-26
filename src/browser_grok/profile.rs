@@ -11,6 +11,7 @@ const COPIED: &[&str] = &[
     "inputTimeoutMs",
     "profileLockTimeoutMs",
     "timeoutMs",
+    "slotWaitMs",
     "hideWindow",
     "keepWindowBehind",
     "keepBrowser",
@@ -69,7 +70,9 @@ pub(crate) fn require_config(config: &Value) -> Result<()> {
         if let Some(value) = config.get(*key) {
             let valid = match *key {
                 "chromePath" => value.as_str().is_some_and(|value| !value.is_empty()),
-                "inputTimeoutMs" | "profileLockTimeoutMs" | "timeoutMs" => value.as_u64().is_some(),
+                "inputTimeoutMs" | "profileLockTimeoutMs" | "timeoutMs" | "slotWaitMs" => {
+                    value.as_u64().is_some()
+                }
                 _ => value.is_boolean(),
             };
             ensure!(valid, "Invalid Grok operational setting {key}");

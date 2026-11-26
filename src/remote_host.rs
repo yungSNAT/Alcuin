@@ -76,6 +76,7 @@ const CLIENT_FIELDS: &[&str] = &[
     "archiveConversations",
     "resumeConversationUrl",
     "timeoutMs",
+    "slotWaitMs",
     "inputTimeoutMs",
     "attachmentTimeoutMs",
     "assistantRecheckDelayMs",
