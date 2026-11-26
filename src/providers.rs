@@ -1267,4 +1267,78 @@ mod tests {
         .unwrap();
         assert_eq!(azure.transport, ApiTransport::Responses);
     }
+    #[test]
+    fn the_openai_key_reaches_only_microsoft_run_azure_hosts() {
+        let openai = Environment::from([("OPENAI_API_KEY".into(), "PUBLIC-fixture".into())]);
+        let route = |endpoint: &str, env: &Environment| {
+            resolve_route(
+                "gpt-6-astra",
+                &json!({"azure": {"endpoint": endpoint, "deployment": "d"}}),
+                env,
+            )
+            .unwrap()
+        };
+        for endpoint in [
+            "https://PUBLIC.openai.azure.com/",
+            "https://public.cognitiveservices.azure.com",
+            "https://public.services.ai.azure.com",
+            "https://public.openai.azure.us",
+            "https://public.cognitiveservices.azure.us",
+            "https://public.openai.azure.cn",
+            "https://public.cognitiveservices.azure.cn",
+        ] {
+            let (route, key) = route(endpoint, &openai);
+            assert_eq!(
+                (route.key_source.as_str(), key.is_some()),
+                ("OPENAI_API_KEY", true),
+                "{endpoint}"
+            );
+        }
+        // Customer-run names under azure.com, look-alikes and local proxies need the Azure key.
+        for endpoint in [
+            "https://public.cloudapp.azure.com",
+            "https://public.azurewebsites.net",
+            "https://openai.azure.com",
+            "https://public.openai.azure.com.public.invalid",
+            "https://publicopenai.azure.com",
+            "https://public.invalid",
+            "http://127.0.0.1:8080",
+        ] {
+            let (route, key) = route(endpoint, &openai);
+            assert_eq!(
+                (route.key_source.as_str(), key.is_some()),
+                ("AZURE_OPENAI_API_KEY", false),
+                "{endpoint}"
+            );
+            assert_eq!(
+                missing_key_message(&route).split(". Set").next(),
+                Some(
+                    "Missing AZURE_OPENAI_API_KEY (OPENAI_API_KEY is sent only to Microsoft-run Azure OpenAI hosts)"
+                ),
+                "{endpoint}"
+            );
+            let both = Environment::from([
+                ("OPENAI_API_KEY".into(), "PUBLIC-fixture".into()),
+                ("AZURE_OPENAI_API_KEY".into(), "PUBLIC-azure-fixture".into()),
+            ]);
+            let (route, key) = super::resolve_route(
+                "gpt-6-astra",
+                &json!({"azure": {"endpoint": endpoint, "deployment": "d"}}),
+                &both,
+            )
+            .unwrap();
+            assert_eq!(
+                (route.key_source.as_str(), key.is_some()),
+                ("AZURE_OPENAI_API_KEY", true),
+                "{endpoint}"
+            );
+        }
+        let (route, _) = route("https://public.openai.azure.com", &Environment::new());
+        assert!(
+            missing_key_message(&route)
+                .starts_with("Missing AZURE_OPENAI_API_KEY (or OPENAI_API_KEY)."),
+            "{}",
+            missing_key_message(&route)
+        );
+    }
 }

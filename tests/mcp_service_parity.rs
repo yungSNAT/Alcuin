@@ -1004,7 +1004,7 @@ async fn missing_api_keys_use_the_reference_text() {
                 ),
                 ("AZURE_OPENAI_DEPLOYMENT".into(), "PUBLIC".into()),
             ]),
-            "AZURE_OPENAI_API_KEY (or OPENAI_API_KEY)",
+            "AZURE_OPENAI_API_KEY (OPENAI_API_KEY is sent only to Microsoft-run Azure OpenAI hosts)",
         ),
     ] {
         let server = server(home.path(), env);
