@@ -595,5 +595,8 @@ impl OwnedTarget {
     }
 }
 #[cfg(test)]
+#[path = "browser_target_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_target_tests.rs"]
 mod tests;

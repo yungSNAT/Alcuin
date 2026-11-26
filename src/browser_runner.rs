@@ -6355,5 +6355,11 @@ async fn retire_absent_target(
     Ok(result)
 }
 #[cfg(test)]
+#[path = "browser_runner_coverage2_tests.rs"]
+mod coverage2_tests;
+#[cfg(test)]
+#[path = "browser_runner_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_runner_tests.rs"]
 pub(crate) mod tests;

@@ -1344,3 +1344,9 @@ mod wire_tests {
             .unwrap();
     }
 }
+#[cfg(test)]
+#[path = "browser_commit_coverage2_tests.rs"]
+mod coverage2_tests;
+#[cfg(test)]
+#[path = "browser_commit_coverage_tests.rs"]
+mod coverage_tests;
