@@ -621,10 +621,11 @@ fn synthetic_proc_inventory_distinguishes_absence_from_unreadable_entries() {
     fs::write(fd.join("PUBLIC-not-a-descriptor"), "").unwrap();
     let held = profile.join("PUBLIC-open");
     symlink(&held, fd.join("3")).unwrap();
-    assert_eq!(open_paths(&process).unwrap(), [(3, held)]);
+    assert_eq!(open_paths(&process).unwrap(), Some(vec![(3, held)]));
     fs::write(fd.join("4"), "PUBLIC-not-a-link").unwrap();
+    let error = open_paths(&process).unwrap_err();
     assert_eq!(
-        open_paths(&process).unwrap_err().kind(),
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
         ErrorKind::InvalidInput
     );
 }
