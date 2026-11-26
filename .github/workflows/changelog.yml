@@ -20,7 +20,8 @@ concurrency:
 jobs:
   changelog:
     if: >-
-      !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+      github.event.pull_request.state == 'open'
+      && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
       && github.event.pull_request.user.login != 'dependabot[bot]'
     timeout-minutes: 5
     runs-on: ubuntu-latest
