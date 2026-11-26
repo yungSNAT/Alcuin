@@ -135,14 +135,12 @@ fn native(raw: &str) -> bool {
 /// OpenAI hosts; any other endpoint, customer-run `*.azure.com` names such as
 /// `cloudapp.azure.com` and local proxies included, must be given `AZURE_OPENAI_API_KEY`.
 pub(crate) fn azure_key_names(endpoint: Option<&str>) -> &'static [&'static str] {
-    const MICROSOFT: [&str; 7] = [
+    const MICROSOFT: [&str; 5] = [
         ".openai.azure.com",
         ".cognitiveservices.azure.com",
         ".services.ai.azure.com",
         ".openai.azure.us",
         ".cognitiveservices.azure.us",
-        ".openai.azure.cn",
-        ".cognitiveservices.azure.cn",
     ];
     let microsoft = endpoint
         .and_then(|raw| reqwest::Url::parse(raw).ok())
@@ -1313,8 +1311,9 @@ mod tests {
             "https://public.services.ai.azure.com",
             "https://public.openai.azure.us",
             "https://public.cognitiveservices.azure.us",
-            "https://public.openai.azure.cn",
-            "https://public.cognitiveservices.azure.cn",
+            "https://PUBLIC.OPENAI.AZURE.COM",
+            "https://public.openai.azure.com:8443/path",
+            "https://public.invalid@public.openai.azure.com",
         ] {
             let (route, key) = route(endpoint, &openai);
             assert_eq!(
@@ -1332,6 +1331,15 @@ mod tests {
             "https://publicopenai.azure.com",
             "https://public.invalid",
             "http://127.0.0.1:8080",
+            "https://public.openai.azure.com.",
+            "https://public.openai.azure.com@public.invalid",
+            "https://public%2Eopenai.azure.com.public.invalid",
+            "https://public.invalid/public.openai.azure.com",
+            "https://public.invalid/?host=public.openai.azure.com",
+            "https://public.invalid#.openai.azure.com",
+            "https://[::1]",
+            "https://public.openai.azure.cn",
+            "https://public.cognitiveservices.azure.cn",
         ] {
             let (route, key) = route(endpoint, &openai);
             assert_eq!(
