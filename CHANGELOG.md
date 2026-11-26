@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Alcuin no longer depends on chrono, which is unmaintained (RUSTSEC-2026-0543): rmcp 3.12.0 makes it optional, and Alcuin turns rmcp's default features off and keeps the ones it uses. The audit and OSV-Scanner ignores for it are gone.
+- An Azure route no longer sends `OPENAI_API_KEY` to any HTTPS endpoint when `AZURE_OPENAI_API_KEY` is unset. The fallback now applies only to Microsoft-run Azure OpenAI hosts (`*.openai.azure.com`, `*.cognitiveservices.azure.com`, `*.services.ai.azure.com`, and the `openai` and `cognitiveservices` forms under `.azure.us`). Any other endpoint, including a customer-run `*.cloudapp.azure.com` name or a local proxy, needs `AZURE_OPENAI_API_KEY`, and the missing-key error says so.
 - The Claude Code plugin now installs from the release tag of its version (`v0.2.0` here) instead of the default branch, so its skills and server entry match the `alcuin` and `alcuin-mcp` binaries you installed from that release, and Claude Code offers an update only when a release moves the version.
 - `alcuin docs check` now reports a directory passed to `--docs-path`, including when the other inputs are valid files.
 - The MCP `consult` and session results now carry the `browser-pro-unavailable-fallback` warning when ChatGPT answered a Pro request at Extra High because it showed Pro as unavailable, and so does a run on a remote host (`--remote-host`), rebuilt from the thinking evidence the host returns. Before, only the CLI said so, so an agent calling the MCP server read the answer as Pro.
