@@ -556,5 +556,8 @@ pub fn format(result: &Value) -> String {
 }
 
 #[cfg(test)]
+#[path = "browser_health_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_health_tests.rs"]
 mod tests;
