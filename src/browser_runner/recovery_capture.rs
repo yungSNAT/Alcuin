@@ -66,6 +66,13 @@ pub(crate) async fn recover_child_capture(
     let target =
         OwnedTarget::recover(browser, lease, target_id.into(), limits.command, cancel).await?;
     let info = target.require(limits.command, cancel).await?;
+    if saved["browser"]["attempt"]["provider"] == "gemini" {
+        super::gemini::recover(
+            store, id, &witness, &saved, &committed, &target, &guard, limits, cancel,
+        )
+        .await?;
+        return store.require(id);
+    }
     if saved["browser"]["attempt"]["provider"] == "grok" {
         super::grok::recover(
             store, id, &witness, &saved, &committed, &target, &info, &guard, limits, cancel,

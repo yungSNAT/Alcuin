@@ -4284,7 +4284,7 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
             Ok::<_,anyhow::Error>(())
         });
         let checked=std::panic::AssertUnwindSafe(async {
-            for url in ["https://PUBLIC.invalid/","https://grok.com/","https://chatgpt.com/?temporary-chat=true"] {
+            for url in ["https://PUBLIC.invalid/","https://grok.com/","https://gemini.google.com/app","https://chatgpt.com/?temporary-chat=true"] {
             let origin=reqwest::Url::parse(url)?.origin().ascii_serialization();
             page.call("Page.navigate",json!({"url":url}),SHORT,&cancel).await?;
             let deadline=tokio::time::Instant::now()+SHORT;
@@ -4295,11 +4295,15 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             if origin!="https://chatgpt.com" {
-                mount(&page,ACTIVE,"/","").await?;
+                let path=reqwest::Url::parse(url)?.path().to_owned();
+                mount(&page,ACTIVE,&path,"").await?;
                 refuses(&page,SHORT,"Page is not on chatgpt.com").await.context("Non-ChatGPT origin proved Temporary Chat")?;
             }
             if origin=="https://grok.com" {
                 crate::browser_grok::tests::native_cases(&page, &chrome.endpoint).await.context("Native Grok Private/witness regression")?;
+            }
+            if origin=="https://gemini.google.com" {
+                crate::browser_gemini::native_case(&page).await.context("Native Gemini Temporary Chat fixture")?;
             }
             }
             let file=temp.path().join("PUBLIC-context.txt");

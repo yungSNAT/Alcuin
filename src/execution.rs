@@ -424,22 +424,27 @@ fn resolve_origin(
     }
     let (browser, cookie_bootstrap, manual_choice) =
         browser_settings(input, config, env, cwd, &engine, mcp, &model)?;
-    // Grok-direct is a request choice only; configuration never selects a provider.
+    // A direct provider is a request choice only.
     match input.get("browserProvider") {
         None => {}
         Some(value) if *value == "chatgpt" => {}
-        Some(value) if *value == "grok" => {
+        Some(value) if matches!(value.as_str(), Some("grok" | "gemini")) => {
+            let provider = value.as_str().expect("validated provider");
+            ensure!(
+                engine == "browser",
+                "Direct provider selection requires the browser engine."
+            );
             ensure!(
                 file_inputs.is_empty(),
-                "--browser-provider grok sends text prompts only; put the files' contents in the prompt instead of --file."
+                "--browser-provider {provider} sends text prompts only; put the files' contents in the prompt instead of --file."
             );
             ensure!(
                 browser["researchMode"] != "deep",
-                "--browser-provider grok does not support deep research."
+                "--browser-provider {provider} does not support deep research."
             );
-            options["browserProvider"] = json!("grok");
+            options["browserProvider"] = value.clone();
         }
-        Some(_) => bail!("Browser provider must be chatgpt or grok"),
+        Some(_) => bail!("Browser provider must be chatgpt, grok or gemini"),
     }
     if engine == "browser" {
         options["browserConfig"] = browser.clone();

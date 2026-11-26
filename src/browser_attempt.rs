@@ -31,6 +31,25 @@ pub(crate) use recovery::{
 pub(crate) enum Provider {
     Chatgpt,
     Grok,
+    Gemini,
+}
+
+impl Provider {
+    pub(crate) fn alternate(value: &Value) -> Option<Self> {
+        match value.as_str()? {
+            "grok" => Some(Self::Grok),
+            "gemini" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Chatgpt => "chatgpt",
+            Self::Grok => "grok",
+            Self::Gemini => "gemini",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -437,8 +456,18 @@ impl Parent {
     /// Grok-direct (`--browser-provider grok`): the first and only attempt is Grok, so no
     /// prompt reaches ChatGPT. It has no retry or provider switch: both require a ChatGPT
     /// first attempt. Only a new text conversation qualifies, as for the fallback switch.
+    #[cfg(test)]
     pub(crate) fn reserve_first_grok(
         &mut self,
+        environment: &crate::config::Environment,
+        cancel: &CancellationToken,
+    ) -> Result<Link> {
+        self.reserve_first_alternate(Provider::Grok, environment, cancel)
+    }
+
+    pub(crate) fn reserve_first_alternate(
+        &mut self,
+        provider: Provider,
         environment: &crate::config::Environment,
         cancel: &CancellationToken,
     ) -> Result<Link> {
@@ -450,22 +479,34 @@ impl Parent {
         let parent = self.store.require(&self.id)?;
         let config = &parent["browser"]["config"];
         ensure!(
-            parent["options"]["browserProvider"] == "grok"
+            provider != Provider::Chatgpt
+                && parent["options"]["browserProvider"] == provider.id()
                 && config["resumeConversationUrl"].is_null()
                 && config["browserTabRef"].is_null()
                 && config["researchMode"] != "deep"
                 && config["captureProviderNative"] != true
                 && parent["options"]["writeArtifacts"] != true,
-            "Grok-direct consults support only a new text conversation"
+            "Direct provider consults support only a new text conversation"
         );
-        self.reserve(Provider::Grok, Some(environment), cancel)
+        self.reserve(provider, Some(environment), cancel)
     }
 
     /// The single consented provider switch (reference `withGrokFallback`). Only a typed
     /// ChatGPT failure whose bounded read-only original-target recovery expired qualifies;
     /// every other failure or request keeps the original error. The failed child stays
     /// inert evidence with its retained target; it is never replayed or reactivated.
+    #[cfg(test)]
     pub(crate) fn switch_to_grok(
+        &mut self,
+        failed: &Link,
+        error: &anyhow::Error,
+        environment: &crate::config::Environment,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Link>> {
+        self.switch_provider(failed, error, environment, cancel)
+    }
+
+    pub(crate) fn switch_provider(
         &mut self,
         failed: &Link,
         error: &anyhow::Error,
@@ -475,27 +516,33 @@ impl Parent {
         let Some(failure) = switch_failure(error) else {
             return Ok(None);
         };
-        if !self.switch_eligible(&self.store.require(&self.id)?, failed, cancel)? {
+        let parent = self.store.require(&self.id)?;
+        let Some(provider) = Provider::alternate(&parent["browser"]["config"]["fallbackProvider"])
+        else {
+            return Ok(None);
+        };
+        if !self.switch_eligible(&parent, failed, cancel)? {
             return Ok(None);
         }
         let child = self.store.require(&failed.child_id)?;
-        let decision = json!({"version":1,"from":failed,"to":"grok","failure":failure,
+        let decision = json!({"version":1,"from":failed,"to":provider.id(),"failure":failure,
             "dispatch":"uncertain","recovery":"expired","decidedAt":crate::sessions::timestamp(),
             "retainedTarget":child["browser"]["runtime"]["chromeTargetId"]});
         let reserved = self.reserve_with(
-            Provider::Grok,
+            provider,
             Some(environment),
             Some((Decision::Switch, failed, decision)),
             cancel,
         );
         match reserved {
             Ok(link) => Ok(Some(link)),
-            // The decision is durable only with its Grok reservation; restore the
+            // The decision is durable only with its alternate reservation. Restore the
             // original attempt so its read-only recovery remains available.
             Err(error) if self.state["switch"].is_object() => {
-                Err(match self.revert_unsent_switch("grok-reservation-failed") {
-                    Ok(()) => error.context("Provider switch decided but its Grok reservation failed; the ChatGPT attempt is restored for recovery"),
-                    Err(revert) => error.context(format!("Provider switch decided but its Grok reservation failed and the ChatGPT attempt could not be restored ({revert:#})")),
+                let provider = provider.id();
+                Err(match self.revert_unsent_switch(&format!("{provider}-reservation-failed")) {
+                    Ok(()) => error.context(format!("Provider switch decided but the {provider} reservation failed; the ChatGPT attempt is restored for recovery")),
+                    Err(revert) => error.context(format!("Provider switch decided but the {provider} reservation failed and the ChatGPT attempt could not be restored ({revert:#})")),
                 })
             }
             Err(error) => Err(error),
@@ -505,7 +552,7 @@ impl Parent {
     /// One fresh-tab retry of a first ChatGPT attempt that stopped on a typed failure which
     /// certainly sent nothing, recorded as the consultation's `retry` decision. Its durable
     /// record must agree: no dispatch, or one that never started its Send. The failed child
-    /// stays inert evidence, and the retry is itself never retried or switched to Grok.
+    /// stays inert evidence. The retry cannot start another browser attempt.
     pub(crate) fn retry_unsent(
         &mut self,
         failed: &Link,
@@ -591,7 +638,6 @@ impl Parent {
         let state = &parent["browser"]["consultation"];
         // Ineligible failures keep their own error: no attempt record is read for them.
         if !(!cancel.is_cancelled()
-            && config["fallbackProvider"] == "grok"
             && matches!(
                 config["fallbackConsentSource"].as_str(),
                 Some("request" | "personal-config")
@@ -677,9 +723,10 @@ impl Parent {
         options["providerAttempt"] = json!({"version":1,"role":"browser-provider-attempt"});
         options["browserConfig"] = match provider {
             Provider::Chatgpt => parent["browser"]["config"].clone(),
-            Provider::Grok => {
+            Provider::Grok | Provider::Gemini => {
                 crate::browser_grok::require_text_request(&self.request, &parent["options"])?;
-                crate::browser_grok::child_config(
+                crate::browser_grok::child_config_for(
+                    provider,
                     &parent["browser"]["config"],
                     environment
                         .context("Grok profile requires the original execution environment")?,
@@ -855,7 +902,7 @@ pub(super) fn unsent_restoration(
             && switch["outcome"].is_null()
             && from.provider == Provider::Chatgpt
             && from.ordinal == 1
-            && grok.provider == Provider::Grok
+            && Provider::alternate(&switch["to"]) == Some(grok.provider)
             && grok.ordinal == 2
             && state["attempts"] == json!([from, grok])
             && state["fallback"].is_null()
@@ -930,7 +977,7 @@ fn require_payload(
 ) -> Result<()> {
     let committed = browser_runner::request(store, id)?;
     let ready: Ready = serde_json::from_value(child["browser"]["attemptReady"].clone())?;
-    if link.provider == Provider::Grok {
+    if link.provider != Provider::Chatgpt {
         ensure!(
             child["browser"]["config"] == child["options"]["browserConfig"],
             "Grok saved config differs from its sealed options"

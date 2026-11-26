@@ -24,6 +24,7 @@ pub mod browser_detect;
 pub mod browser_disposition;
 pub mod browser_dom;
 pub mod browser_download;
+mod browser_gemini;
 mod browser_grok;
 pub mod browser_harvest;
 pub mod browser_health;
@@ -94,7 +95,7 @@ mod window_keeper;
 #[cfg(test)]
 mod browser_script_tests {
     /// Pins the text the browser receives for the scripts that read target ownership. They run
-    /// in a signed-in ChatGPT session, so a change to that text is a reviewed change: update the
+    /// in a signed-in session, so a change to that text is a reviewed change: update the
     /// hash with it.
     #[test]
     fn injected_ownership_scripts_are_pinned() {
@@ -104,6 +105,7 @@ mod browser_script_tests {
             browser_script!("completion-install.js"),
             browser_script!("copy-markdown.js"),
             browser_script!("file-input-prepare.js"),
+            crate::browser_gemini::DOM,
             browser_script!("inspection-finish.js"),
             browser_script!("inspection-prepare.js"),
             browser_script!("model.js"),
@@ -128,7 +130,7 @@ mod browser_script_tests {
         .concat();
         assert_eq!(
             crate::artifacts::sha256(text.as_bytes()),
-            "cbebb6be7d02558cbb172047651a312aa85a79a044fa700d5b8bbee91253ae02"
+            "cd0cb58cf719896bde52201d22920b4c1b810941432b6f05588fa68f7a118ea7"
         );
     }
 }

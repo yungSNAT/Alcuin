@@ -78,9 +78,10 @@
             ]
           },
           "browserFallback": {
-            "description": "Explicit consent to consult grok.com once in a separate Private profile after ChatGPT fails and its bounded read-only recovery expires; the original ChatGPT request is retained for recovery.",
+            "description": "Explicit consent to consult a browser fallback once after ChatGPT fails and its bounded read-only recovery expires. Gemini requires Temporary Chat, Gemini 4 Neon and High thinking in a separate sign-in profile. The original ChatGPT request is retained for recovery.",
             "type": "string",
             "enum": [
+              "gemini",
               "grok",
               "none"
             ]
@@ -241,6 +242,7 @@
                   "fallbackProvider": {
                     "type": "string",
                     "enum": [
+                      "gemini",
                       "grok",
                       "none"
                     ]

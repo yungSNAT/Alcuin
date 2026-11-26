@@ -101,6 +101,19 @@ return (() => {
           writeOracleTargetClaim(claim);
           return true;
         }
+        if (cfg.provider === 'gemini') {
+          const witness = window.__alcuinGemini;
+          if (location.origin !== 'https://gemini.google.com' || !receipt ||
+              receipt.provider !== 'gemini' || receipt.temporaryChat !== true ||
+              receipt.model !== 'Gemini 4 Neon' || receipt.thinking !== 'High' ||
+              receipt.owner?.claimId !== owner.claimId || receipt.owner?.reservationId !== owner.reservationId ||
+              !fingerprint(receipt.promptSha256) || !boundedId(receipt.id) ||
+              witness?.id !== receipt.id || witness.sent !== true) return false;
+          submission.dispatch = 'acknowledged';
+          submission.commitReceipt = receipt;
+          writeOracleTargetClaim(claim);
+          return true;
+        }
         if (!receipt || receipt.version !== 1 || receipt.kind !== 'new-user-message' ||
             receipt.claimId !== owner.claimId || receipt.reservationId !== owner.reservationId ||
             !boundedId(receipt.messageId) || !boundedId(receipt.turnId) ||

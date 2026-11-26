@@ -95,7 +95,8 @@ fn receipt(child: &Value) -> Value {
         runtime["submittedPromptHash"],
         runtime["submittedPromptHashFormat"],
         runtime["ownedRecoveryTarget"],
-        runtime["grokCommitReceipt"]
+        runtime["grokCommitReceipt"],
+        runtime["geminiCommitReceipt"]
     ])
 }
 fn original_owner(meta: &Value) -> Result<ProcessIdentity> {
@@ -121,7 +122,7 @@ fn exited_switch(parent: &Value) -> bool {
     let state = &parent["browser"]["consultation"];
     state["switch"].is_object()
         && state["switch"]["outcome"].is_null()
-        && state["active"]["provider"] == "grok"
+        && Provider::alternate(&state["active"]["provider"]).is_some()
         && state["selected"].is_null()
         && state["adoption"].is_null()
         && parent["capturedAnswer"].is_null()
@@ -386,7 +387,7 @@ impl Guard {
         ensure!(
             link.provider == Provider::Chatgpt
                 || child["lifecycle"]["processIdentity"] == parent["lifecycle"]["processIdentity"]
-                    && child["browser"]["runtime"]["provider"] == "grok",
+                    && child["browser"]["runtime"]["provider"] == link.provider.id(),
             "Grok recovery requires its exact original parent worker and provider evidence"
         );
         if completed {
@@ -844,6 +845,44 @@ impl Guard {
             current == next,
             "Child changed during recovered Grok commitment persistence"
         );
+        self.sealed_receipt
+            .set(receipt(&next))
+            .map_err(|_| anyhow::anyhow!("Recovery commitment was already sealed"))?;
+        self.require_session(&self.link.child_id, &next)?;
+        Ok(next)
+    }
+
+    pub(crate) fn acknowledge_gemini(&self, before: &Value, observed: &Value) -> Result<Value> {
+        self.require_session(&self.link.child_id, before)?;
+        ensure!(
+            self.link.provider == Provider::Gemini
+                && before["dispatch"]["state"] == "started"
+                && self.sealed_receipt.get().is_none(),
+            "Gemini recovery cannot replace an existing acknowledgement"
+        );
+        let runtime = &before["browser"]["runtime"];
+        let owner = serde_json::from_value(runtime["submissionOwner"].clone())?;
+        let request = browser_runner::request(&self.store, &self.link.child_id)?;
+        let committed = crate::browser_gemini::receipt(&owner, &before["dispatch"]);
+        let changes = json!({"browser":merge_object(&before["browser"],&json!({"runtime":merge_object(runtime,
+            &json!({"geminiCommitReceipt":committed,"submittedPromptHash":request.prompt_sha256,
+            "submittedPromptHashFormat":"gemini-request-v1"}))})),
+            "dispatch":merge_object(&before["dispatch"],&json!({"state":"acknowledged"}))});
+        crate::browser_gemini::accept_saved_answer(
+            &request,
+            &merge_object(before, &changes),
+            observed,
+        )?;
+        let next = self.store.update(&self.link.child_id, |current| {
+            self.require_session(&self.link.child_id, current)?;
+            ensure!(
+                current == before,
+                "Gemini attempt changed during read-only recovery"
+            );
+            Ok(Some(changes))
+        })?;
+        let (_, current) = self.require_base()?;
+        ensure!(current == next, "Gemini commitment changed after recovery");
         self.sealed_receipt
             .set(receipt(&next))
             .map_err(|_| anyhow::anyhow!("Recovery commitment was already sealed"))?;

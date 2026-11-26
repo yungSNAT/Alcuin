@@ -382,7 +382,7 @@ impl TargetJournal {
         };
         matches!(
             record["commit"]["kind"].as_str(),
-            Some("session" | "research-report" | "grok-session")
+            Some("session" | "research-report" | "grok-session" | "gemini-session")
         ) && record["finalisedAt"]
             .as_str()
             .is_some_and(|time| !time.is_empty())
@@ -850,6 +850,35 @@ impl TargetJournal {
             .as_str()
             .or_else(|| observed["text"].as_str())
             .context("Completed assistant has no content evidence")?;
+        if session["browser"]["runtime"]["provider"] == "gemini"
+            || observed["kind"] == "gemini-temporary-answer"
+        {
+            crate::browser_gemini::accept_saved_answer(
+                &crate::browser_runner::request(
+                    &self.store,
+                    session["id"]
+                        .as_str()
+                        .context("Gemini session ID missing")?,
+                )?,
+                session,
+                observed,
+            )?;
+            let mut commit = self.session_commit_content(
+                creator,
+                session,
+                &observed["id"],
+                provider_text,
+                "text",
+            )?;
+            commit["kind"] = json!("gemini-session");
+            commit["geminiCommitReceipt"] =
+                session["browser"]["runtime"]["geminiCommitReceipt"].clone();
+            commit
+                .as_object_mut()
+                .expect("Session commitment object")
+                .remove("conversationId");
+            return Ok(commit);
+        }
         if session["browser"]["runtime"]["provider"] == "grok"
             || observed["kind"] == "grok-private-answer"
         {
@@ -1017,11 +1046,12 @@ impl TargetJournal {
         let creator = &record["creator"];
         let commit = &record["commit"];
         let grok = commit["kind"] == "grok-session";
+        let gemini = commit["kind"] == "gemini-session";
         ensure!(
             commit["version"] == 1
                 && commit["allocationId"] == creator["allocationId"]
                 && commit["claimId"] == creator["target"]["claimId"]
-                && (if grok {
+                && (if grok || gemini {
                     commit.get("conversationId").is_none()
                 } else {
                     commit["conversationId"]
@@ -1056,7 +1086,7 @@ impl TargetJournal {
         ensure!(
             matches!(
                 commit["kind"].as_str(),
-                Some("session" | "research-report" | "grok-session")
+                Some("session" | "research-report" | "grok-session" | "gemini-session")
             ),
             "Invalid target commitment kind"
         );
@@ -1113,6 +1143,36 @@ impl TargetJournal {
                     && commit.get("grokCommitReceipt").is_none()
                     && commit.get("grokCompletionReceipt").is_none(),
                 "Grok evidence cannot use another provider commitment kind"
+            );
+        }
+        if gemini {
+            let observed = &runtime["acceptedObservation"];
+            crate::browser_gemini::accept_saved_answer(
+                &crate::browser_runner::request(&self.store, id)?,
+                &session,
+                observed,
+            )?;
+            ensure!(
+                record.get("nativeOwnerIdentity").is_some()
+                    && commit["geminiCommitReceipt"] == runtime["geminiCommitReceipt"]
+                    && commit["assistantMessageId"] == observed["id"]
+                    && commit["assistantContent"]["representation"] == "text"
+                    && commit["assistantContent"]["sha256"]
+                        == sha256(
+                            observed["text"]
+                                .as_str()
+                                .context("Gemini text missing")?
+                                .as_bytes()
+                        )
+                    && commit["output"]["sha256"] == commit["assistantContent"]["sha256"],
+                "Gemini commitment or captured text changed"
+            );
+        } else {
+            ensure!(
+                runtime["provider"] != "gemini"
+                    && runtime["acceptedObservation"]["kind"] != "gemini-temporary-answer"
+                    && commit.get("geminiCommitReceipt").is_none(),
+                "Gemini evidence cannot use another provider commitment kind"
             );
         }
         if commit["kind"] == "research-report" {

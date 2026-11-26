@@ -40,6 +40,7 @@ impl std::error::Error for Failure {}
 pub(crate) enum FallbackProvider {
     None,
     Grok,
+    Gemini,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -69,7 +70,8 @@ impl Consent {
         let provider = match value.as_str() {
             Some("none") => FallbackProvider::None,
             Some("grok") => FallbackProvider::Grok,
-            _ => bail!("Browser fallback must be none or grok"),
+            Some("gemini") => FallbackProvider::Gemini,
+            _ => bail!("Browser fallback must be none, grok or gemini"),
         };
         Ok(Self { provider, source })
     }
@@ -125,6 +127,30 @@ mod tests {
                     &json!({"fallbackProvider":"grok"})
                 )
                 .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_consent_can_come_from_the_personal_config_or_the_request() {
+        for (input, config, source) in [
+            (
+                json!({}),
+                json!({"fallbackProvider":"gemini"}),
+                ConsentSource::PersonalConfig,
+            ),
+            (
+                json!({"browserFallback":"gemini"}),
+                json!({"fallbackProvider":"grok"}),
+                ConsentSource::Request,
+            ),
+        ] {
+            assert_eq!(
+                Consent::resolve(&input, &config).unwrap(),
+                Consent {
+                    provider: FallbackProvider::Gemini,
+                    source
+                }
             );
         }
     }

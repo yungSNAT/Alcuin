@@ -29,6 +29,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod gemini;
 mod grok;
 #[cfg(test)]
 pub(crate) use grok::tests::native_cases as native_grok_runner_cases;
@@ -973,6 +974,17 @@ fn recovery_identity(metadata: &Value) -> Value {
             identity[key] = metadata["browser"]["runtime"][key].clone();
         }
     }
+    if metadata["browser"]["runtime"]["provider"] == "gemini" {
+        for key in [
+            "provider",
+            "geminiCommitReceipt",
+            "effectiveModel",
+            "modelSelection",
+            "thinkingSelection",
+        ] {
+            identity[key] = metadata["browser"]["runtime"][key].clone();
+        }
+    }
     identity
 }
 /// Saved authority over the target a run submits to. A created target carries its creator
@@ -1700,15 +1712,16 @@ async fn run_native_consultation(
     {
         store.append_log(id, initial["model"].as_str(), &header)?;
     }
-    let grok_direct = initial["options"]["browserProvider"] == "grok";
+    use crate::browser_attempt::Provider;
+    let direct = Provider::alternate(&initial["options"]["browserProvider"]);
     // A user-selected existing target keeps its existing borrowed-target contract.
     if initial["browser"]["config"]["browserTabRef"]
         .as_str()
         .is_some_and(|reference| !policy::trim(reference).is_empty())
     {
         anyhow::ensure!(
-            !grok_direct,
-            "--browser-provider grok cannot use a borrowed ChatGPT tab"
+            direct.is_none(),
+            "An alternate provider cannot use a borrowed ChatGPT tab"
         );
         return Box::pin(run_native_prepared(
             store,
@@ -1724,9 +1737,9 @@ async fn run_native_consultation(
     let witness = ExecutionWitness::capture(store, id, identity)?;
     let result=async {
         let mut parent=crate::browser_attempt::Parent::begin(store,id,identity,cancel)?;
-        let first=if grok_direct {
-            anyhow::ensure!(capture.is_none() && bootstrap.is_none(),"--browser-provider grok runs locally and cannot use ChatGPT cookie bootstrap or a remote capture");
-            parent.reserve_first_grok(environment,cancel)?
+        let first=if let Some(provider) = direct {
+            anyhow::ensure!(capture.is_none() && bootstrap.is_none(),"Alternate providers run locally without ChatGPT cookie bootstrap or remote capture");
+            parent.reserve_first_alternate(provider,environment,cancel)?
         } else {
             parent.reserve_first(cancel)?
         };
@@ -1755,38 +1768,43 @@ async fn run_native_consultation(
                     retry
                 } else {
                 let switched=if capture.is_none() {
-                    parent.switch_to_grok(&first,&error,environment,cancel)
-                        .with_context(||format!("{retained} ({error:#}); the Grok provider switch did not start"))?
+                    parent.switch_provider(&first,&error,environment,cancel)
+                        .with_context(||format!("{retained} ({error:#}); the provider switch did not start"))?
                 } else {
                     None
                 };
-                let Some(grok)=switched else {
+                let Some(alternate)=switched else {
                     return Err(error.context(retained));
                 };
-                eprintln!("[browser] ChatGPT attempt {} failed after bounded original-target recovery; consulting grok.com once in its separate Private profile. The ChatGPT records are retained; a later cleanup closes its tab.",first.child_id);
-                let ran=match start_owner(store,&grok.child_id,identity) {
-                    Ok(_) => Box::pin(run_native_prepared(store,&grok.child_id,environment,identity,cancel,CaptureBoundary::ParentAttempt,None)).await,
+                let provider = alternate.provider.id();
+                eprintln!("[browser] ChatGPT attempt {} failed after bounded original-target recovery; consulting {provider} once in its separate profile.",first.child_id);
+                let ran=match start_owner(store,&alternate.child_id,identity) {
+                    Ok(_) => Box::pin(run_native_prepared(store,&alternate.child_id,environment,identity,cancel,CaptureBoundary::ParentAttempt,None)).await,
                     Err(failed) => Err(failed),
                 };
                 if let Err(failed)=ran {
-                    // Only a Grok attempt that never sent hands the consultation back to ChatGPT.
-                    return Err(match parent.revert_unsent_switch("grok-not-sent") {
-                        Ok(()) => anyhow::anyhow!("ChatGPT failed and Grok did not submit (the prompt may remain in its composer): {failed:#}. Recover ChatGPT attempt {} ({error:#}) read-only through this consultation; Grok attempt {} is retained as evidence",first.child_id,grok.child_id),
-                        Err(sent) => anyhow::anyhow!("ChatGPT failed and the Grok website fallback could not finish: {failed:#}. Grok attempt {} may have received the prompt ({sent:#}); it and ChatGPT attempt {} ({error:#}) are retained",grok.child_id,first.child_id),
+                    return Err(match parent.revert_unsent_switch(&format!("{provider}-not-sent")) {
+                        Ok(()) => anyhow::anyhow!("ChatGPT failed and {provider} did not submit: {failed:#}. Recover ChatGPT attempt {} ({error:#}) read-only through this consultation; {provider} attempt {} is retained",first.child_id,alternate.child_id),
+                        Err(sent) => anyhow::anyhow!("ChatGPT failed and the {provider} fallback could not finish: {failed:#}. {provider} attempt {} may have received the prompt ({sent:#}); it and ChatGPT attempt {} ({error:#}) are retained",alternate.child_id,first.child_id),
                     });
                 }
-                grok
+                alternate
                 }
             }
         };
         parent.adopt(&attempt.child_id,cancel)?;
         if attempt.provider==crate::browser_attempt::Provider::Grok {
             let mode=store.require(&attempt.child_id)?["browser"]["runtime"]["modelSelection"]["selectedMode"].as_str().unwrap_or("unknown").to_owned();
-            if grok_direct {
+            if direct.is_some() {
                 eprintln!("[browser] Answer adopted from Grok {mode} (verified Private Chat), consulted directly; ChatGPT was not opened.");
             } else {
                 eprintln!("[browser] Answer adopted from Grok {mode} (verified Private Chat) after the provider switch; ChatGPT attempt {} keeps its records; a later cleanup closes its tab.",first_child);
             }
+        }
+        if attempt.provider == Provider::Gemini {
+            let line = "[browser] Answer adopted from Gemini 4 Neon with High thinking (verified Temporary Chat and picker settings).";
+            eprintln!("{line}");
+            store.append_log(id, initial["model"].as_str(), &format!("{line}\n"))?;
         }
         if let Some(hook)=capture {
             parent.issue_capture(&hook,cancel)?;
@@ -1839,10 +1857,10 @@ async fn run_native_prepared(
         let meta = store.require(id)?;
         crate::browser_attempt::require_if_child(store,id,cancel)?;
         let config = &meta["browser"]["config"];
-        let grok=meta["browser"]["attempt"]["provider"] == "grok";
-        if grok {
+        let alternate=crate::browser_attempt::Provider::alternate(&meta["browser"]["attempt"]["provider"]);
+        if let Some(provider) = alternate {
             let link=crate::browser_attempt::require_child(store,id,cancel)?;
-            anyhow::ensure!(link.provider == crate::browser_attempt::Provider::Grok && bootstrap.is_none(), "Grok cannot inherit ChatGPT cookie bootstrap");
+            anyhow::ensure!(link.provider == provider && bootstrap.is_none(), "An alternate provider cannot inherit ChatGPT cookie bootstrap");
             crate::browser_grok::require_text_request(&request(store,id)?,&meta["options"])?;
             crate::browser_grok::require_distinct(config,&store.require(&link.parent_id)?["browser"]["config"],environment,
                 Path::new(meta["cwd"].as_str().context("Grok working directory is unavailable")?))?;
@@ -1906,7 +1924,7 @@ async fn run_native_prepared(
             stable_ms,
             ..RunnerLimits::from_config(config)
         };
-        let configured = if grok {
+        let configured = if alternate.is_some() {
             crate::browser_chrome::ChromeConnection::configured_grok(config,environment,cwd,limits.command,cancel).await?
         } else {
             crate::browser_chrome::ChromeConnection::configured(config,environment,cwd,limits.command,cancel).await?
@@ -2800,14 +2818,20 @@ async fn run_owned(
     {
         eprintln!("Chrome focus emulation is unavailable: {error}");
     }
-    let grok = store.require(id)?["browser"]["attempt"]["provider"] == "grok";
-    let _dialogs = if grok {
+    use crate::browser_attempt::Provider;
+    let alternate = Provider::alternate(&store.require(id)?["browser"]["attempt"]["provider"]);
+    let grok = alternate == Some(Provider::Grok);
+    let gemini = alternate == Some(Provider::Gemini);
+    let _dialogs = if alternate.is_some() {
         None
     } else {
         Some(dismiss_dialogs(store, id, target.page(), limits, cancel).await?)
     };
     let mut applied_cookies = 0;
-    let (url, expected_navigation) = if grok {
+    let (url, expected_navigation) = if gemini {
+        anyhow::ensure!(bootstrap.is_none(), "Gemini cannot receive ChatGPT cookies");
+        (crate::browser_gemini::URL.to_owned(), Value::Null)
+    } else if grok {
         anyhow::ensure!(bootstrap.is_none(), "Grok cannot receive ChatGPT cookies");
         ("https://grok.com/".to_owned(), Value::Null)
     } else {
@@ -2843,7 +2867,11 @@ async fn run_owned(
     if let Some(startup) = startup {
         startup.release()?;
     }
-    let mut reservation = if grok {
+    let mut reservation = if gemini {
+        gemini::navigate(target.page(), limits, cancel).await?;
+        RendererReservation::acquire_gemini(target.page().clone(), claim_id, limits.command, cancel)
+            .await?
+    } else if grok {
         grok::navigate(target.page(), limits, cancel).await?;
         RendererReservation::acquire_initial_grok(
             target.page().clone(),
@@ -2891,7 +2919,7 @@ async fn run_owned(
         } else {
             Selection::Choose
         };
-        if !grok {
+        if alternate.is_none() {
             let hint = crate::browser_page::LoginHint {
                 applied_cookies,
                 remote: config["remoteChrome"].is_object(),
@@ -2909,7 +2937,9 @@ async fn run_owned(
             )
             .await?;
         }
-        let delivered = if grok {
+        let delivered = if gemini {
+            Box::pin(gemini::deliver(store,id,witness,&committed,target,endpoint,&mut reservation,bringup,deferred_reconciliation,limits,cancel)).await?
+        } else if grok {
             Box::pin(grok::deliver(store,id,witness,&committed,target,endpoint,&creator,&mut reservation,bringup,deferred_reconciliation,limits,cancel)).await?
         } else {
             Box::pin(deliver(store, id, witness, &mut committed, target, endpoint, TargetAuthority::Created(Some(&creator)), selection, &config, &mut reservation, bringup, deferred_reconciliation, limits, cancel)).await?
@@ -2972,7 +3002,7 @@ async fn run_owned(
             &creator,
             &committed,
             &config,
-            grok,
+            alternate.is_some(),
             capture,
             limits,
             cancel,
@@ -3110,7 +3140,7 @@ async fn settle_failed_owned_run(
     creator: &Value,
     committed: &BrowserRequest,
     config: &Value,
-    grok: bool,
+    alternate: bool,
     capture: &CaptureBoundary,
     limits: &RunnerLimits,
     cancel: &CancellationToken,
@@ -3166,7 +3196,7 @@ async fn settle_failed_owned_run(
     } else if quarantined.is_ok()
         && cancel.is_cancelled()
         && !reservation.settled_before_dispatch()
-        && !grok
+        && !alternate
         && !capture.deferred()
         && let Err(cleanup) = retire_cancelled_send(
             store,

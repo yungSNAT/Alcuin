@@ -30,7 +30,7 @@ Runs an Alcuin session through the API or ChatGPT in the browser. Only `prompt` 
 | `browserResearchMode` | `search` | Turn on ChatGPT's web search |
 | `browserFollowUps` | array of strings | More prompts to send in the same conversation after the first answer |
 | `browserArchive` | `auto`, `always` or `never` | As `--browser-archive` |
-| `browserFallback` | `grok` or `none` | `grok` consults grok.com once if ChatGPT fails ([Browser runs](browser.md#grok)) |
+| `browserFallback` | `gemini`, `grok` or `none` | Allows one [alternate browser attempt](browser.md#gemini) after a qualifying ChatGPT failure. `none` disables the switch |
 | `browserKeepBrowser` | boolean | Leave the browser open afterwards |
 | `browserEndMarker` | boolean | As `--browser-end-marker` ([Partial answers](sessions.md#partial-answers)) |
 | `browserSlotWaitMs` | integer | As `--browser-slot-wait`, in milliseconds |
