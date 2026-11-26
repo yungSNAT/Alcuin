@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const TOOLS: [&str; 4] = ["consult", "project_sources", "sessions", "wait"];
+const TOOLS: [&str; 5] = ["consult", "ground", "project_sources", "sessions", "wait"];
 const MCP_TIMEOUT: Duration = Duration::from_secs(60);
 const MCP_INPUT: &str = concat!(
     r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}"#,
@@ -173,6 +173,33 @@ fn handshake(mut command: Command, out: &Path) -> Result<String, String> {
         return Err(format!("alcuin-mcp exited with {status}"));
     }
     fs::read_to_string(out).map_err(|e| format!("{}: {e}", out.display()))
+}
+
+#[cfg(test)]
+mod tool_list {
+    /// Tool names from a pretty-printed list whose entries start `<indent>"name": "`.
+    fn names(text: &str, indent: &str) -> Vec<String> {
+        let prefix = format!("{indent}\"name\": \"");
+        let mut names = text
+            .lines()
+            .filter_map(|line| line.strip_prefix(&prefix)?.split('"').next())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    /// The smoke test checks every tool the server lists and the bundle declares, so a new tool
+    /// cannot ship without its check.
+    #[test]
+    fn checks_every_tool_the_server_lists_and_the_bundle_declares() {
+        let mut checked = super::TOOLS.map(str::to_owned).to_vec();
+        checked.sort();
+        let listed = names(include_str!("../../../fixtures/mcp-tools.json"), "      ");
+        let declared = names(include_str!("../../mcpb/manifest.json"), "    { ");
+        assert_eq!(checked, listed, "fixtures/mcp-tools.json");
+        assert_eq!(checked, declared, "packaging/mcpb/manifest.json");
+    }
 }
 
 #[cfg(all(test, unix))]
