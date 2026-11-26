@@ -132,5 +132,5 @@ Alcuin keeps Oracle's names, so existing setups carry over.
 | `ORACLE_DISABLE_NOTIFICATIONS` | `1` turns notifications off |
 | `CHROME_PATH` | Chrome or Chromium executable to use |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | OpenAI API key and base URL (an `api.openai.com` host) |
-| `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` | Azure OpenAI |
+| `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` | Azure OpenAI. Without `AZURE_OPENAI_API_KEY`, `OPENAI_API_KEY` is used only for a Microsoft-run endpoint (`*.openai.azure.com`, `*.cognitiveservices.azure.com`, `*.services.ai.azure.com`, and the `.azure.us` and `.azure.cn` forms) |
 | `ORACLE_REMOTE_HOST`, `ORACLE_REMOTE_TOKEN` | A remote `alcuin serve` and its access token |

@@ -68,10 +68,12 @@ pub fn mask_api_key(key: &str) -> Option<String> {
 }
 /// Reference runOracle missing-key error. This build reads keys from the environment only.
 pub fn missing_key_message(route: &Route) -> String {
-    let source = if route.azure_deployment_name.is_some() {
+    let source = if route.azure_deployment_name.is_none() {
+        route.key_source.as_str()
+    } else if route.key_source.contains('|') {
         "AZURE_OPENAI_API_KEY (or OPENAI_API_KEY)"
     } else {
-        &route.key_source
+        "AZURE_OPENAI_API_KEY (OPENAI_API_KEY is sent only to Microsoft-run Azure OpenAI hosts)"
     };
     format!(
         "Missing {source}. Set it via the environment.{}",
@@ -128,6 +130,33 @@ fn native(raw: &str) -> bool {
                 .host_str()
                 .is_some_and(|host| host == "api.openai.com" || host.ends_with(".api.openai.com"))
     })
+}
+/// Key names for an Azure route. `OPENAI_API_KEY` is a fallback only for Microsoft-run Azure
+/// OpenAI hosts; any other endpoint, customer-run `*.azure.com` names such as
+/// `cloudapp.azure.com` and local proxies included, must be given `AZURE_OPENAI_API_KEY`.
+pub(crate) fn azure_key_names(endpoint: Option<&str>) -> &'static [&'static str] {
+    const MICROSOFT: [&str; 7] = [
+        ".openai.azure.com",
+        ".cognitiveservices.azure.com",
+        ".services.ai.azure.com",
+        ".openai.azure.us",
+        ".cognitiveservices.azure.us",
+        ".openai.azure.cn",
+        ".cognitiveservices.azure.cn",
+    ];
+    let microsoft = endpoint
+        .and_then(|raw| reqwest::Url::parse(raw).ok())
+        .is_some_and(|url| {
+            url.scheme() == "https"
+                && url
+                    .host_str()
+                    .is_some_and(|host| MICROSOFT.iter().any(|suffix| host.ends_with(suffix)))
+        });
+    if microsoft {
+        &["AZURE_OPENAI_API_KEY", "OPENAI_API_KEY"]
+    } else {
+        &["AZURE_OPENAI_API_KEY"]
+    }
 }
 fn is_loopback_http(url: &reqwest::Url) -> bool {
     url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
@@ -222,7 +251,7 @@ pub fn resolve_route(
         base = Some("https://openrouter.ai/api/v1".into());
     }
     let keys: &[&str] = if azure {
-        &["AZURE_OPENAI_API_KEY", "OPENAI_API_KEY"]
+        azure_key_names(azure_endpoint)
     } else if mode == "openai" {
         &["OPENAI_API_KEY"]
     } else if qualified || base.as_deref().is_some_and(openrouter) {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An Azure route no longer sends `OPENAI_API_KEY` to any HTTPS endpoint when `AZURE_OPENAI_API_KEY` is unset. The fallback now applies only to Microsoft-run Azure OpenAI hosts (`*.openai.azure.com`, `*.cognitiveservices.azure.com`, `*.services.ai.azure.com`, and the `.azure.us` and `.azure.cn` forms). Any other endpoint, including a customer-run `*.cloudapp.azure.com` name or a local proxy, needs `AZURE_OPENAI_API_KEY`, and the missing-key error says so.
 - `alcuin docs check` now reports a directory passed to `--docs-path`, including when the other inputs are valid files.
 - The MCP `consult` and session results now carry the `browser-pro-unavailable-fallback` warning when ChatGPT answered a Pro request at Extra High because it showed Pro as unavailable, and so does a run on a remote host (`--remote-host`), rebuilt from the thinking evidence the host returns. Before, only the CLI said so, so an agent calling the MCP server read the answer as Pro.
 - A browser update no longer stops every later launch on a profile with 'Chrome executable or native profile identity changed; refusing reuse'. The update replaces the executable that the profile's launch record names, so once the browser that wrote the record has exited, Alcuin now treats the record as stale and launches as it would with no record, still refusing if another browser holds the profile. A record whose browser is still running, or whose state cannot be read, still refuses on a changed identity.
