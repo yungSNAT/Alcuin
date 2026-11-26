@@ -686,7 +686,7 @@ pub(crate) fn route_plan(
             Err(error) => {
                 let azure = (configured && mode != "openai") || mode == "azure";
                 let names: &[&str] = if azure {
-                    &["AZURE_OPENAI_API_KEY", "OPENAI_API_KEY"]
+                    crate::providers::azure_key_names(endpoint)
                 } else {
                     &["OPENAI_API_KEY"]
                 };
