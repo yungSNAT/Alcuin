@@ -209,7 +209,7 @@ Summarises the timings in trace files written with `--perf-trace`. `--json` prin
 
 ### alcuin docs check
 
-Checks Markdown files' `--` options against this CLI. `--docs-path <file>...` names the files and `--json` prints the result as JSON; it exits 1 on drift.
+Checks Markdown files' `--` options against this CLI. `--docs-path <file>...` names the files (without it, `README.md` and every `docs/*.md` in the current folder) and `--json` prints the result as JSON; it exits 1 on drift.
 
 ### alcuin tui
 

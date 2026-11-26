@@ -7,12 +7,12 @@
     "url": "https://github.com/yungSNAT/Alcuin",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/yungSNAT/Alcuin/releases/download/v0.1.0/alcuin.mcpb",
-      "fileSha256": "64e1d0f62e989f5d40e606cf8c126a2f80e0f94dee0ed491f7e70ca471fa3f2b",
+      "identifier": "https://github.com/yungSNAT/Alcuin/releases/download/v0.2.0/alcuin.mcpb",
+      "fileSha256": "f845c94e034d9d88aa64ca137e91bbb5d30b04c86d572ee8e1abe286775ac724",
       "transport": {
         "type": "stdio"
       }

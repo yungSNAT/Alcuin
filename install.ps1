@@ -2,7 +2,7 @@
 #   irm https://raw.githubusercontent.com/yungSNAT/Alcuin/main/install.ps1 | iex
 # It checks the archive's SHA-256 checksum and that the binary runs before it replaces anything,
 # then adds the folder to your user Path.
-# ALCUIN_VERSION picks a release tag such as v0.1.0 (default: the latest release).
+# ALCUIN_VERSION picks a release tag such as v0.2.0 (default: the latest release).
 # ALCUIN_INSTALL_DIR is the folder for both binaries (default: %LOCALAPPDATA%\Programs\Alcuin).
 # ALCUIN_DOWNLOAD_URL replaces the release download folder, for an HTTPS mirror.
 # ALCUIN_NO_MODIFY_PATH=1 leaves your user Path alone.
