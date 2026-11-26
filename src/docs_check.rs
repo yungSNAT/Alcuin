@@ -335,6 +335,7 @@ pub fn check(cwd: &Path, paths: &[String]) -> Result<DocsCheck> {
     for candidate in candidates {
         match fs::metadata(cwd.join(&candidate)) {
             Ok(metadata) if metadata.is_file() => checked_files.push(candidate),
+            Ok(_) if !paths.is_empty() => bail!("Docs check path is not a file: {candidate}"),
             Err(_) if !paths.is_empty() => bail!("Docs check path not found: {candidate}"),
             _ => {}
         }

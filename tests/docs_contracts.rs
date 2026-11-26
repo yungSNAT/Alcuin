@@ -96,6 +96,12 @@ fn explicit_missing_paths_refuse_and_default_paths_do_not_visit_unrelated_docume
     assert_eq!(result.checked_files, vec!["README.md"]);
     fs::remove_file(home.path().join("docs")).unwrap();
     fs::create_dir(home.path().join("docs")).unwrap();
+    assert_eq!(
+        docs_check::check(home.path(), &["README.md".into(), "docs".into()])
+            .unwrap_err()
+            .to_string(),
+        "Docs check path is not a file: docs"
+    );
     fs::write(
         home.path().join("docs/new-guide.md"),
         "alcuin --stale-guide-flag\n",
