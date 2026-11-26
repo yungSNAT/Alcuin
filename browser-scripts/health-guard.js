@@ -25,15 +25,37 @@ return (() => { const throttle=(() => {
         const roots = node.matches(reply) ? Array.from(node.querySelectorAll(answer)) : [];
         return roots.length ? roots : [node];
       });
-    const walker = document.body && document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    // An alert inside an assistant message and outside its answer roots is ChatGPT's notice for
+    // that turn, as in ui-warnings.js.
+    const ui = '[role="alert"], [role="alertdialog"], [role="dialog"]';
+    const turnNotice = (element) => {
+      const box = element?.closest(ui);
+      const message = box?.parentElement?.closest(reply);
+      const root = box?.closest(answer);
+      return Boolean(message) && !(root && message.contains(root)) && !box.querySelector(answer);
+    };
+    // Navigation holds chat titles, which ChatGPT takes from prompts. Conversation subtrees are
+    // rejected before any text is read, except a rootless message that holds a notice.
+    const skipped = 'nav, a[href*="/c/"]';
+    const walker = document.body && document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (!/request|quick|limit/i.test(node.data)) return NodeFilter.FILTER_SKIP;
+          const holder = conversation.find((item) => item.contains(node));
+          return !holder || turnNotice(node.parentElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        }
+        if (node.matches(skipped)) return NodeFilter.FILTER_REJECT;
+        if (conversation.includes(node) && !(node.matches(reply) && node.querySelector(ui))) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_SKIP;
+      }
+    });
     for (let text = walker?.nextNode(); text; text = walker.nextNode()) {
-      if (!/request|quick|limit/i.test(text.data)) continue;
       // The notice can be split across inline elements, so the nearest element whose text holds it.
       let line = text.parentElement;
-      for (let depth = 0; line && depth < 3 && !matches(line.innerText); depth++) line = line.parentElement;
+      for (let depth = 0; line && depth < 3 && !matches(line.innerText) && !conversation.includes(line); depth++) line = line.parentElement;
       if (!line || !matches(line.innerText)) continue;
       if (!line.checkVisibility({ visibilityProperty: true })) continue;
-      if (conversation.some((node) => node.contains(line) || line.contains(node))) continue;
+      if (conversation.some((node) => line.contains(node) || (node.contains(line) && !turnNotice(line)))) continue;
       return { message: line.innerText.trim().slice(0, 400) };
     }
     return null;

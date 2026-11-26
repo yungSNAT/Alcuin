@@ -16,7 +16,18 @@ return (() => {
             const roots = node.matches(reply) ? Array.from(node.querySelectorAll(answer)) : [];
             return roots.length ? roots : [node];
           });
-        const readsConversation = (element) => conversation.some((node) => node.contains(element) || element.contains(node));
+        // Markdown cannot carry ARIA roles, so an alert or dialog inside an assistant message,
+        // outside its answer roots and holding none, is ChatGPT's notice for that turn (as
+        // result-body.js reads it): a refusal before the first token leaves no root at all.
+        const ui = '[role="alert"], [role="alertdialog"], [role="dialog"]';
+        const turnNotice = (element) => {
+          const box = element.closest(ui);
+          const message = box?.parentElement?.closest(reply);
+          const root = box?.closest(answer);
+          return Boolean(message) && !(root && message.contains(root)) && !box.querySelector(answer);
+        };
+        const readsConversation = (element) => !turnNotice(element) &&
+          conversation.some((node) => node.contains(element) || element.contains(node));
         const selectors = [
           '[role="alert"]',
           '[role="status"]',
