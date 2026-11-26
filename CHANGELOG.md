@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Alcuin no longer depends on chrono, which is unmaintained (RUSTSEC-2026-0543): rmcp 3.12.0 makes it optional, and Alcuin turns rmcp's default features off and keeps the ones it uses. The audit and OSV-Scanner ignores for it are gone.
+- The Claude Code plugin now installs from the release tag of its version (`v0.2.0` here) instead of the default branch, so its skills and server entry match the `alcuin` and `alcuin-mcp` binaries you installed from that release, and Claude Code offers an update only when a release moves the version.
 - `alcuin docs check` now reports a directory passed to `--docs-path`, including when the other inputs are valid files.
 - The MCP `consult` and session results now carry the `browser-pro-unavailable-fallback` warning when ChatGPT answered a Pro request at Extra High because it showed Pro as unavailable, and so does a run on a remote host (`--remote-host`), rebuilt from the thinking evidence the host returns. Before, only the CLI said so, so an agent calling the MCP server read the answer as Pro.
 - A browser update no longer stops every later launch on a profile with 'Chrome executable or native profile identity changed; refusing reuse'. The update replaces the executable that the profile's launch record names, so once the browser that wrote the record has exited, Alcuin now treats the record as stale and launches as it would with no record, still refusing if another browser holds the profile. A record whose browser is still running, or whose state cannot be read, still refuses on a changed identity.

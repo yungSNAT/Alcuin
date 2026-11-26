@@ -43,7 +43,8 @@ runs it locally.
 
 ## Releases
 
-Set the new `version` in `Cargo.toml` and `Cargo.lock`, date its `CHANGELOG.md`
+Set the new `version` in `Cargo.toml` and `Cargo.lock`, and the plugin entry's
+`version` and `ref` in `.claude-plugin/marketplace.json`, date its `CHANGELOG.md`
 heading and merge that change. Then push a tag `v<version>` on the merge commit.
 [release.yml](.github/workflows/release.yml) refuses a tag that does not match
 `Cargo.toml`, builds `alcuin` and `alcuin-mcp` for Linux, macOS and Windows, bundles
