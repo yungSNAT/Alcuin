@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `alcuin docs check` now reports a directory passed to `--docs-path`, including when the other inputs are valid files.
 - The MCP `consult` and session results now carry the `browser-pro-unavailable-fallback` warning when ChatGPT answered a Pro request at Extra High because it showed Pro as unavailable, and so does a run on a remote host (`--remote-host`), rebuilt from the thinking evidence the host returns. Before, only the CLI said so, so an agent calling the MCP server read the answer as Pro.
 - A browser update no longer stops every later launch on a profile with 'Chrome executable or native profile identity changed; refusing reuse'. The update replaces the executable that the profile's launch record names, so once the browser that wrote the record has exited, Alcuin now treats the record as stale and launches as it would with no record, still refusing if another browser holds the profile. A record whose browser is still running, or whose state cannot be read, still refuses on a changed identity.
 - An API run whose base URL is on one of 3 other providers' API hosts is now refused before anything is sent, as the guides already said of every base URL off `api.openai.com`. Alcuin took those hosts for the OpenAI API, so it sent them the request with the OpenAI API key. A base URL or Azure endpoint over plain HTTP is now refused too, unless it is on `localhost`, `127.0.0.1` or `[::1]`, so the key never crosses the network unencrypted, and a base URL that cannot be parsed is refused rather than set aside.
