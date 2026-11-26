@@ -3,7 +3,20 @@
 /* alcuin-dom:ui-warnings */
 
 return (() => {
-        const warningPattern = /too many requests|sending too many requests|too quickly|temporarily limited access|please wait a few minutes|rate limit|rate limited|\blimit|slow down|try again later|temporarily unavailable|something went wrong|failed to generate|no response from chatgpt|check your connection|verify you are human|unusual activity|cloudflare|challenge|login required|sign in/i;
+        const warningPattern = /too many requests|sending too many requests|too quickly|temporarily limited access|please wait a few minutes|rate limit|rate limited|\blimit|slow down|try again later|temporarily unavailable|something went wrong|failed to generate|no response from chatgpt|check your connection|verify you are human|unusual activity|cloudflare|challenge|captcha|login required|sign in/i;
+        // Conversation text is never a notice: a user message, the answer roots of an assistant
+        // message (all of it when none is marked) and the composer. An element inside one, or
+        // wrapping one, reads it; a notice beside the answer, in the assistant's turn or not, and
+        // a dialog styled like an answer are still read.
+        const user = '[data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]';
+        const reply = '[data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]';
+        const answer = '[data-markdown-text-style="assistant-message"], .markdown, [data-message-content], .prose, [class*="MarkdownRoot"]';
+        const conversation = Array.from(document.querySelectorAll(`${user}, ${reply}, #prompt-textarea`))
+          .flatMap((node) => {
+            const roots = node.matches(reply) ? Array.from(node.querySelectorAll(answer)) : [];
+            return roots.length ? roots : [node];
+          });
+        const readsConversation = (element) => conversation.some((node) => node.contains(element) || element.contains(node));
         const selectors = [
           '[role="alert"]',
           '[role="status"]',
@@ -65,7 +78,7 @@ return (() => {
           }
           for (const element of elements) {
             if (out.length >= 5) break;
-            if (overlapsWarningContainer(element)) continue;
+            if (overlapsWarningContainer(element) || readsConversation(element)) continue;
             if (isVisible(element)) add(element, describe(element, 'selector', selector));
           }
         }

@@ -15,13 +15,26 @@ return (() => { const throttle=(() => {
       const text = (dialog.innerText || '').trim();
       if (matches(text)) return { message: text.slice(0, 400) };
     }
-    const body = (document.body && document.body.innerText) || '';
-    if (matches(body)) {
-      const line = body
-        .split('\n')
-        .map((entry) => entry.trim())
-        .find((entry) => matches(entry));
-      return { message: (line || 'ChatGPT is rate limiting this session.').slice(0, 400) };
+    // The sweep skips the conversation, as ui-warnings.js does: an answer or prompt about
+    // throttling is not the notice.
+    const user = '[data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]';
+    const reply = '[data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]';
+    const answer = '[data-markdown-text-style="assistant-message"], .markdown, [data-message-content], .prose, [class*="MarkdownRoot"]';
+    const conversation = Array.from(document.querySelectorAll(`${user}, ${reply}, #prompt-textarea`))
+      .flatMap((node) => {
+        const roots = node.matches(reply) ? Array.from(node.querySelectorAll(answer)) : [];
+        return roots.length ? roots : [node];
+      });
+    const walker = document.body && document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let text = walker?.nextNode(); text; text = walker.nextNode()) {
+      if (!/request|quick|limit/i.test(text.data)) continue;
+      // The notice can be split across inline elements, so the nearest element whose text holds it.
+      let line = text.parentElement;
+      for (let depth = 0; line && depth < 3 && !matches(line.innerText); depth++) line = line.parentElement;
+      if (!line || !matches(line.innerText)) continue;
+      if (!line.checkVisibility({ visibilityProperty: true })) continue;
+      if (conversation.some((node) => node.contains(line) || line.contains(node))) continue;
+      return { message: line.innerText.trim().slice(0, 400) };
     }
     return null;
   })(); const models=(() => {
