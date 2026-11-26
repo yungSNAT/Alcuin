@@ -3,6 +3,9 @@
 ## Unreleased
 
 - A browser update no longer stops every later launch on a profile with 'Chrome executable or native profile identity changed; refusing reuse'. The update replaces the executable that the profile's launch record names, so once the browser that wrote the record has exited, Alcuin now treats the record as stale and launches as it would with no record, still refusing if another browser holds the profile. A record whose browser is still running, or whose state cannot be read, still refuses on a changed identity.
+- An API run whose base URL is on one of 3 other providers' API hosts is now refused before anything is sent, as the guides already said of every base URL off `api.openai.com`. Alcuin took those hosts for the OpenAI API, so it sent them the request with the OpenAI API key. A base URL or Azure endpoint over plain HTTP is now refused too, unless it is on `localhost`, `127.0.0.1` or `[::1]`, so the key never crosses the network unencrypted, and a base URL that cannot be parsed is refused rather than set aside.
+- On Windows and macOS, a running Chrome whose `--user-data-dir` folder no longer exists no longer stops every Alcuin launch with an error. On Windows such a browser, and one whose folder is a file or a broken junction, does not count as the profile's owner; on macOS Alcuin places it by the files it holds open, as on Linux, and refuses the launch with 'profile occupancy is unknown' when they do not settle it. A junction or symbolic link to the profile being launched still makes its browser the owner.
+- `alcuin docs check` without `--docs-path` now checks `README.md` and every `docs/*.md` guide. It named `docs/index.md` and `docs/spec.md`, which do not exist, and skipped 14 of the 17 guides. It also no longer reads another tool's options in inline code, such as `codex mcp add`, as Alcuin's.
 
 ## 0.2.0 (2026-11-24)
 
