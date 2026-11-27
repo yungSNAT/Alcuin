@@ -222,3 +222,6 @@ mod tests {
         assert_eq!(stored_zip(&[]).unwrap().len(), 22);
     }
 }
+#[cfg(test)]
+#[path = "browser_bundle_coverage_tests.rs"]
+mod coverage_tests;

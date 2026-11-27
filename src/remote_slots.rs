@@ -322,3 +322,6 @@ mod tests {
         assert_eq!(slots.snapshot().active, 0);
     }
 }
+#[cfg(test)]
+#[path = "remote_slots_coverage_tests.rs"]
+mod coverage_tests;

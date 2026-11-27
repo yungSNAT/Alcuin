@@ -347,3 +347,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_desktop_coverage_tests.rs"]
+mod coverage_tests;

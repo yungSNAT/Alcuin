@@ -155,3 +155,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_turns_coverage_tests.rs"]
+mod coverage_tests;

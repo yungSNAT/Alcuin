@@ -8,20 +8,59 @@ return (() => { const throttle=(() => {
       const text = (value || '').toLowerCase();
       return PHRASES.some((phrase) => text.includes(phrase));
     };
+    // Neither the dialogs nor the sweep read the conversation, as ui-warnings.js does not: an
+    // answer or prompt about throttling is not the notice.
+    const user = '[data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]';
+    const reply = '[data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]';
+    const answer = '[data-markdown-text-style="assistant-message"], .markdown, [data-message-content], .prose, [class*="MarkdownRoot"]';
+    const turn = `${user}, ${reply}, #prompt-textarea`;
+    const conversation = Array.from(document.querySelectorAll(turn))
+      .flatMap((node) => {
+        const roots = node.matches(reply) ? Array.from(node.querySelectorAll(answer)) : [];
+        return roots.length ? roots : [node];
+      });
+    // An alert inside an assistant message and outside its answer roots is ChatGPT's notice for
+    // that turn, as in ui-warnings.js.
+    const ui = '[role="alert"], [role="alertdialog"], [role="dialog"]';
+    const turnNotice = (element) => {
+      const box = element?.closest(ui);
+      const message = box?.parentElement?.closest(reply);
+      const root = box?.closest(answer);
+      return Boolean(message) && !(root && message.contains(root)) && !box.querySelector(answer);
+    };
+    // Text in a message, its answer roots included, is conversation unless it sits in that
+    // turn's notice box; plain text beside the roots is not a notice either.
+    const inConversation = (element) => Boolean(element?.closest(turn)) && !turnNotice(element);
     // Dialogs first, because that is what this notice is; the body sweep is a
     // fallback for a variant that does not carry the role.
     const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]'));
     for (const dialog of dialogs) {
+      if (inConversation(dialog) || conversation.some((node) => dialog.contains(node))) continue;
       const text = (dialog.innerText || '').trim();
       if (matches(text)) return { message: text.slice(0, 400) };
     }
-    const body = (document.body && document.body.innerText) || '';
-    if (matches(body)) {
-      const line = body
-        .split('\n')
-        .map((entry) => entry.trim())
-        .find((entry) => matches(entry));
-      return { message: (line || 'ChatGPT is rate limiting this session.').slice(0, 400) };
+    // Navigation holds chat titles, which ChatGPT takes from prompts. Conversation subtrees are
+    // rejected before any text is read, except a rootless message that holds a notice.
+    const skipped = 'nav, a[href*="/c/"]';
+    const walker = document.body && document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (!/request|quick|limit/i.test(node.data)) return NodeFilter.FILTER_SKIP;
+          return inConversation(node.parentElement) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_ACCEPT;
+        }
+        if (node.matches(skipped)) return NodeFilter.FILTER_REJECT;
+        if (conversation.includes(node) && !(node.matches(reply) && node.querySelector(ui))) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_SKIP;
+      }
+    });
+    for (let text = walker?.nextNode(); text; text = walker.nextNode()) {
+      // The notice can be split across inline elements, so the nearest element whose text holds it.
+      let line = text.parentElement;
+      for (let depth = 0; line && depth < 3 && !matches(line.innerText) && !conversation.includes(line); depth++) line = line.parentElement;
+      if (!line || !matches(line.innerText)) continue;
+      if (!line.checkVisibility({ visibilityProperty: true })) continue;
+      if (inConversation(line) || conversation.some((node) => line.contains(node))) continue;
+      return { message: line.innerText.trim().slice(0, 400) };
     }
     return null;
   })(); const models=(() => {

@@ -285,3 +285,6 @@ mod tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "browser_detect_coverage_tests.rs"]
+mod coverage_tests;

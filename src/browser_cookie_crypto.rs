@@ -175,3 +175,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_cookie_crypto_coverage_tests.rs"]
+mod coverage_tests;

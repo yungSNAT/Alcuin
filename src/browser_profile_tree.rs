@@ -341,3 +341,6 @@ fn delete_handle(file: &File) -> Result<()> {
     );
     Ok(())
 }
+#[cfg(test)]
+#[path = "browser_profile_tree_coverage_tests.rs"]
+mod coverage_tests;

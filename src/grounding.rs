@@ -1259,3 +1259,6 @@ mod tests {
         assert_eq!(statuses(&report), [("src/other.c:1", Status::Grounded)]);
     }
 }
+#[cfg(test)]
+#[path = "grounding_coverage_tests.rs"]
+mod coverage_tests;

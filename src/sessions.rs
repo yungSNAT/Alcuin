@@ -1736,3 +1736,6 @@ mod window_tests {
         assert_eq!(listed[0]["id"], id);
     }
 }
+#[cfg(test)]
+#[path = "sessions_coverage_tests.rs"]
+mod coverage_tests;
