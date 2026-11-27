@@ -30,6 +30,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod gemini;
+#[cfg(test)]
+pub(crate) mod gemini_recover_tests;
 mod grok;
 #[cfg(test)]
 mod switch_tests;

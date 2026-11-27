@@ -345,7 +345,7 @@ query.querySelector('button[aria-label="Send message"]').onclick=()=>new WebSock
 }
 
 // Pages only: Chrome starts and stops its own service workers and UI targets meanwhile.
-fn target_ids(rows: &Value) -> std::collections::BTreeSet<String> {
+pub(crate) fn target_ids(rows: &Value) -> std::collections::BTreeSet<String> {
     rows["targetInfos"]
         .as_array()
         .into_iter()
@@ -358,7 +358,11 @@ fn target_ids(rows: &Value) -> std::collections::BTreeSet<String> {
 /// Closes a fixture-allocated target and waits until Chromium stops listing it, so the next
 /// case's baseline cannot include a target that is still closing. Fails when absence stays
 /// unconfirmed, naming the last close or listing error.
-async fn close_fixture_target(browser: &Cdp, target_id: &str, command: Duration) -> Result<()> {
+pub(crate) async fn close_fixture_target(
+    browser: &Cdp,
+    target_id: &str,
+    command: Duration,
+) -> Result<()> {
     let cancel = CancellationToken::new();
     // A refused close is not final: the case under test may already have closed the target.
     let mut last = browser
