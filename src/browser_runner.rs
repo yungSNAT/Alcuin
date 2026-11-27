@@ -1799,7 +1799,7 @@ async fn run_native_consultation(
                 };
                 if let Err(failed)=ran {
                     return Err(match parent.revert_unsent_switch(&format!("{provider}-not-sent")) {
-                        Ok(()) => anyhow::anyhow!("ChatGPT failed and {provider} did not submit: {failed:#}. Recover ChatGPT attempt {} ({error:#}) read-only through this consultation; {provider} attempt {} is retained",first.child_id,alternate.child_id),
+                        Ok(()) => anyhow::anyhow!("ChatGPT failed and {provider} did not submit (the prompt may remain in its composer): {failed:#}. Recover ChatGPT attempt {} ({error:#}) read-only through this consultation; {provider} attempt {} is retained",first.child_id,alternate.child_id),
                         Err(sent) => anyhow::anyhow!("ChatGPT failed and the {provider} fallback could not finish: {failed:#}. {provider} attempt {} may have received the prompt ({sent:#}); it and ChatGPT attempt {} ({error:#}) are retained",alternate.child_id,first.child_id),
                     });
                 }

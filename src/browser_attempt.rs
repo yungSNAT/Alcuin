@@ -521,7 +521,7 @@ impl Parent {
         else {
             return Ok(None);
         };
-        if !self.switch_eligible(&parent, failed, cancel)? {
+        if !self.switch_eligible(&parent, failed, provider, cancel)? {
             return Ok(None);
         }
         let child = self.store.require(&failed.child_id)?;
@@ -632,6 +632,7 @@ impl Parent {
         &self,
         parent: &Value,
         failed: &Link,
+        provider: Provider,
         cancel: &CancellationToken,
     ) -> Result<bool> {
         let config = &parent["browser"]["config"];
@@ -642,6 +643,8 @@ impl Parent {
                 config["fallbackConsentSource"].as_str(),
                 Some("request" | "personal-config")
             )
+            // The locked recheck confirms the consented provider is still the one decided.
+            && config["fallbackProvider"] == provider.id()
             && config["resumeConversationUrl"].is_null()
             && config["researchMode"] != "deep"
             && config["captureProviderNative"] != true
@@ -799,7 +802,7 @@ impl Parent {
         self.store.update(&self.id, |current| {
             self.require(current,cancel)?;
             match &decision {
-                Some((Decision::Switch, failed, _)) => ensure!(self.switch_eligible(current, failed, cancel)?,
+                Some((Decision::Switch, failed, _)) => ensure!(self.switch_eligible(current, failed, provider, cancel)?,
                     "Provider switch evidence changed before its decision"),
                 Some((Decision::Retry, failed, _)) => ensure!(self.retry_eligible(current, failed, cancel)?,
                     "Unsent attempt evidence changed before its retry decision"),

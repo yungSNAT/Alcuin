@@ -135,7 +135,7 @@ async fn the_switch_fires_only_after_an_uncertain_send_and_expired_recovery() {
         assert_eq!(
             run.error,
             format!(
-                "ChatGPT failed and {fallback} did not submit: PUBLIC alternate refused before Send. Recover ChatGPT attempt {first} (PUBLIC bounded original-target observation expired: Owned answer deadline expired; recover the retained target without sending again) read-only through this consultation; {fallback} attempt {alternate} is retained"
+                "ChatGPT failed and {fallback} did not submit (the prompt may remain in its composer): PUBLIC alternate refused before Send. Recover ChatGPT attempt {first} (PUBLIC bounded original-target observation expired: Owned answer deadline expired; recover the retained target without sending again) read-only through this consultation; {fallback} attempt {alternate} is retained"
             )
         );
         assert_eq!(run.left, 1, "a third attempt started");
