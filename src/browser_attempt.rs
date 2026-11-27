@@ -809,10 +809,12 @@ impl Parent {
         })?;
         self.state = proposed;
         #[cfg(test)]
-        ensure!(
-            !TEST_FAIL_AFTER_PARENT_RESERVATION.replace(false),
-            "PUBLIC injected reservation failure"
-        );
+        if TEST_FAIL_AFTER_PARENT_RESERVATION.replace(false) {
+            if TEST_BREAK_SWITCH_RESTORATION.replace(false) {
+                self.state["selected"] = json!("PUBLIC changed");
+            }
+            anyhow::bail!("PUBLIC injected reservation failure");
+        }
         self.store.update(&child_id, |current| {
             running_parent(&self.store.require(&self.id)?, &link)?;
             ensure!(
@@ -873,6 +875,8 @@ impl Parent {
 thread_local! {
     /// Fails this thread's next reservation after its parent write, before the child link.
     static TEST_FAIL_AFTER_PARENT_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// With that failure, also changes the coordinator's state so its restoration is refused.
+    static TEST_BREAK_SWITCH_RESTORATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A switch's Grok attempt, or a first ChatGPT attempt before its retry, that has the
@@ -2269,6 +2273,28 @@ mod tests {
             require_child(&f.store, &first.child_id, &cancel).unwrap(),
             first
         );
+    }
+
+    #[test]
+    fn a_reservation_failure_whose_restoration_is_refused_keeps_the_decision() {
+        let mut f = switch_fixture(json!({"browserFallback":"gemini"}), json!({}));
+        let (first, environment, cancel) =
+            (f.first.clone(), f.environment.clone(), f.cancel.clone());
+        TEST_FAIL_AFTER_PARENT_RESERVATION.set(true);
+        TEST_BREAK_SWITCH_RESTORATION.set(true);
+        let error = f
+            .coordinator
+            .switch_provider(&first, &typed(), &environment, &cancel)
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("the gemini reservation failed and the ChatGPT attempt could not be restored (Provider switch changed before its restoration)"),
+            "{message}"
+        );
+        // The durable decision stays and names no restoration, so no second switch can start.
+        let state = f.store.require(&f.id).unwrap()["browser"]["consultation"].clone();
+        assert_eq!(state["switch"]["to"], "gemini");
+        assert!(state["switch"]["outcome"].is_null(), "{state}");
     }
 
     #[test]

@@ -5,9 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const PROMPT: &str = "PUBLIC Gemini owned runner request";
 const ANSWER: &str = "PUBLIC original Gemini runner answer";
 
-/// A public stand-in for gemini.google.com/app. `case` breaks one guarantee:
-/// "focus" leaves Temporary Chat when the composer takes focus, "no-high" offers
-/// only a locked High level, "after-send" leaves Temporary Chat once Send is clicked.
+/// A public stand-in for gemini.google.com/app. "late" renders Temporary Chat, its
+/// pressed state and the Send button after a delay; "active" opens in Temporary Chat.
+/// Each other case breaks one guarantee: "focus" leaves Temporary Chat when the composer
+/// takes focus, "no-high" offers only a locked High level, "after-send" leaves Temporary
+/// Chat once Send is clicked, "no-send" disables Send once the dispatch is journalled and
+/// "nav-fail" fails the navigation itself.
 fn document(case: &str) -> String {
     let config = json!({"case":case,"answer":ANSWER});
     format!(
@@ -18,13 +21,17 @@ fn document(case: &str) -> String {
 <button aria-label="Send message">Send</button>
 <script>
 const cfg={config};
-const temporary=document.querySelector('header button'),picker=document.querySelector('button[aria-label^="Open mode picker"]'),menu=document.querySelector('#menu'),editor=document.querySelector('.ql-editor');
-temporary.onclick=()=>temporary.setAttribute('aria-pressed','true');
+const header=document.querySelector('header'),temporary=document.querySelector('header button'),picker=document.querySelector('button[aria-label^="Open mode picker"]'),menu=document.querySelector('#menu'),editor=document.querySelector('.ql-editor'),sendButton=document.querySelector('button[aria-label="Send message"]');
+const press=()=>temporary.setAttribute('aria-pressed','true');
+temporary.onclick=()=>cfg.case==='late'?setTimeout(press,100):press();
+if(cfg.case==='active')press();
+if(cfg.case==='late'){{temporary.remove();setTimeout(()=>header.append(temporary),150);sendButton.disabled=true;editor.addEventListener('input',()=>setTimeout(()=>{{sendButton.disabled=false;}},100),{{once:true}});}}
+if(cfg.case==='no-send'){{const set=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){{if(key==='oracle:target-claim'&&JSON.parse(value)?.submission?.dispatch==='started')sendButton.disabled=true;return set.call(this,key,value);}};}}
 if(cfg.case==='focus')editor.addEventListener('focus',()=>temporary.setAttribute('aria-pressed','false'));
 picker.onclick=()=>{{menu.hidden=!menu.hidden;menu.innerHTML='<gem-menu-item data-mode-id="neon">Deeper analysis 4 Neon</gem-menu-item><gem-menu-item>Thinking level</gem-menu-item>';
 menu.children[0].onclick=()=>{{picker.setAttribute('aria-label','Open mode picker, currently Neon Low');setTimeout(()=>{{menu.hidden=true;menu.innerHTML='';}},50);}};
 menu.children[1].onclick=()=>{{const level=document.createElement('gem-menu-item');level.innerText='High';if(cfg.case==='no-high')level.setAttribute('aria-disabled','true');level.onclick=()=>{{picker.setAttribute('aria-label','Open mode picker, currently Neon High');menu.hidden=true;}};menu.append(level);}};}};
-document.querySelector('button[aria-label="Send message"]').onclick=()=>{{PUBLICGeminiSend('send');
+sendButton.onclick=()=>{{PUBLICGeminiSend('send');
 const user=document.createElement('user-query');user.innerHTML='<div class="query-text"></div>';
 for(const block of editor.children){{const line=document.createElement('p');line.className='query-text-line';line.textContent=block.textContent;user.firstChild.append(line);}}
 document.body.append(user);
@@ -33,6 +40,10 @@ answer.querySelector('.markdown').textContent=cfg.answer;document.body.append(an
 if(cfg.case==='after-send')temporary.setAttribute('aria-pressed','false');}};
 </script>"#
     )
+}
+
+fn refused(case: &str) -> bool {
+    !matches!(case, "" | "late" | "active")
 }
 
 fn target_ids(rows: &Value) -> std::collections::BTreeSet<String> {
@@ -59,7 +70,16 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
     let baseline = browser
         .call("Target.getTargets", json!({}), limits.command, &cancel)
         .await?;
-    for case in ["", "focus", "no-high", "after-send"] {
+    for case in [
+        "",
+        "late",
+        "active",
+        "focus",
+        "no-high",
+        "after-send",
+        "no-send",
+        "nav-fail",
+    ] {
         let home = tempfile::tempdir()?;
         let store = SessionStore::new(home.path().join(".oracle"));
         let output = home.path().join("PUBLIC-answer.md");
@@ -153,6 +173,11 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                     "Unexpected fixture network request"
                 );
                 seen.fetch_add(1, Ordering::SeqCst);
+                if case == "nav-fail" {
+                    intercepted.call("Fetch.failRequest",json!({"requestId":event["params"]["requestId"],"errorReason":"Failed"}),
+                        Duration::from_secs(5),&CancellationToken::new()).await?;
+                    continue;
+                }
                 intercepted.call("Fetch.fulfillRequest",json!({"requestId":event["params"]["requestId"],"responseCode":200,
                     "responseHeaders":[{"name":"Content-Type","value":"text/html"}],"body":STANDARD.encode(&html)}),Duration::from_secs(5),&CancellationToken::new()).await?;
             }
@@ -167,6 +192,19 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
             .await?;
             let witness = ExecutionWitness::capture(&store, &link.child_id, &identity)?;
             let committed = request(&store, &link.child_id)?;
+            // A startup lock defers retirement reconciliation until after the picker.
+            let startup = if case == "late" {
+                Some(
+                    DirectoryLock::acquire_async(
+                        &home.path().join("PUBLIC-startup.lock"),
+                        limits.command,
+                        &cancel,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             let delivered = run_owned(
                 &store,
                 &link.child_id,
@@ -179,24 +217,32 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                 &cancel,
                 &CaptureBoundary::ParentAttempt,
                 None,
-                None,
+                startup,
             )
             .await;
             let saved = store.require(&link.child_id)?;
-            if !case.is_empty() {
+            let refusal = match case {
+                "focus" => Some((0, "Gemini composer could not be prepared (focus)", false)),
+                "no-high" => Some((
+                    0,
+                    "Gemini 4 Neon and High thinking could not be verified (select-high)",
+                    false,
+                )),
+                "after-send" => Some((1, "Gemini Temporary Chat is unverified", true)),
+                "no-send" => Some((
+                    0,
+                    "Gemini Send could not be verified; retain the original target without replay",
+                    true,
+                )),
+                "nav-fail" => Some((0, "Gemini navigation failed", false)),
+                _ => None,
+            };
+            if let Some((expected_sends, expected_error, journalled)) = refusal {
                 let error = delivered
                     .as_ref()
                     .err()
                     .map(|error| format!("{error:#}"))
                     .unwrap_or_default();
-                let (expected_sends, expected_error) = match case {
-                    "focus" => (0, "Gemini composer could not be prepared (focus)"),
-                    "no-high" => (
-                        0,
-                        "Gemini 4 Neon and High thinking could not be verified (select-high)",
-                    ),
-                    _ => (1, "Gemini Temporary Chat is unverified"),
-                };
                 anyhow::ensure!(
                     error.contains(expected_error)
                         && sends.load(Ordering::SeqCst) == expected_sends,
@@ -207,11 +253,11 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                     saved["capturedAnswer"].is_null(),
                     "Refused Gemini {case} case produced a capture"
                 );
-                // Before Send no dispatch is journalled; after it, the dispatch stays started
-                // (uncertain) and the worker returns without a second Send.
+                // Before the Send journal no dispatch is recorded; after it, the dispatch
+                // stays started (uncertain) and the worker returns without a second Send.
                 let dispatch = saved["dispatch"]["state"].clone();
                 anyhow::ensure!(
-                    if expected_sends == 0 {
+                    if !journalled {
                         dispatch.is_null()
                     } else {
                         dispatch == "started"
@@ -270,7 +316,7 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
         drop(heartbeat);
         // This fixture allocated the target. Its error teardown never runs in production,
         // and a refused close only means the case already closed it.
-        if !case.is_empty() || checked.is_err() {
+        if refused(case) || checked.is_err() {
             let _ = browser
                 .close_owned_target(&target_id, limits.command, &CancellationToken::new())
                 .await;

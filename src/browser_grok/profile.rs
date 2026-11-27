@@ -234,6 +234,18 @@ mod tests {
         let original = parent.clone();
         let config = child_config(&parent, &env, root.path()).unwrap();
         assert_eq!(parent, original);
+        // ChatGPT is the original attempt, never an alternate child profile.
+        let refused = child_config_for(
+            crate::browser_attempt::Provider::Chatgpt,
+            &parent,
+            &env,
+            root.path(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "An alternate browser provider is required"
+        );
         assert_eq!(config["chromePath"], "PUBLIC Chrome");
         assert_eq!(config["keepBrowser"], false);
         for key in [
