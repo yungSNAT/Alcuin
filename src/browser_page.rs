@@ -304,7 +304,7 @@ pub(crate) async fn dismiss_dialogs(
 }
 
 static RATE_LIMIT: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?-u:\b)(?:too many requests|sending too many requests|too quickly|temporarily limited access|please wait a few minutes|rate limit(?:ed)?|slow down)(?-u:\b)").expect("rate-limit pattern")
+    regex::Regex::new(r"(?-u:\b)(?:too many requests|sending too many requests|too quickly|temporarily limited access|please wait a few minutes|rate limit(?:ed)?|usage limit|slow down)(?-u:\b)").expect("rate-limit pattern")
 });
 static UNAVAILABLE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?-u:\b)(?:temporarily unavailable|something went wrong|failed to generate|try again later)(?-u:\b)").expect("unavailable pattern")
@@ -315,7 +315,7 @@ static CONNECTION: LazyLock<regex::Regex> = LazyLock::new(|| {
         .expect("connection pattern")
 });
 static CHALLENGE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?-u:\b)(?:verify you are human|unusual activity|cloudflare|challenge|login required|sign in)(?-u:\b)").expect("challenge pattern")
+    regex::Regex::new(r"(?-u:\b)(?:verify you are human|unusual activity|cloudflare|challenge|(?:re|h)?captcha|login required|sign in)(?-u:\b)").expect("challenge pattern")
 });
 static SEPARATORS: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"[_-]+").expect("separator pattern"));
