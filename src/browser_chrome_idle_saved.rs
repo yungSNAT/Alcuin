@@ -154,6 +154,10 @@ impl ChromeConnection {
         })?))
     }
 }
+/// Finalised session commit kinds whose persistent browser this disposal may retire.
+fn retirable_kind(kind: Option<&str>) -> bool {
+    matches!(kind, Some("session" | "research-report" | "grok-session"))
+}
 fn require_session(
     store: &SessionStore,
     session: &str,
@@ -185,10 +189,7 @@ fn require_session(
             && creator["sessionId"] == session
             && record["nativeOwnerIdentity"] == json!(owner.controller_identity)
             && record["commit"]["sessionId"] == session
-            && matches!(
-                record["commit"]["kind"].as_str(),
-                Some("session" | "research-report" | "grok-session")
-            )
+            && retirable_kind(record["commit"]["kind"].as_str())
             && record["finalisedAt"]
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
