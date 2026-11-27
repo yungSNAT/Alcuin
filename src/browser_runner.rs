@@ -32,6 +32,8 @@ use uuid::Uuid;
 mod gemini;
 mod grok;
 #[cfg(test)]
+mod switch_tests;
+#[cfg(test)]
 pub(crate) use gemini::tests::native_cases as native_gemini_runner_cases;
 #[cfg(test)]
 pub(crate) use grok::tests::native_cases as native_grok_runner_cases;
@@ -816,6 +818,15 @@ thread_local! {
     /// Runs between this thread's next idle attempt and its receipt, as a concurrent retry.
     pub(crate) static TEST_BEFORE_IDLE_RECEIPT: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+type ScriptedAttempt = Box<dyn FnOnce(&SessionStore, &str) -> Result<Value>>;
+#[cfg(test)]
+thread_local! {
+    /// This thread's next prepared attempts, in order: each ends as its script returns, after
+    /// the attempt's provider checks and before any browser work.
+    static TEST_SCRIPTED_ATTEMPTS: std::cell::RefCell<std::collections::VecDeque<ScriptedAttempt>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
 }
 /// One attempt with no grace wait, for paths that must not delay a run or its
 /// failure receipt. Returns the processes still exiting when closing had begun.
@@ -1866,6 +1877,10 @@ async fn run_native_prepared(
             crate::browser_grok::require_text_request(&request(store,id)?,&meta["options"])?;
             crate::browser_grok::require_distinct(config,&store.require(&link.parent_id)?["browser"]["config"],environment,
                 Path::new(meta["cwd"].as_str().context("Grok working directory is unavailable")?))?;
+        }
+        #[cfg(test)]
+        if let Some(script) = TEST_SCRIPTED_ATTEMPTS.with_borrow_mut(std::collections::VecDeque::pop_front) {
+            return script(store, id);
         }
         anyhow::ensure!(
             match bootstrap {

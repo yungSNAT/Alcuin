@@ -874,7 +874,7 @@ impl Parent {
 #[cfg(test)]
 thread_local! {
     /// Fails this thread's next reservation after its parent write, before the child link.
-    static TEST_FAIL_AFTER_PARENT_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static TEST_FAIL_AFTER_PARENT_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// With that failure, also changes the coordinator's state so its restoration is refused.
     static TEST_BREAK_SWITCH_RESTORATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
