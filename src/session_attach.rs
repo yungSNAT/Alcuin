@@ -1554,10 +1554,15 @@ mod tests {
                 "{output}"
             );
             if !cancelled {
+                // The silent endpoint ends in a timeout; which deadline reports it first depends on
+                // scheduling.
                 assert!(
-                    output.contains(
-                        "Browser recovery is incomplete: Browser attachment timed out after observation cleanup"
-                    ),
+                    [
+                        "Browser recovery is incomplete: Browser attachment timed out after observation cleanup",
+                        "Browser recovery is incomplete: Browser inspection or recovery exceeded its timeout.",
+                    ]
+                    .iter()
+                    .any(|timeout| output.contains(timeout)),
                     "{output}"
                 );
             }

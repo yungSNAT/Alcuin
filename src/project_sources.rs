@@ -2258,11 +2258,12 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
+        // The path is shown as the platform resolves it (`/private/var` on macOS, `\?\` on
+        // Windows), so only its name is checked.
         assert!(
-            error.starts_with(&format!(
-                "ChatGPT browser manual-login profile is not initialized. Browser mode is using Alcuin's private Chrome profile at {}",
-                profile.display()
-            )),
+            error.starts_with(
+                "ChatGPT browser manual-login profile is not initialized. Browser mode is using Alcuin's private Chrome profile at "
+            ) && error.contains("PUBLIC-manual-profile, separate from your normal Chrome profile."),
             "{error}"
         );
     }
