@@ -1021,6 +1021,280 @@ fn zombie_group(group: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ssh_arguments_keep_quoted_extra_args_and_trim_destination() {
+        let options = json!({
+            "ssh": " PUBLIC-USER@PUBLIC-HOST ",
+            "ssh-identity": " PUBLIC identity.pem ",
+            "ssh-extra-args": "  -o \"UserKnownHostsFile=PUBLIC known hosts\" -p 2222",
+        });
+        let expected: Vec<String> = [
+            "-N",
+            "-R",
+            "9473:127.0.0.1:8123",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-i",
+            "PUBLIC identity.pem",
+            "-o",
+            "UserKnownHostsFile=PUBLIC known hosts",
+            "-p",
+            "2222",
+            "PUBLIC-USER@PUBLIC-HOST",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(ssh_args(&options, 9473, 8123), expected);
+    }
+    /// The fixture children run this test binary, so they record coverage only when the
+    /// profile destination survives the tunnel's cleared environment.
+    fn with_profile_output(mut env: Environment) -> Environment {
+        if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+            env.insert("LLVM_PROFILE_FILE".into(), profile);
+        }
+        env
+    }
+    #[tokio::test]
+    async fn a_tunnel_cancelled_before_its_first_attempt_starts_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        // A start would fail: the executable does not exist, so `unwrap` fails on any attempt.
+        reverse_tunnel(
+            home.path().join("PUBLIC-missing-ssh"),
+            vec![],
+            Environment::new(),
+            home.path().into(),
+            cancel,
+        )
+        .await
+        .unwrap();
+    }
+    /// A host configured like the compiled contract tests: its browser is a remote attachment,
+    /// so bootstrap never starts Chrome.
+    #[cfg(unix)]
+    fn bridge_home() -> (tempfile::TempDir, SessionStore, Environment, String) {
+        let home = tempfile::tempdir().unwrap();
+        let oracle = home.path().join("oracle");
+        std::fs::create_dir_all(&oracle).unwrap();
+        std::fs::write(
+            oracle.join("config.json"),
+            br#"{"browser":{"remoteChrome":{"host":"127.0.0.1","port":1}}}"#,
+        )
+        .unwrap();
+        let env = Environment::from_iter([
+            ("HOME".into(), home.path().to_string_lossy().into_owned()),
+            (
+                "USERPROFILE".into(),
+                home.path().to_string_lossy().into_owned(),
+            ),
+        ]);
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        (
+            home,
+            SessionStore::new(oracle),
+            env,
+            format!("127.0.0.1:{port}"),
+        )
+    }
+    #[cfg(unix)]
+    async fn ready_file(store: &SessionStore) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Ok(bytes) = std::fs::read(store.home().join("bridge-host-ready.json"))
+                && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+            {
+                return value;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Bridge host never published readiness"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_foreground_host_publishes_its_tunnel_and_runs_ssh_until_cancelled() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, store, mut env, bind) = bridge_home();
+        let bin = home.path().join("PUBLIC-bin");
+        std::fs::create_dir(&bin).unwrap();
+        let recorded = home.path().join("ssh-arguments");
+        // The only ssh on the tunnel's PATH records its arguments and waits to be stopped.
+        std::fs::write(
+            bin.join("ssh"),
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{0}.partial'\n/bin/mv '{0}.partial' '{0}'\nexec /bin/sleep 30\n",
+                recorded.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(bin.join("ssh"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        env.insert("PATH".into(), bin.to_string_lossy().into_owned());
+        let port: u16 = bind.rsplit_once(':').unwrap().1.parse().unwrap();
+        let options = json!({
+            "bind": bind,
+            "ssh": " PUBLIC-USER@PUBLIC-HOST ",
+            "ssh-remote-port": "2222",
+            "ssh-identity": "PUBLIC identity.pem",
+            "ssh-extra-args": "-p 2222",
+            "print": true,
+            "print-token": true,
+        });
+        let cancel = CancellationToken::new();
+        let host = run(&options, store.clone(), home.path().into(), env, &cancel);
+        let watch = async {
+            ready_file(&store).await;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            let arguments = loop {
+                if let Ok(text) = std::fs::read_to_string(&recorded) {
+                    break text;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "ssh never started");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            cancel.cancel();
+            arguments
+        };
+        let (result, arguments) = tokio::join!(host, watch);
+        result.unwrap();
+        assert_eq!(
+            arguments.lines().collect::<Vec<_>>(),
+            ssh_args(&options, 2222, port)
+        );
+        let connection: Value = serde_json::from_slice(
+            &std::fs::read(store.home().join("bridge-connection.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(connection["remoteHost"], "127.0.0.1:2222");
+        assert_eq!(
+            connection["tunnel"],
+            json!({"ssh":"PUBLIC-USER@PUBLIC-HOST","remotePort":2222,"localPort":port,"identity":"PUBLIC identity.pem","extraArgs":"-p 2222"})
+        );
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_host_that_cannot_publish_its_owner_or_readiness_shuts_down() {
+        for (file, message) in [
+            ("bridge-host-owner.json", "Bridge owner publication failed"),
+            (
+                "bridge-host-ready.json",
+                "Bridge readiness publication failed",
+            ),
+        ] {
+            let (home, store, env, bind) = bridge_home();
+            // A directory in the record's place makes its atomic replacement fail.
+            std::fs::create_dir_all(store.home().join(file)).unwrap();
+            let error = run(
+                &json!({"bind":bind}),
+                store.clone(),
+                home.path().into(),
+                env,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert_eq!(error, format!("{message}; shutdown: Ok(())"));
+            // The host was shut down: nothing listens on its port any more.
+            assert!(std::net::TcpStream::connect(&bind).is_err(), "{file}");
+        }
+    }
+    #[test]
+    #[ignore = "subprocess-only start-gated bridge host fixture"]
+    fn gated_host_fixture() {
+        let home = PathBuf::from(std::env::var_os("ALCUIN_PUBLIC_BRIDGE_HOME").unwrap());
+        let env = Environment::from_iter([
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
+            ("ORACLE_BRIDGE_START_GATE".into(), "1".into()),
+        ]);
+        let options =
+            json!({"respawn":true,"bind":std::env::var("ALCUIN_PUBLIC_BRIDGE_BIND").unwrap()});
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run(
+                &options,
+                SessionStore::new(home.join("oracle")),
+                home,
+                env,
+                &CancellationToken::new(),
+            ))
+            .unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_gated_host_publishes_readiness_only_after_its_parent_commits_the_handoff() {
+        use tokio::io::AsyncWriteExt;
+        for commit in [true, false] {
+            let (home, store, _, bind) = bridge_home();
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bridge_host::tests::gated_host_fixture",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .envs(with_profile_output(Environment::new()))
+                .env("ALCUIN_PUBLIC_BRIDGE_HOME", home.path())
+                .env("ALCUIN_PUBLIC_BRIDGE_BIND", &bind)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let identity = crate::process::ProcessIdentity::read(child.id().unwrap())
+                .unwrap()
+                .unwrap();
+            let mut gate = serde_json::to_vec(&identity).unwrap();
+            gate.push(b'\n');
+            if commit {
+                gate.extend_from_slice(b"commit\n");
+            }
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(&gate).await.unwrap();
+            drop(stdin);
+            if commit {
+                let ready = ready_file(&store).await;
+                assert_eq!(ready["processIdentity"], json!(identity));
+                unsafe {
+                    assert_eq!(libc::kill(identity.pid as i32, libc::SIGTERM), 0);
+                }
+            }
+            let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.success(), commit, "{stderr}");
+            let owner: Value = serde_json::from_slice(
+                &std::fs::read(store.home().join("bridge-host-owner.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(owner["processIdentity"], json!(identity));
+            if !commit {
+                assert!(
+                    stderr.contains("Background bridge handoff was not committed"),
+                    "{stderr}"
+                );
+                assert!(!store.home().join("bridge-host-ready.json").exists());
+            }
+        }
+    }
     /// A zombie leader with a live member is not a zombie group, so EPERM there still fails.
     #[cfg(target_os = "macos")]
     #[test]
@@ -1202,10 +1476,10 @@ mod tests {
         for natural in [false, true] {
             let home = tempfile::tempdir().unwrap();
             let marker = home.path().join("proxy.pid");
-            let mut env = Environment::from_iter([(
+            let mut env = with_profile_output(Environment::from_iter([(
                 "ALCUIN_PUBLIC_TUNNEL_MARKER".into(),
                 marker.to_string_lossy().into_owned(),
-            )]);
+            )]));
             if natural {
                 env.insert("ALCUIN_PUBLIC_TUNNEL_NATURAL".into(), "1".into());
             }
@@ -1261,13 +1535,14 @@ mod tests {
     async fn immediately_exiting_tunnel_attempts_back_off_and_restart() {
         let home = tempfile::tempdir().unwrap();
         let marker = home.path().join("fast.pid");
-        let mut env = Environment::from_iter([
+        let mut env = with_profile_output(Environment::from_iter([
             (
                 "ALCUIN_PUBLIC_TUNNEL_MARKER".into(),
                 marker.to_string_lossy().into_owned(),
             ),
             ("ALCUIN_PUBLIC_TUNNEL_EXIT".into(), "1".into()),
-        ]);
+            ("SSH_AUTH_SOCK".into(), "PUBLIC-exiting-agent".into()),
+        ]));
         if let Ok(root) = std::env::var("SystemRoot") {
             env.insert("SystemRoot".into(), root);
         }
@@ -1308,6 +1583,11 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+        // The last attempt saw the agent socket its environment named.
+        assert_eq!(
+            std::fs::read_to_string(marker.with_extension("agent")).unwrap(),
+            "PUBLIC-exiting-agent"
+        );
     }
     #[tokio::test]
     async fn failed_or_dropped_startup_reaps_the_owned_process_tree() {

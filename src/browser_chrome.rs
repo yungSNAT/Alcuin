@@ -1379,6 +1379,12 @@ impl ChromeConnection {
             attachment: None,
         }
     }
+    /// A fixture connection that already holds the launch lock its seeding would keep.
+    #[cfg(test)]
+    pub(crate) fn with_bootstrap_lock(mut self, lock: DirectoryLock) -> Self {
+        self.bootstrap_lock = Some(lock);
+        self
+    }
     pub(crate) fn is_copied(&self) -> bool {
         self.temporary_profile.is_some()
     }
