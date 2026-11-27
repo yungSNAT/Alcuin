@@ -56,6 +56,74 @@ pub(crate) fn accept_saved_answer(
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID: &str = "00000000-0000-4000-8000-000000000007";
+
+    fn fixture() -> (BrowserRequest, Value, Value) {
+        let request: BrowserRequest = serde_json::from_value(json!({"version":1,
+            "sessionId":"public-gemini","reservationId":"PUBLIC-reservation","prompt":"PUBLIC prompt",
+            "promptSha256":"a".repeat(64),"optionsSha256":"b".repeat(64),"uploadPaths":[]}))
+        .unwrap();
+        let owner = SubmissionOwner {
+            claim_id: "PUBLIC-claim".into(),
+            reservation_id: "PUBLIC-reservation".into(),
+        };
+        let dispatch = json!({"state":"acknowledged","reservationId":"PUBLIC-reservation",
+            "submissionOwner":owner,"promptSha256":"a".repeat(64),"providerDispatchId":ID});
+        let session = json!({"dispatch":dispatch,"browser":{"runtime":{"provider":"gemini",
+            "modelSelection":model(),"thinkingSelection":thinking(),"effectiveModel":"gemini-4-neon",
+            "submittedPromptHash":"a".repeat(64),"submissionOwner":owner,
+            "geminiCommitReceipt":receipt(&owner, &dispatch)}}});
+        let observed = json!({"kind":"gemini-temporary-answer","id":ID,"temporaryChat":true,
+            "model":MODEL,"thinking":THINKING,"text":"PUBLIC answer"});
+        (request, session, observed)
+    }
+
+    #[test]
+    fn a_gemini_answer_needs_temporary_chat_neon_high_and_its_own_dispatch() {
+        let (request, session, observed) = fixture();
+        accept_saved_answer(&request, &session, &observed).unwrap();
+        assert_eq!(
+            session["browser"]["runtime"]["geminiCommitReceipt"]["temporaryChat"],
+            true
+        );
+        type Edit = fn(&mut Value, &mut Value);
+        let edits: [(&str, Edit); 10] = [
+            ("not temporary", |_, o| o["temporaryChat"] = json!(false)),
+            ("other model", |_, o| o["model"] = json!("Gemini 4 Flash")),
+            ("low thinking", |_, o| o["thinking"] = json!("Low")),
+            ("other turn", |_, o| o["id"] = json!("PUBLIC-other")),
+            ("empty answer", |_, o| o["text"] = json!("  ")),
+            ("other kind", |_, o| {
+                o["kind"] = json!("grok-private-answer")
+            }),
+            ("other provider", |s, _| {
+                s["browser"]["runtime"]["provider"] = json!("grok")
+            }),
+            ("other prompt", |s, _| {
+                s["dispatch"]["promptSha256"] = json!("c".repeat(64))
+            }),
+            ("bad dispatch id", |s, _| {
+                s["dispatch"]["providerDispatchId"] = json!("PUBLIC")
+            }),
+            ("receipt changed", |s, _| {
+                s["browser"]["runtime"]["geminiCommitReceipt"]["temporaryChat"] = json!(false)
+            }),
+        ];
+        for (case, edit) in edits {
+            let (request, mut session, mut observed) = fixture();
+            edit(&mut session, &mut observed);
+            assert!(
+                accept_saved_answer(&request, &session, &observed).is_err(),
+                "{case} was accepted"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) async fn native_case(page: &crate::cdp::Cdp) -> Result<()> {
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;

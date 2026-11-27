@@ -2,6 +2,10 @@
 use super::*;
 use crate::{browser_attempt::Provider, browser_gemini as gemini};
 
+#[cfg(test)]
+#[path = "gemini_tests.rs"]
+pub(crate) mod tests;
+
 pub(super) async fn navigate(
     page: &Cdp,
     limits: &RunnerLimits,

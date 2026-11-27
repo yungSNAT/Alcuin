@@ -32,6 +32,8 @@ use uuid::Uuid;
 mod gemini;
 mod grok;
 #[cfg(test)]
+pub(crate) use gemini::tests::native_cases as native_gemini_runner_cases;
+#[cfg(test)]
 pub(crate) use grok::tests::native_cases as native_grok_runner_cases;
 mod deliveries;
 use deliveries::{collect_deliveries, turn_image_deliveries};

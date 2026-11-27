@@ -4267,6 +4267,8 @@ async fn native_temporary_chat_predicate_and_retained_send_guard() -> Result<()>
     let result = async {
         crate::browser_runner::native_grok_runner_cases(&chrome.browser,&chrome.endpoint)
             .await.context("Native Grok owned runner lifecycle")?;
+        crate::browser_runner::native_gemini_runner_cases(&chrome.browser,&chrome.endpoint)
+            .await.context("Native Gemini owned runner lifecycle")?;
         let rows=chrome.browser.call("Target.getTargets",json!({}),SHORT,&cancel).await?;
         let id=rows["targetInfos"].as_array().context("No targets")?.iter().find(|row|row["type"]=="page").and_then(|row|row["targetId"].as_str()).context("No startup page")?;
         let attached=chrome.browser.call("Target.attachToTarget",json!({"targetId":id,"flatten":true}),SHORT,&cancel).await?;

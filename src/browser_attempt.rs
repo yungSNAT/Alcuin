@@ -1945,6 +1945,126 @@ mod tests {
     }
 
     #[test]
+    fn gemini_switch_needs_consent_fires_once_and_never_retries_the_gemini_send() {
+        type Edit = fn(&SessionStore, &Switched);
+        let none: Edit = |_, _| {};
+        let unsent: Edit = |store, f| {
+            patch_meta(store, &f.first.child_id, |meta| {
+                meta["dispatch"]["state"] = json!("not-started");
+            })
+        };
+        // (case, request input, personal browser config, state edit, expected)
+        let cases: [(&str, Value, Value, Edit, bool); 5] = [
+            (
+                "personal",
+                json!({}),
+                json!({"fallbackProvider":"gemini"}),
+                none,
+                true,
+            ),
+            (
+                "request",
+                json!({"browserFallback":"gemini"}),
+                json!({}),
+                none,
+                true,
+            ),
+            (
+                "none wins",
+                json!({"browserFallback":"none"}),
+                json!({"fallbackProvider":"gemini"}),
+                none,
+                false,
+            ),
+            ("off by default", json!({}), json!({}), none, false),
+            (
+                "certainly unsent",
+                json!({}),
+                json!({"fallbackProvider":"gemini"}),
+                unsent,
+                false,
+            ),
+        ];
+        for (case, input, personal, edit, expected) in cases {
+            let mut f = switch_fixture(input, personal);
+            edit(&f.store, &f);
+            let store = f.store.clone();
+            let before = store.require(&f.id).unwrap();
+            let first = f.first.clone();
+            let (environment, cancel) = (f.environment.clone(), f.cancel.clone());
+            let switched = f
+                .coordinator
+                .switch_provider(&first, &typed(), &environment, &cancel)
+                .unwrap();
+            assert_eq!(switched.is_some(), expected, "{case}");
+            if !expected {
+                assert_eq!(store.require(&f.id).unwrap(), before, "{case}");
+                assert_eq!(store.list(false).unwrap().len(), 2, "{case}");
+                continue;
+            }
+            let gemini = switched.unwrap();
+            assert_eq!((gemini.provider, gemini.ordinal), (Provider::Gemini, 2));
+            // The decision is in the same parent record that made the Gemini child active.
+            let state = store.require(&f.id).unwrap()["browser"]["consultation"].clone();
+            assert_eq!(state["switch"]["to"], "gemini", "{case}");
+            assert_eq!(state["switch"]["dispatch"], "uncertain", "{case}");
+            assert_eq!(state["active"], json!(gemini), "{case}");
+            let child = store.require(&gemini.child_id).unwrap();
+            assert!(
+                child["browser"]["config"]["manualLoginProfileDir"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("gemini-browser-profile"),
+                "{case}"
+            );
+            assert_eq!(child["options"]["browserFallback"], "none", "{case}");
+            assert_eq!(child["browser"]["config"]["fallbackProvider"], "none");
+            // Neither a second switch nor a retry follows, whatever the Gemini send did.
+            assert!(
+                f.coordinator
+                    .switch_provider(&first, &typed(), &environment, &cancel)
+                    .unwrap()
+                    .is_none(),
+                "{case} switched twice"
+            );
+            assert!(
+                f.coordinator
+                    .switch_provider(&gemini, &typed(), &environment, &cancel)
+                    .unwrap()
+                    .is_none(),
+                "{case} switched away from Gemini"
+            );
+            let not_sent = anyhow::Error::new(crate::cdp::NotSent("PUBLIC unsent".into()));
+            assert!(
+                f.coordinator
+                    .retry_unsent(&gemini, &not_sent, &cancel)
+                    .unwrap()
+                    .is_none(),
+                "{case} retried the Gemini attempt"
+            );
+            assert_eq!(store.list(false).unwrap().len(), 3, "{case}");
+        }
+    }
+
+    #[test]
+    fn provider_names_round_trip_and_only_alternates_are_fallbacks() {
+        for provider in [Provider::Chatgpt, Provider::Grok, Provider::Gemini] {
+            assert_eq!(
+                serde_json::to_value(provider).unwrap(),
+                json!(provider.id())
+            );
+        }
+        assert_eq!(
+            Provider::alternate(&json!("gemini")),
+            Some(Provider::Gemini)
+        );
+        assert_eq!(Provider::alternate(&json!("grok")), Some(Provider::Grok));
+        for other in [json!("chatgpt"), json!("none"), json!(null), json!(1)] {
+            assert_eq!(Provider::alternate(&other), None, "{other}");
+        }
+    }
+
+    #[test]
     fn only_a_typed_unsent_failure_retries_once_in_a_fresh_chatgpt_attempt() {
         let not_sent = || {
             anyhow::Error::new(crate::cdp::NotSent(
