@@ -75,6 +75,8 @@ Alcuin keeps its own ChatGPT sign-in in a profile at `~/.oracle/browser-profile`
 
 ## Gemini
 
+The fallback fires only when the first ChatGPT dispatch is uncertain and its bounded read-only recovery has expired; a certainly-unsent failure takes the fresh-tab ChatGPT retry and never switches. With the fallback configured or passed, a prompt ChatGPT may already have received is sent once to the second provider. `--browser-fallback none` always turns the switch off.
+
 `--browser-fallback gemini` allows a single Gemini attempt after a qualifying ChatGPT failure and bounded read-only recovery. `--browser-provider gemini` opens Gemini directly. Both routes use a separate manual sign-in profile and require Temporary Chat, Gemini 4 Neon and High thinking. Gemini accepts a new text prompt only. Alcuin verifies all 3 settings and the complete draft before clicking Send, then saves the answer from the original tab.
 
 ## Grok
