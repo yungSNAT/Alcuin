@@ -1925,6 +1925,7 @@ mod tests {
     ) -> (Result<Value>, Commands, Vec<String>) {
         use std::process::{Command, Stdio};
         let home = tempfile::tempdir().unwrap();
+        let bringup = home.path().join("PUBLIC-bringup.lock");
         let (browser, commands, peer) = fake_devtools(sources_browser(fault)).await;
         let child = owned.then(|| {
             let mut child = Command::new(std::env::current_exe().unwrap())
@@ -1959,7 +1960,6 @@ mod tests {
             cancel.cancel();
         }
         let lines = std::sync::Mutex::new(Vec::<String>::new());
-        let bringup = home.path().join("PUBLIC-bringup.lock");
         let result = TEST_CHROME
             .scope(
                 std::cell::RefCell::new(Some(configured)),
