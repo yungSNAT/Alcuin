@@ -936,6 +936,22 @@ mod tests {
         assert!(format!("{error:#}").contains("PUBLIC inner"));
         assert!(ExitPending::of(&anyhow::anyhow!("PUBLIC refusal")).is_none());
     }
+
+    /// A Gemini run owns its persistent profile like Grok's, so its finalised
+    /// commit must let the idle disposal close that browser.
+    #[test]
+    fn disposal_retires_every_finalised_session_commit_kind() {
+        for kind in [
+            "session",
+            "research-report",
+            "grok-session",
+            "gemini-session",
+        ] {
+            assert!(retirable_kind(Some(kind)), "{kind}");
+        }
+        assert!(!retirable_kind(Some("native")));
+        assert!(!retirable_kind(None));
+    }
 }
 #[cfg(test)]
 #[path = "browser_chrome_idle_saved_coverage2_tests.rs"]
