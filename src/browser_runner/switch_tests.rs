@@ -107,6 +107,13 @@ impl Run {
             .unwrap()
             .to_owned()
     }
+    /// The alternate attempt, which a restored consultation no longer lists.
+    fn alternate(&self, provider: &str) -> String {
+        let id = format!("{}-attempt-2", self.id);
+        let child = self.store.require(&id).unwrap();
+        assert_eq!(child["browser"]["attempt"]["provider"], provider, "{child}");
+        id
+    }
     fn failed_for_recovery(&self) {
         let parent = self.store.require(&self.id).unwrap();
         assert_eq!(parent["status"], "error", "{parent}");
@@ -124,7 +131,7 @@ async fn the_switch_fires_only_after_an_uncertain_send_and_expired_recovery() {
             None,
         )
         .await;
-        let (first, alternate) = (run.child(0), run.child(1));
+        let (first, alternate) = (run.child(0), run.alternate(fallback));
         assert_eq!(
             run.error,
             format!(
@@ -144,7 +151,7 @@ async fn the_switch_fires_only_after_an_uncertain_send_and_expired_recovery() {
             None,
         )
         .await;
-        let (first, alternate) = (run.child(0), run.child(1));
+        let (first, alternate) = (run.child(0), run.alternate(fallback));
         assert!(
             run.error.starts_with(&format!("ChatGPT failed and the {fallback} fallback could not finish: PUBLIC alternate lost after Send. {fallback} attempt {alternate} may have received the prompt (")),
             "{}",
@@ -182,10 +189,16 @@ async fn the_switch_fires_only_after_an_uncertain_send_and_expired_recovery() {
 
 #[tokio::test]
 async fn a_refused_switch_fails_closed_with_chatgpt_restored() {
-    TEST_FAIL_AFTER_PARENT_RESERVATION.set(true);
     let run = consult(
         json!({"browserFallback":"gemini"}),
-        vec![Box::new(chatgpt_expired), Box::new(never)],
+        vec![
+            Box::new(|store: &SessionStore, id: &str| {
+                // The first reservation has happened: fail the alternate's.
+                TEST_FAIL_AFTER_PARENT_RESERVATION.set(true);
+                chatgpt_expired(store, id)
+            }),
+            Box::new(never),
+        ],
         None,
     )
     .await;
