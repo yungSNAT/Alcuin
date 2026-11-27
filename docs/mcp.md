@@ -14,7 +14,7 @@
 
 ## Claude Desktop
 
-Download [`alcuin.mcpb`](https://github.com/yungSNAT/Alcuin/releases/latest/download/alcuin.mcpb) from the latest release and open it with Claude Desktop, which installs the server as an extension. The bundle holds `alcuin` and `alcuin-mcp` for Windows and Linux (x86_64). To check it first:
+Download [`alcuin.mcpb`](https://github.com/yungSNAT/Alcuin/releases/latest/download/alcuin.mcpb) from the latest release and open it with Claude Desktop, which installs the server as an extension. The bundle holds `alcuin` and `alcuin-mcp` for Windows and Linux (x86_64). A bundle chooses its server command by operating system, not by processor, so the macOS (Apple silicon) and Linux aarch64 builds would need a launcher that picks the binary by processor; the bundle does not have one yet. On macOS or Linux on Arm, install the archive for your platform ([Install](install.md)) and add the `mcpServers` block that `alcuin bridge claude-config --local-browser` prints ([below](#claude-code-and-codex-on-the-browsers-machine)) to your MCP client's configuration (for Claude Desktop on macOS, `claude_desktop_config.json`), with `command` set to the full path of `alcuin-mcp`, since an app started from the desktop may not have your shell's `PATH`. To check the bundle first:
 
 ```sh
 curl -fsSLO https://github.com/yungSNAT/Alcuin/releases/latest/download/alcuin.mcpb
