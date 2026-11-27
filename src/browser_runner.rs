@@ -4432,7 +4432,7 @@ pub(crate) fn settle_completed_retirement(
     );
     if !matches!(
         record["commit"]["kind"].as_str(),
-        Some("session" | "research-report" | "grok-session")
+        Some("session" | "research-report" | "grok-session" | "gemini-session")
     ) {
         return Ok(());
     }
