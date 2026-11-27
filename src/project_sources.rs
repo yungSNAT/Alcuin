@@ -1954,15 +1954,12 @@ mod tests {
         let cancel = CancellationToken::new();
         // `cancelled` stops a run that already holds its seeding lock before it takes a tab.
         if fault == "cancelled" {
-            let lock = DirectoryLock::acquire(
-                &home.path().join("PUBLIC-bringup.lock"),
-                Duration::from_secs(1),
-            )
-            .unwrap();
+            let lock = DirectoryLock::acquire(&bringup, Duration::from_secs(1)).unwrap();
             configured.connection = configured.connection.with_bootstrap_lock(lock);
             cancel.cancel();
         }
         let lines = std::sync::Mutex::new(Vec::<String>::new());
+        let bringup = home.path().join("PUBLIC-bringup.lock");
         let result = TEST_CHROME
             .scope(
                 std::cell::RefCell::new(Some(configured)),
@@ -1982,6 +1979,10 @@ mod tests {
             )
             .await;
         peer.await.unwrap();
+        if fault == "cancelled" {
+            // The run released the seeding lock it was handed.
+            DirectoryLock::acquire(&bringup, Duration::from_secs(1)).unwrap();
+        }
         (result, commands, lines.into_inner().unwrap())
     }
 
@@ -2182,7 +2183,10 @@ mod tests {
             "cancelled",
         )
         .await;
-        assert!(result.is_err());
+        assert_eq!(
+            format!("{:#}", result.unwrap_err()),
+            "Browser operation was cancelled"
+        );
         // No tab was allocated, so none was closed and no cookie was written.
         assert!(commands.lock().unwrap().is_empty(), "{commands:?}");
     }

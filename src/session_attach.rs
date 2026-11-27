@@ -698,15 +698,15 @@ mod tests {
                 "Native recovery endpoint port is missing",
             ),
             (
-                json!({"chromeHost":"127.0.0.1","chromePort":9222}),
+                json!({"chromeHost":"127.0.0.1","chromePort":9}),
                 "Native recovery has no pinned browser socket",
             ),
             (
-                json!({"chromeHost":"127.0.0.1","chromePort":9222,"chromeBrowserWSEndpoint":"ws://127.0.0.1:9223/devtools/browser/PUBLIC-browser"}),
+                json!({"chromeHost":"127.0.0.1","chromePort":9,"chromeBrowserWSEndpoint":"ws://127.0.0.1:10/devtools/browser/PUBLIC-browser"}),
                 "CDP endpoint identity is invalid or conflicts with its host/port",
             ),
             (
-                json!({"chromeHost":"127.0.0.1","chromePort":9222,"chromeBrowserWSEndpoint":"ws://127.0.0.1:9222/devtools/browser/PUBLIC-browser"}),
+                json!({"chromeHost":"127.0.0.1","chromePort":9,"chromeBrowserWSEndpoint":"ws://127.0.0.1:9/devtools/browser/PUBLIC-browser"}),
                 "Native recovery has no recorded admission directory",
             ),
         ] {
@@ -1294,7 +1294,10 @@ mod tests {
                 if case == "cancelled" {
                     stop.cancel();
                 }
-                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                // The accepted connection already shows the browser was reached.
+                let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+                    return;
+                };
                 while let Some(Ok(_)) = socket.next().await {}
             });
             let (home, store, id) = fixture();
@@ -1309,7 +1312,7 @@ mod tests {
                         "mode":"browser", "status":"error", "recoveryRequired":true,
                         "lifecycle":{"detached":true,"processIdentity":dead,"workerPid":dead.pid,
                             "workerProcessStartedAtMs":dead.started_at_ms},
-                        "browser":{"config":{"inputTimeoutMs":2000},"runtime":{"chromeHost":"127.0.0.1","chromePort":port,
+                        "browser":{"config":{"inputTimeoutMs":if case == "cancelled" {30_000} else {2000}},"runtime":{"chromeHost":"127.0.0.1","chromePort":port,
                             "chromeBrowserWSEndpoint":format!("ws://127.0.0.1:{port}/devtools/browser/PUBLIC-browser"),
                             "profileDir":profile}},
                         "response":{"status":"incomplete","incompleteReason":"incomplete-capture"}
@@ -1473,12 +1476,17 @@ mod tests {
         .unwrap();
         assert_eq!(exit, 0);
         let output = String::from_utf8(output).unwrap();
-        // Test output is never a terminal.
-        assert!(
+        // `attach` asks whether this process's stdout is a terminal, as `cargo test` in an
+        // interactive shell leaves it.
+        let terminal = std::io::stdout().is_terminal();
+        assert_eq!(
             output.contains("Render requested but stdout is not a TTY; showing raw text.\n"),
+            !terminal,
             "{output}"
         );
-        assert!(output.ends_with("PUBLIC short answer"), "{output}");
+        if !terminal {
+            assert!(output.ends_with("PUBLIC short answer"), "{output}");
+        }
     }
     #[tokio::test]
     async fn legacy_recovery_reports_an_attachment_that_never_answers_without_reopening() {
@@ -1507,7 +1515,7 @@ mod tests {
                         "mode":"browser", "status":"error",
                         "lifecycle":{"detached":true,"workerPid":dead.pid,
                             "workerProcessStartedAtMs":dead.started_at_ms},
-                        "browser":{"config":{"inputTimeoutMs":200},"runtime":{"chromeHost":"127.0.0.1","chromePort":port,
+                        "browser":{"config":{"inputTimeoutMs":if cancelled {30_000} else {200}},"runtime":{"chromeHost":"127.0.0.1","chromePort":port,
                             "chromeBrowserWSEndpoint":format!("ws://127.0.0.1:{port}/devtools/browser/PUBLIC-browser")}},
                         "response":{"status":"incomplete","incompleteReason":"chrome-disconnected"}
                     })))

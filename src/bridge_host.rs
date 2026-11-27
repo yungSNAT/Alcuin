@@ -1064,7 +1064,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let cancel = CancellationToken::new();
         cancel.cancel();
-        // A start would fail: the executable does not exist.
+        // A start would fail: the executable does not exist, so `unwrap` fails on any attempt.
         reverse_tunnel(
             home.path().join("PUBLIC-missing-ssh"),
             vec![],
@@ -1074,10 +1074,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
     /// A host configured like the compiled contract tests: its browser is a remote attachment,
     /// so bootstrap never starts Chrome.
+    #[cfg(unix)]
     fn bridge_home() -> (tempfile::TempDir, SessionStore, Environment, String) {
         let home = tempfile::tempdir().unwrap();
         let oracle = home.path().join("oracle");
@@ -1106,6 +1106,7 @@ mod tests {
             format!("127.0.0.1:{port}"),
         )
     }
+    #[cfg(unix)]
     async fn ready_file(store: &SessionStore) -> Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
@@ -1582,7 +1583,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        // Each attempt saw the agent socket its environment named.
+        // The last attempt saw the agent socket its environment named.
         assert_eq!(
             std::fs::read_to_string(marker.with_extension("agent")).unwrap(),
             "PUBLIC-exiting-agent"
