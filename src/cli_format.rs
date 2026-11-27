@@ -1060,3 +1060,6 @@ mod tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "cli_format_coverage_tests.rs"]
+mod coverage_tests;

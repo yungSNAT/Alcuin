@@ -2287,3 +2287,6 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
     }
 }
+#[cfg(test)]
+#[path = "browser_disposition_coverage_tests.rs"]
+mod coverage_tests;

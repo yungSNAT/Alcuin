@@ -6108,3 +6108,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "browser_chrome_coverage2_tests.rs"]
+mod coverage2_tests;

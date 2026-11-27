@@ -580,3 +580,6 @@ mod validation_tests {
         assert_eq!(text["validation"], json!({"type":"generic","ok":true}));
     }
 }
+#[cfg(test)]
+#[path = "browser_download_coverage_tests.rs"]
+mod coverage_tests;

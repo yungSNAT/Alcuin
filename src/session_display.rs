@@ -1011,3 +1011,9 @@ mod tests {
         assert_eq!(trim_before_first_answer("no heading\n"), "no heading\n");
     }
 }
+#[cfg(test)]
+#[path = "session_display_coverage2_tests.rs"]
+mod coverage2_tests;
+#[cfg(test)]
+#[path = "session_display_coverage_tests.rs"]
+mod coverage_tests;

@@ -1626,3 +1626,6 @@ mod tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "browser_auth_coverage_tests.rs"]
+mod coverage_tests;

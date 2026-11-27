@@ -620,3 +620,6 @@ mod tests {
         assert!(missing.require_complete(&[]).is_err());
     }
 }
+#[cfg(test)]
+#[path = "browser_images_coverage_tests.rs"]
+mod coverage_tests;

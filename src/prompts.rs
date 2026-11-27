@@ -1095,3 +1095,6 @@ mod bounded_depth_tests {
         assert_eq!(visited, vec![root.join("src")]);
     }
 }
+#[cfg(test)]
+#[path = "prompts_coverage_tests.rs"]
+mod coverage_tests;

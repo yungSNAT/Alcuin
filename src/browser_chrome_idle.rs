@@ -522,3 +522,6 @@ mod tests {
         Ok(())
     }
 }
+#[cfg(test)]
+#[path = "browser_chrome_idle_coverage_tests.rs"]
+mod coverage_tests;

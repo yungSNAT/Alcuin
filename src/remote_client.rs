@@ -653,5 +653,8 @@ async fn response_error(response: reqwest::Response, cancel: &CancellationToken)
     Ok(format!("Remote host responded with status {status}"))
 }
 #[cfg(test)]
+#[path = "remote_client_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "remote_client_tests.rs"]
 mod tests;
