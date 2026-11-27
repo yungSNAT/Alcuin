@@ -1501,7 +1501,7 @@ mod tests {
         let (client, peer) = tokio::io::duplex(1024 * 1024);
         let cdp = crate::cdp::Cdp::from_socket(
             WebSocketStream::from_raw_socket(client, Role::Client, None).await,
-            Duration::from_secs(1),
+            Duration::from_secs(10),
         );
         let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
         let commands = Commands::default();

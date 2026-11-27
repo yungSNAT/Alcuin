@@ -1107,7 +1107,7 @@ mod tests {
         )
     }
     async fn ready_file(store: &SessionStore) -> Value {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             if let Ok(bytes) = std::fs::read(store.home().join("bridge-host-ready.json"))
                 && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
@@ -1154,7 +1154,7 @@ mod tests {
         let host = run(&options, store.clone(), home.path().into(), env, &cancel);
         let watch = async {
             ready_file(&store).await;
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
             let arguments = loop {
                 if let Ok(text) = std::fs::read_to_string(&recorded) {
                     break text;
@@ -1274,7 +1274,7 @@ mod tests {
                     assert_eq!(libc::kill(identity.pid as i32, libc::SIGTERM), 0);
                 }
             }
-            let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+            let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
                 .await
                 .unwrap()
                 .unwrap();

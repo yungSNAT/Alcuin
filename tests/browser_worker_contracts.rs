@@ -141,6 +141,11 @@ async fn compiled_browser_worker_acknowledges_start_in_isolated_home_then_refuse
         "USERPROFILE".into(),
         home.path().to_string_lossy().into_owned(),
     );
+    // The worker records coverage only when its profile destination survives the cleared
+    // environment.
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        environment.insert("LLVM_PROFILE_FILE".into(), profile);
+    }
     let request = execution::resolve(
         &json!({"engine":"browser","prompt":"PUBLIC synthetic browser worker without a provider"}),
         // Manual login with an uninitialised profile refuses before Chrome starts. Only Windows

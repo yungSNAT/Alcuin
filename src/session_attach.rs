@@ -727,7 +727,7 @@ mod tests {
             let saved = store.stored_for_update(&id).unwrap();
             let mut output = Vec::new();
             let exit = tokio::time::timeout(
-                Duration::from_secs(5),
+                Duration::from_secs(30),
                 attach(
                     &store,
                     &id,
@@ -896,7 +896,7 @@ mod tests {
             let mut output = vec![];
             assert_eq!(
                 tokio::time::timeout(
-                    Duration::from_secs(5),
+                    Duration::from_secs(30),
                     attach(
                         &store,
                         &id,
@@ -1318,7 +1318,7 @@ mod tests {
                 .unwrap();
             let mut output = Vec::new();
             let exit = tokio::time::timeout(
-                Duration::from_secs(10),
+                Duration::from_secs(30),
                 attach(
                     &store,
                     &id,
@@ -1343,7 +1343,7 @@ mod tests {
                 browser.abort();
             } else {
                 // The connection was made and then released.
-                tokio::time::timeout(Duration::from_secs(5), browser)
+                tokio::time::timeout(Duration::from_secs(30), browser)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1516,7 +1516,7 @@ mod tests {
             let before = store.stored_for_update(&id).unwrap();
             let mut output = Vec::new();
             let exit = tokio::time::timeout(
-                Duration::from_secs(10),
+                Duration::from_secs(30),
                 attach(
                     &store,
                     &id,
