@@ -156,7 +156,10 @@ impl ChromeConnection {
 }
 /// Finalised session commit kinds whose persistent browser this disposal may retire.
 fn retirable_kind(kind: Option<&str>) -> bool {
-    matches!(kind, Some("session" | "research-report" | "grok-session"))
+    matches!(
+        kind,
+        Some("session" | "research-report" | "grok-session" | "gemini-session")
+    )
 }
 fn require_session(
     store: &SessionStore,
