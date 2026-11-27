@@ -1590,3 +1590,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "remote_result_coverage_tests.rs"]
+mod coverage_tests;

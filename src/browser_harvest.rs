@@ -385,5 +385,8 @@ fn persist_with(
 }
 
 #[cfg(test)]
+#[path = "browser_harvest_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "browser_harvest_tests.rs"]
 mod tests;

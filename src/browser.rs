@@ -556,3 +556,6 @@ mod disconnect_tests {
         }
     }
 }
+#[cfg(test)]
+#[path = "browser_coverage_tests.rs"]
+mod coverage_tests;

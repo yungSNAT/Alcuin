@@ -250,3 +250,6 @@ pub(crate) fn destination(
         .join(name))
     }
 }
+#[cfg(test)]
+#[path = "remote_transfer_coverage_tests.rs"]
+mod coverage_tests;

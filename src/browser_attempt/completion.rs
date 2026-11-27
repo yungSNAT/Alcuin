@@ -377,3 +377,6 @@ pub(crate) async fn settle_selected_saved(
     .await;
     result
 }
+#[cfg(test)]
+#[path = "completion_coverage_tests.rs"]
+mod coverage_tests;

@@ -532,3 +532,9 @@ mod tests {
         assert!(stdout.contains("1 passed"), "{stdout}");
     }
 }
+#[cfg(test)]
+#[path = "remote_service_coverage2_tests.rs"]
+mod coverage2_tests;
+#[cfg(test)]
+#[path = "remote_service_coverage_tests.rs"]
+mod coverage_tests;

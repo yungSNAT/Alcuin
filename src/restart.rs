@@ -287,5 +287,8 @@ pub(crate) async fn run(
 }
 
 #[cfg(test)]
+#[path = "restart_coverage_tests.rs"]
+mod coverage_tests;
+#[cfg(test)]
 #[path = "restart_tests.rs"]
 mod tests;

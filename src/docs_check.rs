@@ -432,3 +432,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "docs_check_coverage_tests.rs"]
+mod coverage_tests;

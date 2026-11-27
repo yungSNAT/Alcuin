@@ -726,3 +726,6 @@ mod tests {
         assert_eq!(fs::read(&foreign).unwrap(), b"PUBLIC preserve");
     }
 }
+#[cfg(test)]
+#[path = "browser_profile_copy_coverage_tests.rs"]
+mod coverage_tests;

@@ -936,3 +936,6 @@ mod tests {
         assert!(ExitPending::of(&anyhow::anyhow!("PUBLIC refusal")).is_none());
     }
 }
+#[cfg(test)]
+#[path = "browser_chrome_idle_saved_coverage2_tests.rs"]
+mod coverage2_tests;
