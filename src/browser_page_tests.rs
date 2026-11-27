@@ -24,6 +24,20 @@ fn ui_warning_codes_classify_like_their_spaced_wording() {
         ),
         ("Signing_in happens after the page loads.", None),
         ("Retry", None),
+        // Usage-limit and CAPTCHA notices are blockers, in words or as codes.
+        ("usage_limit_reached", Some("rate_limit")),
+        (
+            "You have reached your usage limit for GPT-6 Pro.",
+            Some("rate_limit"),
+        ),
+        ("captcha_required", Some("auth_or_challenge")),
+        (
+            "Complete the CAPTCHA to continue.",
+            Some("auth_or_challenge"),
+        ),
+        ("reCAPTCHA verification failed", Some("auth_or_challenge")),
+        ("Solve the hCaptcha to continue", Some("auth_or_challenge")),
+        ("The captchas_seen counter is unrelated.", None),
     ] {
         assert_eq!(classify_ui_warning(text), kind, "{text}");
     }

@@ -1379,3 +1379,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "providers_coverage_tests.rs"]
+mod coverage_tests;

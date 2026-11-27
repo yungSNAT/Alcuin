@@ -2266,3 +2266,6 @@ mod tests {
         assert_eq!(before["browser"]["consultation"]["active"], json!(grok));
     }
 }
+#[cfg(test)]
+#[path = "browser_attempt_coverage_tests.rs"]
+mod coverage_tests;

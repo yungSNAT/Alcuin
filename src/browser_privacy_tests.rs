@@ -1317,7 +1317,7 @@ const PRO_PICKER_SETUP: &str = r#"(cfg)=>{
   const open=()=>{
     wrapper=document.createElement('div');
     wrapper.setAttribute('data-radix-popper-content-wrapper','');
-    wrapper.innerHTML=`<style>[role=menu] [role=menuitem],[role=menu] [role=menuitemradio],[role=slider]{display:block;min-width:40px;min-height:10px}</style><div data-side="bottom" data-align="center" role="menu" aria-orientation="vertical" data-state="open" data-radix-menu-content="" dir="ltr" id="PUBLIC-menu" aria-labelledby="PUBLIC-trigger" tabindex="-1" data-orientation="vertical"><div data-reduced-motion="false" data-transitions-ready="true" data-model-picker-view="simple"><div id="PUBLIC-simple" aria-hidden="false" data-active="true"><div><div data-active="true"><div data-explicit-model="false" data-inline-model="false" data-effort-header="true" data-ultra-warning-visible="false"><div role="menuitem" aria-label="Select model" data-interactive="true" data-model-picker-view-toggle="true" tabindex="0" data-orientation="vertical" data-radix-collection-item=""><div data-menu-row-content="true"><span><span><span data-power-disabled="false" data-accent="false" data-effort-only="true" data-maximum="false"></span></span></span></div></div></div></div><div data-active="true"><div><span aria-live="polite" id="PUBLIC-status" role="status"></span><span id="PUBLIC-hint">Use Left and Right arrow keys to adjust power</span><div role="menuitem" aria-describedby="PUBLIC-status PUBLIC-hint" aria-keyshortcuts="ArrowLeft ArrowRight" aria-label="Power" data-reasoning-slider="true" tabindex="-1" data-orientation="vertical" data-radix-collection-item=""><div data-menu-row-content="true"><span><div data-keyboard-focused="false" data-model-picker-power-slider=""><span dir="ltr" data-orientation="horizontal" aria-disabled="false" data-locked="false"><span><span role="slider" aria-valuemin="0" aria-valuemax="${state.max}" aria-orientation="horizontal" data-orientation="horizontal" tabindex="-1" aria-hidden="true" data-radix-collection-item="" aria-valuenow="0"></span></span></span></div></span></div></div></div></div></div></div><div id="PUBLIC-models" aria-hidden="true" data-active="false" inert=""><div><div data-active="false"><div>${radio('GPT-6')}${radio('GPT-5.6 Sol')}${radio('Pro')}</div></div></div></div></div></div>`;
+    wrapper.innerHTML=`<style>[role=menu] [role=menuitem],[role=menu] [role=menuitemradio],[role=slider]{display:block;min-width:40px;min-height:10px}</style><div data-side="bottom" data-align="center" role="menu" aria-orientation="vertical" data-state="open" data-radix-menu-content="" dir="ltr" id="PUBLIC-menu" aria-labelledby="PUBLIC-trigger" tabindex="-1" data-orientation="vertical"><div data-reduced-motion="false" data-transitions-ready="true" data-model-picker-view="simple"><div id="PUBLIC-simple" aria-hidden="false" data-active="true"><div><div data-active="true"><div data-explicit-model="false" data-inline-model="false" data-effort-header="true" data-ultra-warning-visible="false"><div role="menuitem" aria-label="Select model" data-interactive="true" data-model-picker-view-toggle="true" tabindex="0" data-orientation="vertical" data-radix-collection-item=""><div data-menu-row-content="true"><span><span><span data-power-disabled="false" data-accent="false" data-effort-only="true" data-maximum="false"></span></span></span></div></div></div></div><div data-active="true"><div><span aria-live="polite" id="PUBLIC-status" role="status"></span><span id="PUBLIC-hint">Use Left and Right arrow keys to adjust power</span><div role="menuitem" aria-describedby="PUBLIC-status PUBLIC-hint" aria-keyshortcuts="ArrowLeft ArrowRight" aria-label="Power" data-reasoning-slider="true" tabindex="-1" data-orientation="vertical" data-radix-collection-item=""><div data-menu-row-content="true"><span><div data-keyboard-focused="false" data-model-picker-power-slider=""><span dir="ltr" data-orientation="horizontal" aria-disabled="false" data-locked="false"><span><span role="slider" aria-valuemin="0" aria-valuemax="${state.max}" aria-orientation="horizontal" data-orientation="horizontal" tabindex="-1" aria-hidden="true" data-radix-collection-item="" aria-valuenow="0"></span></span></span></div></span></div></div></div></div></div></div><div id="PUBLIC-models" aria-hidden="true" data-active="false" inert=""><div><div data-active="false"><div>${radio('GPT-6')}${radio('GPT-5.6 Sol')}${radio('GPT-6.2 Sol')}${radio('Pro')}</div></div></div></div></div></div>`;
     document.body.append(wrapper);
     trigger.setAttribute('aria-expanded','true');
     trigger.setAttribute('data-state','open');
@@ -1333,7 +1333,7 @@ const PRO_PICKER_SETUP: &str = r#"(cfg)=>{
     });
     wrapper.querySelector('[data-reasoning-slider]').addEventListener('keydown',(event)=>{
       const step={ArrowRight:1,ArrowLeft:-1}[event.key];
-      if(!step||state.model==='GPT-5.6 Sol')return;
+      if(!step||!['GPT-6','Pro'].includes(state.model))return;
       state.level=Math.max(0,Math.min(state.max,state.level+step));
       state.model=state.level===4?'Pro':'GPT-6';
       update();
@@ -1382,6 +1382,16 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
         (("GPT-6", 2), 4, "extra-high", "gpt-6-astra", "GPT-6", 3),
         (("Pro", 4), 4, "extra-high", "gpt-6-astra", "GPT-6", 3),
         (("GPT-6", 2), 3, "extra-high", "gpt-6-astra", "GPT-6", 3),
+        // GPT-6.2 Sol (27 November 2026) is another model, never GPT-6: a request leaves it.
+        (("GPT-6.2 Sol", 2), 4, "pro", "gpt-6-pro", "Pro", 4),
+        (
+            ("GPT-6.2 Sol", 2),
+            4,
+            "extra-high",
+            "gpt-6-astra",
+            "GPT-6",
+            3,
+        ),
     ] {
         let mut reservation = picker(json!({"model":start.0,"level":start.1,"max":max})).await?;
         let (_, thinking, chosen) = reservation
@@ -1412,6 +1422,8 @@ async fn pro_model_picker_cases(page: &Cdp) -> Result<()> {
         ("Pro", 4, "extra-high", "selection_unknown"),
         ("Pro", 3, "pro", "selection_unknown"),
         ("GPT-5.6 Sol", 4, "pro", "selection_unknown"),
+        ("GPT-6.2 Sol", 4, "pro", "selection_unknown"),
+        ("GPT-6.2 Sol", 3, "extra-high", "selection_unknown"),
     ] {
         let mut reservation = picker(json!({"model":model,"level":level})).await?;
         let observed = reservation
@@ -2349,6 +2361,175 @@ async fn ui_warning_code_case(page: &Cdp) -> Result<()> {
             )),
         "Connection warning was not collected: {raw}"
     );
+    blocker_words_cases(page).await
+}
+
+/// Blocker words in the conversation are answer text, never a notice, wherever the page wraps
+/// it; the same words in a notice outside the answer are a blocker, also inside an assistant turn.
+async fn blocker_words_cases(page: &Cdp) -> Result<()> {
+    let run = async |script: &str, turns: &str| -> Result<Value> {
+        let html = ACTIVE.replace("</main>", &format!("{turns}</main>"));
+        mount(page, &html, "/", "").await?;
+        page.evaluate_with_arguments(script, &json!([{}]), SHORT, &CancellationToken::new())
+            .await
+    };
+    let warnings = include_str!("../browser-scripts/ui-warnings.js");
+    let guard = crate::browser_health::GUARD;
+    let words =
+        "The usage_limit field and the captcha step return 429 Too many requests; rate limit them.";
+    let user = format!(
+        "<article data-turn-key='PUBLIC-user-turn'><div data-message-author-role='user' data-message-id='PUBLIC-user'>Explain {words}</div></article>"
+    );
+    let answer = |inner: &str, extra: &str| {
+        format!(
+            "<article data-turn-key='PUBLIC-assistant-turn'><div data-message-author-role='assistant' data-message-id='PUBLIC-assistant'><div class='markdown'><p>{words}</p><div class='banner'>Rate limit reached</div></div>{inner}</div>{extra}</article>"
+        )
+    };
+    let rootless = |inner: &str| {
+        format!("{user}<article><div data-message-author-role='assistant'>{inner}</div></article>")
+    };
+    for (case, turns) in [
+        ("answer", format!("{user}{}", answer("", ""))),
+        (
+            "answer in a live region",
+            format!("<div aria-live='polite'>{user}{}</div>", answer("", "")),
+        ),
+        (
+            "answer with no marked root",
+            format!(
+                "{user}<article><div data-message-author-role='assistant' role='status'>{words}</div></article>"
+            ),
+        ),
+        (
+            "chat title in the sidebar",
+            format!(
+                "<nav><a href='/c/PUBLIC-chat'><div>Fix 429 Too many requests</div></a></nav>{user}{}",
+                answer("", "")
+            ),
+        ),
+        (
+            "dialog inside the answer root",
+            format!(
+                "{user}<article><div data-message-author-role='assistant'><div class='markdown'><p>{words}</p><div role='dialog'>Too many requests</div></div></div></article>"
+            ),
+        ),
+        (
+            "page title beside the answer root",
+            format!("{user}{}", answer("<div>429 Too Many Requests</div>", "")),
+        ),
+        (
+            "hidden notice",
+            format!(
+                "{user}{}<div style='display:none'>You are making requests too quickly.</div>",
+                answer("", "")
+            ),
+        ),
+    ] {
+        let raw = run(warnings, &turns).await?;
+        anyhow::ensure!(
+            raw == json!([]),
+            "Conversation text was read as a notice ({case}): {raw}"
+        );
+        let found = run(guard, &turns).await?;
+        anyhow::ensure!(
+            found["throttled"] == false,
+            "Conversation text was read as throttling ({case}): {found}"
+        );
+    }
+    // The composer holds a draft about the same words, inside a wrapper the warning selectors match.
+    let draft = ACTIVE.replace(
+        "<textarea id='prompt-textarea' name='prompt-textarea'></textarea>",
+        &format!(
+            "<div class='composer-banner'><div id='prompt-textarea' contenteditable='true'><p>{words}</p></div></div>"
+        ),
+    );
+    let cancel = CancellationToken::new();
+    mount(page, &draft, "/", "").await?;
+    let raw = page
+        .evaluate_with_arguments(warnings, &json!([{}]), SHORT, &cancel)
+        .await?;
+    let found = page
+        .evaluate_with_arguments(guard, &json!([{}]), SHORT, &cancel)
+        .await?;
+    anyhow::ensure!(
+        raw == json!([]) && found["throttled"] == false,
+        "A composer draft was read as a notice: {raw} {found}"
+    );
+    let limit = "<div role='alert'>You have reached your usage_limit for GPT-6 Pro.</div>";
+    for (case, turns, kind) in [
+        (
+            "usage limit in the turn",
+            format!("{user}{}", answer("", limit)),
+            "rate_limit",
+        ),
+        (
+            "usage limit beside the answer root",
+            format!("{user}{}", answer(limit, "")),
+            "rate_limit",
+        ),
+        (
+            "usage limit in a message with no answer root",
+            rootless(limit),
+            "rate_limit",
+        ),
+        (
+            "CAPTCHA dialog",
+            format!(
+                "{user}{}",
+                answer(
+                    "",
+                    "<div role='dialog'><div class='markdown'>Complete the CAPTCHA to continue.</div></div>"
+                )
+            ),
+            "auth_or_challenge",
+        ),
+    ] {
+        let raw = run(warnings, &turns).await?;
+        anyhow::ensure!(
+            crate::browser_page::first_ui_warning(&raw).map(|(found, _)| found) == Some(kind),
+            "A real blocker was missed ({case}): {raw}"
+        );
+    }
+    for (case, turns, message) in [
+        (
+            "split notice beside the conversation",
+            format!(
+                "{user}{}<div>You are making requests <b>too quickly</b>.</div>",
+                answer("", "")
+            ),
+            "You are making requests too quickly.",
+        ),
+        (
+            "notice beside the answer root",
+            format!(
+                "{user}{}",
+                answer(
+                    "<div role='alert'>Too many requests. Wait a few minutes.</div>",
+                    ""
+                )
+            ),
+            "Too many requests. Wait a few minutes.",
+        ),
+        (
+            "notice in a message with no answer root",
+            rootless("<div role='alert'>Too many requests. Wait a few minutes.</div>"),
+            "Too many requests. Wait a few minutes.",
+        ),
+        (
+            "dialog",
+            format!(
+                "{user}{}<div role='dialog'>Too many requests</div>",
+                answer("", "")
+            ),
+            "Too many requests",
+        ),
+    ] {
+        let found = run(guard, &turns).await?;
+        anyhow::ensure!(
+            found["throttled"] == true && found["throttleMessage"] == message,
+            "A throttling notice was missed ({case}): {found}"
+        );
+    }
     Ok(())
 }
 

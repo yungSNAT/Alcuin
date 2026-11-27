@@ -11,11 +11,4 @@ ignore = [
     "RUSTSEC-2026-0370",
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0372",
-    # chrono 0.4.45 is unmaintained (17 November 2026), with no vulnerability and no patched
-    # version. Alcuin's own code uses jiff; chrono stays only because rmcp 3.9.0 depends on it
-    # on every target (the newest, 3.11.0, still does) and turns on schemars' chrono04
-    # feature. Path (cargo tree -i chrono --target all): chrono <- rmcp, and chrono <- schemars
-    # <- rmcp and this crate. Remove once rmcp drops it:
-    # https://github.com/modelcontextprotocol/rust-sdk/issues/1469
-    "RUSTSEC-2026-0543",
 ]

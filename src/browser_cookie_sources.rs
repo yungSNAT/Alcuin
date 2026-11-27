@@ -467,3 +467,6 @@ mod tests {
         assert!(source.verify().is_err());
     }
 }
+#[cfg(test)]
+#[path = "browser_cookie_sources_coverage_tests.rs"]
+mod coverage_tests;

@@ -607,3 +607,6 @@ fn download_click_expression() -> String {
         include_str!("../../browser-scripts/artifact-prelude.js")
     )
 }
+#[cfg(test)]
+#[path = "deliveries_coverage_tests.rs"]
+mod coverage_tests;
