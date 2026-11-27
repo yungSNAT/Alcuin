@@ -798,6 +798,14 @@ impl Parent {
             .as_array_mut()
             .context("Missing attempt history")?
             .push(json!(link));
+        #[cfg(test)]
+        if TEST_CHANGE_FALLBACK_BEFORE_RESERVATION.replace(false) {
+            self.store.update(&self.id, |current| {
+                let mut changed = current.clone();
+                changed["browser"]["config"]["fallbackProvider"] = json!("grok");
+                Ok(Some(changed))
+            })?;
+        }
         // No child lock is held whilst reserving its exact identity in the parent.
         self.store.update(&self.id, |current| {
             self.require(current,cancel)?;
@@ -880,6 +888,8 @@ thread_local! {
     pub(crate) static TEST_FAIL_AFTER_PARENT_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// With that failure, also changes the coordinator's state so its restoration is refused.
     static TEST_BREAK_SWITCH_RESTORATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Changes the parent's fallback provider between the switch snapshot and its locked reservation.
+    static TEST_CHANGE_FALLBACK_BEFORE_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A switch's Grok attempt, or a first ChatGPT attempt before its retry, that has the
@@ -2272,6 +2282,31 @@ mod tests {
             state["switch"]["outcome"]["reason"],
             "grok-reservation-failed"
         );
+        assert_eq!(
+            require_child(&f.store, &first.child_id, &cancel).unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn a_fallback_provider_change_before_the_reservation_refuses_the_switch() {
+        let mut f = switch_fixture(json!({"browserFallback":"gemini"}), json!({}));
+        let (first, environment, cancel) =
+            (f.first.clone(), f.environment.clone(), f.cancel.clone());
+        let before = f.store.require(&f.id).unwrap()["browser"]["consultation"].clone();
+        TEST_CHANGE_FALLBACK_BEFORE_RESERVATION.set(true);
+        let error = f
+            .coordinator
+            .switch_provider(&first, &typed(), &environment, &cancel)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Provider switch evidence changed before its decision"),
+            "{error:#}"
+        );
+        // No decision and no alternate attempt reach the parent; the ChatGPT attempt stays active.
+        let parent = f.store.require(&f.id).unwrap();
+        assert_eq!(parent["browser"]["consultation"], before);
+        assert_eq!(parent["browser"]["config"]["fallbackProvider"], "grok");
         assert_eq!(
             require_child(&f.store, &first.child_id, &cancel).unwrap(),
             first
