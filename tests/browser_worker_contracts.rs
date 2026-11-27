@@ -207,6 +207,40 @@ async fn compiled_browser_worker_acknowledges_start_in_isolated_home_then_refuse
 }
 
 #[tokio::test]
+async fn a_direct_gemini_request_refuses_a_borrowed_chatgpt_tab_before_any_attempt() {
+    let home = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(home.path().join(".oracle"));
+    let mut environment = Environment::new();
+    for key in ["HOME", "USERPROFILE"] {
+        environment.insert(key.into(), home.path().to_string_lossy().into_owned());
+    }
+    let request = execution::resolve(
+        &json!({"engine":"browser","prompt":"PUBLIC direct Gemini borrowed tab","browserProvider":"gemini"}),
+        &json!({"browser":{"manualLogin":true,"manualLoginProfileDir":home.path().join("profile"),"browserTabRef":"current"}}),
+        &environment,
+        home.path(),
+    )
+    .unwrap();
+    let metadata = browser_runner::prepare(&store, &request, home.path()).unwrap();
+    let id = metadata["id"].as_str().unwrap();
+    let identity = ProcessIdentity::current().unwrap();
+    execution::start_owner(&store, id, &identity, false).unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let error = browser_runner::run_native(&store, id, &environment, &identity, &cancel)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "An alternate provider cannot use a borrowed ChatGPT tab"
+    );
+    let saved = store.require(id).unwrap();
+    assert!(saved.get("dispatch").is_none(), "{saved}");
+    assert!(
+        saved["browser"]["consultation"]["active"].is_null(),
+        "{saved}"
+    );
+}
+#[tokio::test]
 async fn native_preflight_cancellation_updates_model_and_session_without_dispatch() {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path().join(".oracle"));
