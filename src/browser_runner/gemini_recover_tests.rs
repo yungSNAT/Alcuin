@@ -1,9 +1,13 @@
 //! A genuine Gemini worker crash after its single Send, then public parent recovery
 //! from this process against the same live Chrome target and renderer claim.
-use super::grok::tests::{close_fixture_target, target_ids};
+use super::alternate_support_tests::{
+    close_fixture_target, crash_with_manifest, enable_fetch_all, open_fixture_target,
+    prepare_parent, run_recovery_with_release, runner_limits, spawn_crashed_worker,
+    spawn_static_html_interceptor, target_id_set, wait_for_crash_point, wait_for_targets_baseline,
+    worker_endpoint, worker_limits, worker_manifest,
+};
 use super::*;
 use crate::browser_attempt::Provider;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 const PROMPT: &str = "PUBLIC Gemini recovery request";
 const ANSWER: &str = "PUBLIC original Gemini recovery answer";
@@ -64,84 +68,26 @@ async fn recovery_case(
     crash: &str,
     damage: &str,
 ) -> Result<()> {
-    let limits = RunnerLimits {
-        command: Duration::from_secs(5),
-        admission: Duration::from_secs(5),
-        commit: Duration::from_secs(3),
-        answer: Duration::from_secs(5),
-        poll: Duration::from_millis(20),
-        ..RunnerLimits::default()
-    };
+    let limits = runner_limits(5);
     let cancel = CancellationToken::new();
-    let baseline = target_ids(
-        &browser
-            .call("Target.getTargets", json!({}), limits.command, &cancel)
-            .await?,
-    );
-    let root = tempfile::tempdir()?;
-    // Windows resolves the worker's startup lock folder from its synthetic USERPROFILE.
-    fs::create_dir_all(root.path().join("AppData").join("Local"))?;
-    let mut command = std::process::Command::new(std::env::current_exe()?);
-    command
-        .args([
-            "--ignored",
-            "--exact",
-            "browser_runner::gemini_recover_tests::gemini_recovery_worker_helper",
-            "--nocapture",
-        ])
-        .env_clear()
-        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
-        .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
-        .env("HOME", root.path())
-        .env("USERPROFILE", root.path())
-        .env("ALCUIN_GEMINI_RECOVERY", root.path())
-        .env("ALCUIN_GEMINI_RECOVERY_CRASH", crash)
-        .env("ALCUIN_GEMINI_RECOVERY_HOST", &endpoint.host)
-        .env("ALCUIN_GEMINI_RECOVERY_PORT", endpoint.port.to_string())
-        .env("ALCUIN_GEMINI_RECOVERY_WS", &endpoint.browser_ws_endpoint);
-    for key in ["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"] {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    let output = tokio::time::timeout(
-        Duration::from_secs(60),
-        tokio::task::spawn_blocking(move || command.output()),
+    let baseline = target_id_set(browser, limits.command, &cancel).await?;
+    let worker = spawn_crashed_worker(
+        browser,
+        endpoint,
+        "browser_runner::gemini_recover_tests::gemini_recovery_worker_helper",
+        "ALCUIN_GEMINI_RECOVERY",
+        "CRASH",
+        crash,
+        "Gemini",
+        limits.command,
+        &cancel,
     )
-    .await
-    .context("PUBLIC Gemini worker did not crash before its deadline")???;
-    anyhow::ensure!(
-        output.status.success(),
-        "PUBLIC Gemini worker failed: {} {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let manifest: Value = serde_json::from_slice(&fs::read(root.path().join("ready.json"))?)?;
-    let identity: ProcessIdentity = serde_json::from_value(manifest["identity"].clone())?;
-    anyhow::ensure!(
-        identity.liveness() == crate::process::Liveness::Dead,
-        "PUBLIC Gemini worker is not positively dead"
-    );
-    let store = SessionStore::new(
-        Path::new(manifest["home"].as_str().context("No worker home")?).join(".oracle"),
-    );
-    let parent_id = manifest["parentId"].as_str().context("No parent")?;
-    let child_id = manifest["childId"].as_str().context("No child")?;
-    let target_id = manifest["targetId"].as_str().context("No target")?;
-    let attached = browser
-        .call(
-            "Target.attachToTarget",
-            json!({"targetId":target_id,"flatten":true}),
-            limits.command,
-            &cancel,
-        )
-        .await?;
-    let page = browser.with_session(
-        attached["sessionId"]
-            .as_str()
-            .context("No recovery observer session")?
-            .into(),
-    );
+    .await?;
+    let store = &worker.store;
+    let parent_id = worker.parent_id.as_str();
+    let child_id = worker.child_id.as_str();
+    let target_id = worker.target_id.as_str();
+    let page = &worker.page;
     let sends = || page.evaluate("PUBLIC_sendCount", limits.command, &cancel);
     let checked = async {
         anyhow::ensure!(sends().await.context("Send count after the crash")? == 1, "PUBLIC worker did not issue exactly one Send");
@@ -190,7 +136,7 @@ async fn recovery_case(
         match damage {
             "acknowledged" => {
                 // The durable acknowledgement the worker writes after its stable observation.
-                let committed = request(&store, child_id)?;
+                let committed = request(store, child_id)?;
                 let owner = serde_json::from_value(
                     crashed["browser"]["runtime"]["submissionOwner"].clone(),
                 )?;
@@ -232,59 +178,46 @@ async fn recovery_case(
             _ => {}
         }
         let before = store.stored_for_update(child_id)?;
-        let releaser = page.clone();
-        let release = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            releaser
-                .evaluate(
-                    "window.PUBLIC_release?.()??false",
-                    Duration::from_secs(5),
-                    &CancellationToken::new(),
-                )
-                .await
-        });
-        if damage == "deadline" {
-            release.abort();
-        }
-        let profile = ProfileRegistry::open_existing(Path::new(
-            manifest["profileDir"].as_str().context("No profile")?,
-        ))?;
-        let recovered = recover_attached(
-            &store,
+        let (recovered, released) = run_recovery_with_release(
+            store,
             parent_id,
-            profile,
-            browser.clone(),
-            endpoint.clone(),
+            &worker.manifest,
+            page,
+            browser,
+            endpoint,
             &limits,
             &cancel,
+            damage == "deadline",
         )
-        .await;
-        let released = release.await;
+        .await?;
         // Bindings arrive asynchronously; retirement has finished by now.
         tokio::time::sleep(Duration::from_millis(200)).await;
         watcher.abort();
         let replays = replays.load(std::sync::atomic::Ordering::SeqCst);
         let parent = store.require(parent_id)?;
         let child = store.require(child_id)?;
-        let mut targets = target_ids(
-            &browser
-                .call("Target.getTargets", json!({}), limits.command, &cancel)
-                .await?,
-        );
+        let targets = target_id_set(browser, limits.command, &cancel).await?;
         if !matches!(damage, "" | "acknowledged") {
-            let cause = match damage {
-                "temporary" => "Gemini Temporary Chat is unverified",
-                "claim" => "Gemini recovery requires the original renderer reservation",
-                // The parent guard's own timeout ends the bounded read at the same deadline.
-                "deadline" => "Public parent recovery deadline reached; original attempt retained",
-                "ambiguous" => "Gemini recovery has no dispatched request",
-                _ => "Recovered Gemini capture differs from the original answer",
+            let causes: &[&str] = match damage {
+                "temporary" => &["Gemini Temporary Chat is unverified"],
+                "claim" => &["Gemini recovery requires the original renderer reservation"],
+                // The parent guard's timeout_at, require_session and gemini::recover share
+                // guard.deadline(), so whichever check observes expiry first ends the bounded read.
+                "deadline" => &[
+                    "Public parent recovery deadline reached; original attempt retained",
+                    "Parent recovery was cancelled or reached its deadline",
+                    "Recovery did not find a completed original Gemini response",
+                    "CDP command timed out",
+                ],
+                "ambiguous" => &["Gemini recovery has no dispatched request"],
+                _ => &["Recovered Gemini capture differs from the original answer"],
             };
             let after = store.stored_for_update(child_id)?;
             anyhow::ensure!(
-                recovered
-                    .as_ref()
-                    .is_err_and(|error| format!("{error:#}").contains(cause))
+                recovered.as_ref().is_err_and(|error| {
+                    let message = format!("{error:#}");
+                    causes.iter().any(|cause| message.contains(cause))
+                })
                     && parent["status"] != "completed"
                     && child["capturedAnswer"] == before["capturedAnswer"]
                     && after["dispatch"] == before["dispatch"]
@@ -319,21 +252,13 @@ async fn recovery_case(
             "Recovered Gemini attempt is incomplete or replayed: {child}"
         );
         anyhow::ensure!(
-            String::from_utf8(captured(&store, parent_id)?)? == ANSWER
-                && fs::read_to_string(manifest["output"].as_str().context("No output")?)?
+            String::from_utf8(captured(store, parent_id)?)? == ANSWER
+                && fs::read_to_string(worker.manifest["output"].as_str().context("No output")?)?
                     .contains(ANSWER),
             "Recovered capture or output lost the original Gemini answer"
         );
-        // Chromium can list a closed target briefly after its retirement is recorded.
-        let settle = Instant::now() + Duration::from_secs(5);
-        while targets != baseline && Instant::now() < settle {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            targets = target_ids(
-                &browser
-                    .call("Target.getTargets", json!({}), limits.command, &cancel)
-                    .await?,
-            );
-        }
+        let targets =
+            wait_for_targets_baseline(browser, &baseline, targets, limits.command, &cancel).await?;
         anyhow::ensure!(
             runtime["targetRetiredAt"].is_string() && targets == baseline,
             "Recovered Gemini target was retained or another target changed: retired {} targets {targets:?} baseline {baseline:?} target {target_id} runtime {runtime}", runtime["targetRetiredAt"]
@@ -367,122 +292,56 @@ async fn gemini_recovery_worker_helper() {
 
 async fn recovery_worker(root: &Path) -> Result<()> {
     let crash = std::env::var("ALCUIN_GEMINI_RECOVERY_CRASH")?;
-    let endpoint = AttachmentEndpoint {
-        host: std::env::var("ALCUIN_GEMINI_RECOVERY_HOST")?,
-        port: std::env::var("ALCUIN_GEMINI_RECOVERY_PORT")?.parse()?,
-        browser_ws_endpoint: std::env::var("ALCUIN_GEMINI_RECOVERY_WS")?,
-    };
+    let endpoint = worker_endpoint("ALCUIN_GEMINI_RECOVERY")?;
     // The answer deadline outlives the crash point; the witness lifetime covers recovery.
-    let limits = RunnerLimits {
-        command: Duration::from_secs(5),
-        admission: Duration::from_secs(5),
-        commit: Duration::from_secs(30),
-        answer: Duration::from_secs(30),
-        poll: Duration::from_millis(20),
-        ..RunnerLimits::default()
-    };
+    let limits = worker_limits();
     let cancel = CancellationToken::new();
     let browser = endpoint.connect(limits.command, &cancel).await?;
     let home = root.join("home");
     fs::create_dir_all(&home)?;
-    let store = SessionStore::new(home.join(".oracle"));
-    let output = home.join("PUBLIC-answer.md");
-    let environment = crate::config::Environment::from([
-        (
-            "ORACLE_HOME_DIR".into(),
-            store.home().to_string_lossy().into(),
-        ),
-        (
-            (if cfg!(windows) { "USERPROFILE" } else { "HOME" }).into(),
-            home.to_string_lossy().into(),
-        ),
-    ]);
-    let resolved = crate::execution::resolve(
-        &json!({"prompt":PROMPT,"engine":"browser","model":"gpt-6-pro","writeOutputPath":output,"browserProvider":"gemini"}),
-        &json!({"browser":{"manualLogin":true,"cookieSync":false}}),
-        &environment,
-        &home,
+    let mut prepared = prepare_parent(&home, PROMPT, json!({"browserProvider":"gemini"}), &cancel)?;
+    let link = prepared.coordinator.reserve_first_alternate(
+        Provider::Gemini,
+        &prepared.environment,
+        &cancel,
     )?;
-    let parent = prepare(&store, &resolved, &home)?;
-    let parent_id = parent["id"].as_str().context("No public fixture parent")?;
-    let identity = ProcessIdentity::current()?;
-    start_owner(&store, parent_id, &identity)?;
-    let mut coordinator =
-        crate::browser_attempt::Parent::begin(&store, parent_id, &identity, &cancel)?;
-    let link = coordinator.reserve_first_alternate(Provider::Gemini, &environment, &cancel)?;
-    start_owner(&store, &link.child_id, &identity)?;
-    let child = store.require(&link.child_id)?;
-    let profile = ProfileRegistry::open(Path::new(
-        child["browser"]["config"]["manualLoginProfileDir"]
-            .as_str()
-            .context("No Gemini profile")?,
-    ))?;
-    let lease = Arc::new(
-        profile
-            .acquire_with_limit(&link.child_id, 1, limits.admission, &cancel)
-            .await?,
+    start_owner(&prepared.store, &link.child_id, &prepared.identity)?;
+    let child = prepared.store.require(&link.child_id)?;
+    let mut fixture = open_fixture_target(
+        &browser,
+        Some(&endpoint),
+        &child,
+        &link.child_id,
+        &limits,
+        &cancel,
+    )
+    .await?;
+    enable_fetch_all(&fixture.page, limits.command, &cancel).await?;
+    let _interceptor = spawn_static_html_interceptor(
+        &browser,
+        fixture.session.clone(),
+        fixture.page.clone(),
+        crate::browser_gemini::URL,
+        document(&crash),
     );
-    let _heartbeat = lease.heartbeat();
-    let mut target = TargetAcquisition::default()
-        .acquire(browser.clone(), lease.clone(), &cancel, limits.command)
-        .await?;
-    // Production admission records the endpoint that recovery later requires.
-    lease.update(&json!({"chromeHost":endpoint.host,"chromePort":endpoint.port}))?;
-    let target_id = target.id().to_owned();
-    let page = target.page().clone();
-    let session = page
-        .session_id()
-        .context("No owned fixture session")?
-        .to_owned();
-    let mut events = browser.events();
-    page.call(
-        "Fetch.enable",
-        json!({"patterns":[{"urlPattern":"*"}]}),
-        limits.command,
-        &cancel,
-    )
-    .await?;
-    let intercepted = page.clone();
-    let html = document(&crash);
-    let _interceptor = tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
-            if event["sessionId"] != session || event["method"] != "Fetch.requestPaused" {
-                continue;
-            }
-            anyhow::ensure!(
-                event["params"]["request"]["url"] == crate::browser_gemini::URL,
-                "Unexpected fixture network request"
-            );
-            intercepted.call("Fetch.fulfillRequest",json!({"requestId":event["params"]["requestId"],"responseCode":200,
-                "responseHeaders":[{"name":"Content-Type","value":"text/html"}],"body":STANDARD.encode(&html)}),Duration::from_secs(5),&CancellationToken::new()).await?;
-        }
-        Ok::<_, anyhow::Error>(())
-    });
     let bringup = DirectoryLock::acquire_async(
-        &profile.path().join("oracle-browser-bringup.lock"),
+        &fixture.profile.path().join("oracle-browser-bringup.lock"),
         limits.command,
         &cancel,
     )
     .await?;
-    let witness = ExecutionWitness::capture(&store, &link.child_id, &identity)?;
-    let committed = request(&store, &link.child_id)?;
-    let manifest = json!({"parentId":parent_id,"childId":link.child_id,"targetId":target_id,
-        "profileDir":profile.path(),"home":home,"output":output,"identity":identity});
+    let witness = ExecutionWitness::capture(&prepared.store, &link.child_id, &prepared.identity)?;
+    let committed = request(&prepared.store, &link.child_id)?;
+    let manifest = worker_manifest(&prepared, &link.child_id, &fixture, &home);
     // A genuine crash: no destructor, witness stop, quarantine or cleanup runs.
     let ready = root.join("ready.json");
-    let crash_now = move || -> ! {
-        if let Err(error) = crate::storage::atomic_json(&ready, &manifest) {
-            eprintln!("PUBLIC Gemini recovery manifest failed: {error:#}");
-            std::process::exit(3);
-        }
-        std::process::exit(0)
-    };
+    let crash_now = move || -> ! { crash_with_manifest(&ready, &manifest, "Gemini") };
     let delivered = run_owned(
-        &store,
+        &prepared.store,
         &link.child_id,
         &witness,
         &committed,
-        &mut target,
+        &mut fixture.target,
         &endpoint,
         bringup,
         &limits,
@@ -502,19 +361,14 @@ async fn recovery_worker(root: &Path) -> Result<()> {
         );
     }
     // Exits once the single Send is journalled as started, whilst the answer is held.
-    let crash_point = async {
-        loop {
-            let state = store.stored_for_update(&link.child_id)?["dispatch"]["state"].clone();
-            let sent = page
-                .evaluate("window.PUBLIC_sendCount??0", limits.command, &cancel)
-                .await?
-                == 1;
-            if sent && state == "started" {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    };
+    let crash_point = wait_for_crash_point(
+        &prepared.store,
+        &link.child_id,
+        &fixture.page,
+        "started",
+        limits.command,
+        &cancel,
+    );
     tokio::select! {
         delivered = delivered => {
             anyhow::bail!("PUBLIC worker finished before its crash point: {:?}", delivered.err());

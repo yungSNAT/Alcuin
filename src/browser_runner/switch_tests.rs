@@ -44,19 +44,20 @@ struct Run {
     /// Scripts left unrun: an extra attempt never started.
     left: usize,
 }
-async fn consult(input: Value, scripts: Vec<ScriptedAttempt>, capture: Option<CaptureHook>) -> Run {
+async fn run_consultation(
+    input: Value,
+    scripts: Vec<ScriptedAttempt>,
+    capture: Option<CaptureHook>,
+) -> (
+    tempfile::TempDir,
+    SessionStore,
+    String,
+    Result<Value>,
+    usize,
+) {
     let home = tempfile::tempdir().unwrap();
     let store = SessionStore::new(home.path().join(".oracle"));
-    let environment = crate::config::Environment::from([
-        (
-            "ORACLE_HOME_DIR".into(),
-            store.home().to_string_lossy().into(),
-        ),
-        (
-            (if cfg!(windows) { "USERPROFILE" } else { "HOME" }).into(),
-            home.path().to_string_lossy().into(),
-        ),
-    ]);
+    let environment = super::alternate_support_tests::fixture_env(home.path(), &store);
     let mut request =
         json!({"prompt":"PUBLIC provider choice","engine":"browser","model":"gpt-6-pro"});
     for (key, value) in input.as_object().unwrap() {
@@ -76,7 +77,7 @@ async fn consult(input: Value, scripts: Vec<ScriptedAttempt>, capture: Option<Ca
     let identity = ProcessIdentity::current().unwrap();
     start_owner(&store, &id, &identity).unwrap();
     TEST_SCRIPTED_ATTEMPTS.with_borrow_mut(|queue| queue.extend(scripts));
-    let error = run_native_consultation(
+    let outcome = run_native_consultation(
         &store,
         &id,
         &environment,
@@ -85,10 +86,13 @@ async fn consult(input: Value, scripts: Vec<ScriptedAttempt>, capture: Option<Ca
         capture,
         None,
     )
-    .await
-    .map(|value| value.to_string())
-    .unwrap_err();
+    .await;
     let left = TEST_SCRIPTED_ATTEMPTS.with_borrow_mut(|queue| queue.drain(..).count());
+    (home, store, id, outcome, left)
+}
+async fn consult(input: Value, scripts: Vec<ScriptedAttempt>, capture: Option<CaptureHook>) -> Run {
+    let (home, store, id, outcome, left) = run_consultation(input, scripts, capture).await;
+    let error = outcome.map(|value| value.to_string()).unwrap_err();
     Run {
         _home: home,
         store,
@@ -255,5 +259,171 @@ async fn a_direct_alternate_runs_once_and_is_never_retried_or_switched() {
         );
         assert_eq!(run.left, 1);
         assert_eq!(run.consultation()["attempts"], json!([]));
+    }
+}
+
+fn captured_alternate(provider: &'static str, answer: &'static str) -> ScriptedAttempt {
+    Box::new(move |store: &SessionStore, id: &str| {
+        let req = request(store, id)?;
+        let identity = ProcessIdentity::current()?;
+        let journal = TargetJournal::open(store)?;
+        let claim_id = Uuid::new_v4().to_string();
+        let creator = journal.record_creation(
+            &crate::browser_disposition::TargetCreation::allocated("TARGET-SWITCH"),
+            &json!({"host":"127.0.0.1","port":9222,"targetId":"TARGET-SWITCH","claimId":claim_id}),
+            &identity,
+            Some(id),
+            None,
+        )?;
+        let capture = artifacts::capture(
+            store,
+            id,
+            "captured-answer.md",
+            answer.as_bytes(),
+            &CancellationToken::new(),
+        )?;
+        let (dispatch, runtime) = if provider == "gemini" {
+            let (dispatch, _obs, mut runtime) = super::alternate_support_tests::gemini_evidence(
+                &req,
+                &identity,
+                &claim_id,
+                "acknowledged",
+                answer,
+                true,
+            );
+            runtime["capturedAnswer"] = json!(capture);
+            runtime["ownedRecoveryTarget"] =
+                json!({"targetId":"TARGET-SWITCH","claimId":claim_id,"creator":creator});
+            (dispatch, runtime)
+        } else {
+            let owner = crate::browser_commit::SubmissionOwner {
+                claim_id: claim_id.clone(),
+                reservation_id: req.reservation_id.clone(),
+            };
+            let dispatch_id = Uuid::new_v4().to_string();
+            let dispatch = json!({
+                "state": "acknowledged",
+                "reservationId": req.reservation_id,
+                "submissionOwner": owner,
+                "promptSha256": req.prompt_sha256,
+                "providerDispatchId": dispatch_id,
+            });
+            let user = format!("response-{}", Uuid::new_v4());
+            let assistant = format!("response-{}", Uuid::new_v4());
+            let completed_receipt = json!({
+                "version": 1,
+                "provider": "grok",
+                "kind": "grok-websocket-v1",
+                "state": "completed",
+                "privateChat": true,
+                "mode": "Auto",
+                "claimId": owner.claim_id,
+                "reservationId": owner.reservation_id,
+                "dispatchId": dispatch_id,
+                "clientMessageId": Uuid::new_v4().to_string(),
+                "userMessageId": user,
+                "assistantMessageId": assistant,
+                "responseId": Uuid::new_v4().to_string(),
+                "promptSha256": req.prompt_sha256,
+            });
+            let mut committed_receipt = completed_receipt.clone();
+            committed_receipt["state"] = json!("committed");
+            committed_receipt["assistantMessageId"] = Value::Null;
+            committed_receipt["responseId"] = Value::Null;
+            let observed = json!({
+                "state": "completed",
+                "provider": "grok",
+                "kind": "grok-private-answer",
+                "privateChat": true,
+                "mode": "Auto",
+                "completionConfirmed": true,
+                "stopExists": false,
+                "strongThinkingActive": false,
+                "wireReceipt": completed_receipt,
+                "userMessageId": user,
+                "assistantMessageId": assistant,
+                "userText": req.prompt,
+                "text": answer,
+                "providerText": answer,
+                "images": [],
+                "files": [],
+            });
+            let runtime = json!({
+                "provider": "grok",
+                "controllerPid": identity.pid,
+                "controllerProcessStartedAtMs": identity.started_at_ms,
+                "submissionOwner": owner,
+                "grokCommitReceipt": committed_receipt,
+                "submittedPromptHash": req.prompt_sha256,
+                "submittedPromptHashFormat": "grok-request-v1",
+                "effectiveModel": "grok-web-auto",
+                "modelSelection": {"verified":true,"source":"grok-mode-picker","selectedMode":"Auto","resolvedLabel":"Grok Auto"},
+                "acceptedObservation": observed,
+                "capturedAnswer": capture,
+                "ownedRecoveryTarget": {"targetId":"TARGET-SWITCH","claimId":claim_id,"creator":creator},
+            });
+            (dispatch, runtime)
+        };
+        store.update(id, |current| {
+            Ok(Some(json!({
+                "dispatch": dispatch,
+                "capturedAnswer": capture,
+                "browser": merge_object(
+                    &current["browser"],
+                    &json!({"provider": provider, "capturedAnswer": capture, "runtime": runtime}),
+                ),
+            })))
+        })?;
+        store.require(id)
+    })
+}
+
+#[tokio::test]
+async fn switched_gemini_and_direct_or_switched_grok_adopt_their_answers() {
+    for (input, provider, switched) in [
+        (
+            json!({"browserFallback":"gemini","notify":false}),
+            "gemini",
+            true,
+        ),
+        (
+            json!({"browserProvider":"grok","notify":false}),
+            "grok",
+            false,
+        ),
+        (
+            json!({"browserFallback":"grok","notify":false}),
+            "grok",
+            true,
+        ),
+    ] {
+        let answer = if provider == "gemini" {
+            "PUBLIC adopted Gemini answer"
+        } else {
+            "PUBLIC adopted Grok answer"
+        };
+        let mut scripts: Vec<ScriptedAttempt> = Vec::new();
+        if switched {
+            scripts.push(Box::new(chatgpt_expired));
+        }
+        scripts.push(captured_alternate(provider, answer));
+        scripts.push(Box::new(never));
+        let (_home, store, id, outcome, left) = run_consultation(input, scripts, None).await;
+        let completed = outcome.unwrap();
+        assert_eq!(left, 1, "an extra attempt ran for {provider}");
+        assert_eq!(completed["status"], "completed", "{completed}");
+        assert_eq!(
+            String::from_utf8(captured(&store, &id).unwrap()).unwrap(),
+            answer
+        );
+        if provider == "gemini" {
+            let log =
+                fs::read_to_string(store.directory(&id).unwrap().join("models/gpt-6-pro.log"))
+                    .unwrap();
+            assert!(
+                log.contains("[browser] Answer adopted from Gemini 4 Neon with High thinking (verified Temporary Chat and picker settings)."),
+                "{log}"
+            );
+        }
     }
 }

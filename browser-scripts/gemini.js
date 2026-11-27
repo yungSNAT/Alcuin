@@ -1,4 +1,4 @@
-(cfg) => {
+(cfg) => { // NOSONAR: the file is one function expression, which Rust calls through CDP
   if (window !== window.top || location.origin !== 'https://gemini.google.com' || !/^\/app(?:\/|$)/.test(location.pathname))
     throw Error('Gemini app origin and top-level document are required');
 

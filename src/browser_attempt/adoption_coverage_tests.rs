@@ -200,3 +200,66 @@ fn parent_capture_resume_skips_invalid_candidates_and_reuses_verified_bytes() {
     }
     assert!(non_file.is_dir());
 }
+
+#[test]
+fn gemini_adoption_refuses_tampered_saved_observation() {
+    let home = tempfile::tempdir().unwrap();
+    let cancel = CancellationToken::new();
+    let mut prepared = crate::browser_runner::alternate_support_tests::prepare_parent(
+        home.path(),
+        "PUBLIC Gemini adoption prompt",
+        json!({"browserProvider":"gemini"}),
+        &cancel,
+    )
+    .unwrap();
+    let link = prepared
+        .coordinator
+        .reserve_first_alternate(Provider::Gemini, &prepared.environment, &cancel)
+        .unwrap();
+    browser_runner::start_owner(&prepared.store, &link.child_id, &prepared.identity).unwrap();
+    let store = &prepared.store;
+    let parent_id = prepared.parent_id.as_str();
+    let identity = &prepared.identity;
+    let req = browser_runner::request(store, &link.child_id).unwrap();
+    let answer = "PUBLIC tampered Gemini answer";
+    let (dispatch, _observed, mut runtime) =
+        crate::browser_runner::alternate_support_tests::gemini_evidence(
+            &req,
+            identity,
+            &Uuid::new_v4().to_string(),
+            "acknowledged",
+            answer,
+            false,
+        );
+    let capture = artifacts::capture(
+        store,
+        &link.child_id,
+        "captured-gemini.md",
+        answer.as_bytes(),
+        &cancel,
+    )
+    .unwrap();
+    runtime["capturedAnswer"] = json!(capture);
+    store
+        .update(&link.child_id, |current| {
+            Ok(Some(json!({
+                "dispatch": dispatch,
+                "capturedAnswer": capture,
+                "browser": merge_object(
+                    &current["browser"],
+                    &json!({"provider":"gemini","capturedAnswer":capture,"runtime":runtime}),
+                )
+            })))
+        })
+        .unwrap();
+
+    let error = prepared
+        .coordinator
+        .adopt(&link.child_id, &cancel)
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Gemini answer lacks evidence"),
+        "{error:#}"
+    );
+    assert!(store.require(parent_id).unwrap()["capturedAnswer"].is_null());
+}

@@ -1725,10 +1725,7 @@ async fn retire(
     let resumed = pending_marker(&page, &owner, &marker, operation_deadline).await?;
     let initialise_completed = resumed.is_none()
         && record.get("nativeOwnerIdentity").is_some()
-        && matches!(
-            record["commit"]["kind"].as_str(),
-            Some("session" | "research-report" | "grok-session" | "gemini-session")
-        );
+        && crate::browser_disposition::retirable_kind(record["commit"]["kind"].as_str());
     let resumed = if initialise_completed {
         // Persisted journal attempt and completed dispatch are verified before
         // changing the renderer. Full source/content verification follows marking.

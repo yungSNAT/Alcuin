@@ -29,6 +29,8 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(test)]
+pub(crate) mod alternate_support_tests;
 mod gemini;
 #[cfg(test)]
 pub(crate) mod gemini_recover_tests;
@@ -4430,10 +4432,7 @@ pub(crate) fn settle_completed_retirement(
             && disposed["absence"] == "confirmed-absent",
         "Completed cleanup has no exact durable absence receipt"
     );
-    if !matches!(
-        record["commit"]["kind"].as_str(),
-        Some("session" | "research-report" | "grok-session" | "gemini-session")
-    ) {
+    if !crate::browser_disposition::retirable_kind(record["commit"]["kind"].as_str()) {
         return Ok(());
     }
     journal.verify(&record)?;

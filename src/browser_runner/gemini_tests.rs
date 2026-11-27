@@ -1,5 +1,8 @@
 use super::*;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use crate::browser_runner::alternate_support_tests::{
+    close_fixture_target, enable_fetch_all, fulfill_html, open_fixture_target, prepare_parent,
+    runner_limits, target_id_set,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const PROMPT: &str = "PUBLIC Gemini owned runner request";
@@ -46,30 +49,12 @@ fn refused(case: &str) -> bool {
     !matches!(case, "" | "late" | "active")
 }
 
-fn target_ids(rows: &Value) -> std::collections::BTreeSet<String> {
-    rows["targetInfos"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row["targetId"].as_str().map(str::to_owned))
-        .collect()
-}
-
 /// Runs in the disposable native privacy fixture: production Rust and JS drive a
 /// public Gemini stand-in in real Chrome, with no account and no provider request.
 pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -> Result<()> {
-    let limits = RunnerLimits {
-        command: Duration::from_secs(5),
-        admission: Duration::from_secs(5),
-        commit: Duration::from_secs(3),
-        answer: Duration::from_secs(3),
-        poll: Duration::from_millis(20),
-        ..RunnerLimits::default()
-    };
+    let limits = runner_limits(3);
     let cancel = CancellationToken::new();
-    let baseline = browser
-        .call("Target.getTargets", json!({}), limits.command, &cancel)
-        .await?;
+    let baseline = target_id_set(browser, limits.command, &cancel).await?;
     for case in [
         "",
         "late",
@@ -81,34 +66,20 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
         "nav-fail",
     ] {
         let home = tempfile::tempdir()?;
-        let store = SessionStore::new(home.path().join(".oracle"));
-        let output = home.path().join("PUBLIC-answer.md");
-        let environment = crate::config::Environment::from([
-            (
-                "ORACLE_HOME_DIR".into(),
-                store.home().to_string_lossy().into(),
-            ),
-            (
-                (if cfg!(windows) { "USERPROFILE" } else { "HOME" }).into(),
-                home.path().to_string_lossy().into(),
-            ),
-        ]);
-        let resolved = crate::execution::resolve(
-            &json!({"prompt":PROMPT,"engine":"browser","model":"gpt-6-pro","writeOutputPath":output,"browserProvider":"gemini"}),
-            &json!({"browser":{"manualLogin":true,"cookieSync":false}}),
-            &environment,
+        let mut prepared = prepare_parent(
             home.path(),
+            PROMPT,
+            json!({"browserProvider":"gemini"}),
+            &cancel,
         )?;
-        let parent = prepare(&store, &resolved, home.path())?;
-        let parent_id = parent["id"].as_str().context("No public fixture parent")?;
-        let original_options = parent["options"].clone();
-        let identity = ProcessIdentity::current()?;
-        start_owner(&store, parent_id, &identity)?;
-        let mut coordinator =
-            crate::browser_attempt::Parent::begin(&store, parent_id, &identity, &cancel)?;
-        let link = coordinator.reserve_first_alternate(Provider::Gemini, &environment, &cancel)?;
-        start_owner(&store, &link.child_id, &identity)?;
-        let child = store.require(&link.child_id)?;
+        let original_options = prepared.parent["options"].clone();
+        let link = prepared.coordinator.reserve_first_alternate(
+            Provider::Gemini,
+            &prepared.environment,
+            &cancel,
+        )?;
+        start_owner(&prepared.store, &link.child_id, &prepared.identity)?;
+        let child = prepared.store.require(&link.child_id)?;
         let profile_dir = child["browser"]["config"]["manualLoginProfileDir"]
             .as_str()
             .context("No Gemini profile")?;
@@ -116,22 +87,11 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
             profile_dir.ends_with("gemini-browser-profile"),
             "Gemini attempt did not get its own profile: {profile_dir}"
         );
-        let profile = ProfileRegistry::open(Path::new(profile_dir))?;
-        let lease = Arc::new(
-            profile
-                .acquire_with_limit(&link.child_id, 1, limits.admission, &cancel)
-                .await?,
-        );
-        let heartbeat = lease.heartbeat();
-        let mut target = TargetAcquisition::default()
-            .acquire(browser.clone(), lease, &cancel, limits.command)
-            .await?;
-        let target_id = target.id().to_owned();
-        let page = target.page().clone();
-        let session = page
-            .session_id()
-            .context("No owned fixture session")?
-            .to_owned();
+        let mut fixture =
+            open_fixture_target(browser, None, &child, &link.child_id, &limits, &cancel).await?;
+        let target_id = fixture.target_id.clone();
+        let page = fixture.page.clone();
+        let session = fixture.session.clone();
         let sends = Arc::new(AtomicUsize::new(0));
         let sent = sends.clone();
         let documents = Arc::new(AtomicUsize::new(0));
@@ -146,13 +106,7 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
             &cancel,
         )
         .await?;
-        page.call(
-            "Fetch.enable",
-            json!({"patterns":[{"urlPattern":"*"}]}),
-            limits.command,
-            &cancel,
-        )
-        .await?;
+        enable_fetch_all(&page, limits.command, &cancel).await?;
         let intercepted = page.clone();
         let html = document(case);
         let interceptor = tokio::spawn(async move {
@@ -178,20 +132,21 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                         Duration::from_secs(5),&CancellationToken::new()).await?;
                     continue;
                 }
-                intercepted.call("Fetch.fulfillRequest",json!({"requestId":event["params"]["requestId"],"responseCode":200,
-                    "responseHeaders":[{"name":"Content-Type","value":"text/html"}],"body":STANDARD.encode(&html)}),Duration::from_secs(5),&CancellationToken::new()).await?;
+                fulfill_html(&intercepted, &event["params"]["requestId"], &html).await?;
             }
             Ok::<_, anyhow::Error>(())
         });
+        let store = &prepared.store;
+        let parent_id = prepared.parent_id.as_str();
         let checked = async {
             let bringup = DirectoryLock::acquire_async(
-                &profile.path().join("oracle-browser-bringup.lock"),
+                &fixture.profile.path().join("oracle-browser-bringup.lock"),
                 limits.command,
                 &cancel,
             )
             .await?;
-            let witness = ExecutionWitness::capture(&store, &link.child_id, &identity)?;
-            let committed = request(&store, &link.child_id)?;
+            let witness = ExecutionWitness::capture(store, &link.child_id, &prepared.identity)?;
+            let committed = request(store, &link.child_id)?;
             // A startup lock defers retirement reconciliation until after the picker.
             let startup = if case == "late" {
                 Some(
@@ -206,11 +161,11 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                 None
             };
             let delivered = run_owned(
-                &store,
+                store,
                 &link.child_id,
                 &witness,
                 &committed,
-                &mut target,
+                &mut fixture.target,
                 endpoint,
                 bringup,
                 &limits,
@@ -278,9 +233,9 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                     && runtime["acceptedObservation"]["text"] == ANSWER,
                 "Gemini child lacks its provider evidence: {child_capture}"
             );
-            coordinator.adopt(&link.child_id, &cancel)?;
-            coordinator.complete(&cancel)?;
-            crate::browser_attempt::settle_selected_saved(&store, parent_id, &cancel).await?;
+            prepared.coordinator.adopt(&link.child_id, &cancel)?;
+            prepared.coordinator.complete(&cancel)?;
+            crate::browser_attempt::settle_selected_saved(store, parent_id, &cancel).await?;
             let parent = store.require(parent_id)?;
             anyhow::ensure!(
                 parent["status"] == "completed"
@@ -289,8 +244,8 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                 "Public parent completion or original options changed"
             );
             anyhow::ensure!(
-                String::from_utf8(captured(&store, parent_id)?)? == ANSWER
-                    && fs::read_to_string(&output)?.contains(ANSWER),
+                String::from_utf8(captured(store, parent_id)?)? == ANSWER
+                    && fs::read_to_string(&prepared.output)?.contains(ANSWER),
                 "Public capture/output lost the Gemini answer"
             );
             anyhow::ensure!(
@@ -298,11 +253,7 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                 "Owned Gemini target repeated navigation or Send"
             );
             anyhow::ensure!(
-                target_ids(
-                    &browser
-                        .call("Target.getTargets", json!({}), limits.command, &cancel)
-                        .await?
-                ) == target_ids(&baseline),
+                target_id_set(browser, limits.command, &cancel).await? == baseline,
                 "Selected Gemini cleanup retained its target or closed another fixture target"
             );
             eprintln!(
@@ -313,15 +264,144 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
         .await;
         interceptor.abort();
         let _ = interceptor.await;
-        drop(heartbeat);
+        drop(fixture.heartbeat);
         // This fixture allocated the target. Its error teardown never runs in production,
         // and a refused close only means the case already closed it.
-        if refused(case) || checked.is_err() {
-            let _ = browser
-                .close_owned_target(&target_id, limits.command, &CancellationToken::new())
-                .await;
-        }
-        checked.with_context(|| format!("PUBLIC Gemini runner case {case:?}"))?;
+        let closed = if refused(case) || checked.is_err() {
+            close_fixture_target(browser, &target_id, limits.command).await
+        } else {
+            Ok(())
+        };
+        checked
+            .and(closed)
+            .with_context(|| format!("PUBLIC Gemini runner case {case:?}"))?;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn deliver_refuses_non_gemini_attempt_and_changed_target_before_send() {
+    use crate::cdp::fake::{Reply, peer};
+
+    let limits = runner_limits(3);
+    let cancel = CancellationToken::new();
+    let endpoint = AttachmentEndpoint {
+        host: "127.0.0.1".into(),
+        port: 9222,
+        browser_ws_endpoint: "ws://127.0.0.1:9222/devtools/browser/PUBLIC".into(),
+    };
+    for (provider, expected) in [
+        (Provider::Grok, "Gemini attempt is unavailable"),
+        (
+            Provider::Gemini,
+            "Gemini target or dispatch changed before Send",
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let mut prepared = prepare_parent(
+            home.path(),
+            PROMPT,
+            json!({"browserProvider": provider.id()}),
+            &cancel,
+        )
+        .unwrap();
+        let link = prepared
+            .coordinator
+            .reserve_first_alternate(provider, &prepared.environment, &cancel)
+            .unwrap();
+        start_owner(&prepared.store, &link.child_id, &prepared.identity).unwrap();
+        let profile = ProfileRegistry::open(Path::new(
+            prepared.store.require(&link.child_id).unwrap()["browser"]["config"]
+                ["manualLoginProfileDir"]
+                .as_str()
+                .unwrap(),
+        ))
+        .unwrap();
+        let lease = Arc::new(
+            profile
+                .acquire_with_limit(&link.child_id, 1, limits.admission, &cancel)
+                .await
+                .unwrap(),
+        );
+        let sends = Arc::new(AtomicUsize::new(0));
+        let sent = sends.clone();
+        let (browser, _trace) = peer(limits.command, move |req| match req.method.as_str() {
+            "Target.attachToTarget" => Reply::Result(json!({"sessionId": "PUBLIC-session"})),
+            "Target.getTargetInfo" => Reply::Result(json!({
+                "targetInfo": {
+                    "targetId": "PUBLIC-target",
+                    "type": "page",
+                    "url": crate::browser_gemini::URL,
+                }
+            })),
+            "Runtime.evaluate" => {
+                let arg = req.arg();
+                if arg.get("provider").is_some() {
+                    Reply::value(json!(true))
+                } else if arg == json!({}) {
+                    Reply::value(json!({}))
+                } else {
+                    match arg["action"].as_str() {
+                        Some("type") => Reply::value(json!("entered")),
+                        Some("send") => {
+                            sent.fetch_add(1, Ordering::SeqCst);
+                            Reply::value(json!(true))
+                        }
+                        _ => Reply::value(json!(true)),
+                    }
+                }
+            }
+            _ => Reply::ok(),
+        })
+        .await;
+        let target = OwnedTarget::recover(
+            browser,
+            lease,
+            "PUBLIC-target".into(),
+            limits.command,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let mut reservation = RendererReservation::acquire_gemini(
+            target.page().clone(),
+            Uuid::new_v4().to_string(),
+            limits.command,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let bringup = DirectoryLock::acquire_async(
+            &profile.path().join("oracle-browser-bringup.lock"),
+            limits.command,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let witness =
+            ExecutionWitness::capture(&prepared.store, &link.child_id, &prepared.identity).unwrap();
+        let committed = request(&prepared.store, &link.child_id).unwrap();
+        let error = super::deliver(
+            &prepared.store,
+            &link.child_id,
+            &witness,
+            &committed,
+            &target,
+            &endpoint,
+            &mut reservation,
+            bringup,
+            false,
+            &limits,
+            &cancel,
+        )
+        .await
+        .err()
+        .expect("deliver unexpectedly succeeded");
+        assert_eq!(error.to_string(), expected, "{error:#}");
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
+        assert!(
+            prepared.store.require(&link.child_id).unwrap()["dispatch"].is_null(),
+            "refused deliver recorded a dispatch"
+        );
+    }
 }

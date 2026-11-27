@@ -33,6 +33,13 @@ pub(crate) fn creator_admission(creator: &Value) -> &Value {
         .get("sessionId")
         .unwrap_or(&creator["lease"]["admissionId"])
 }
+/// Session commit kinds representing a finalised consultation answer.
+pub(crate) fn retirable_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        Some("session" | "research-report" | "grok-session" | "gemini-session")
+    )
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -380,12 +387,10 @@ impl TargetJournal {
         let Ok(current) = ProcessIdentity::current() else {
             return false;
         };
-        matches!(
-            record["commit"]["kind"].as_str(),
-            Some("session" | "research-report" | "grok-session" | "gemini-session")
-        ) && record["finalisedAt"]
-            .as_str()
-            .is_some_and(|time| !time.is_empty())
+        retirable_kind(record["commit"]["kind"].as_str())
+            && record["finalisedAt"]
+                .as_str()
+                .is_some_and(|time| !time.is_empty())
             && record["creator"]["controllerPid"] == current.pid
             && record["creator"]["controllerStartedAtMs"].as_f64() == Some(current.started_at_ms)
             && serde_json::from_value::<ProcessIdentity>(record["nativeOwnerIdentity"].clone())
@@ -1035,6 +1040,71 @@ impl TargetJournal {
     ) -> Result<()> {
         self.verify_with_session(record, Some(session), Some(cancel), deadline)
     }
+    fn verify_alternate_commit(
+        &self,
+        record: &Value,
+        commit: &Value,
+        session: &Value,
+        id: &str,
+        gemini: bool,
+    ) -> Result<()> {
+        let runtime = &session["browser"]["runtime"];
+        let observed = &runtime["acceptedObservation"];
+        let (provider, kind, obs_kind, receipt_key, msg_key, missing, changed, wrong_kind) =
+            if gemini {
+                (
+                    "gemini",
+                    "gemini-session",
+                    "gemini-temporary-answer",
+                    "geminiCommitReceipt",
+                    "id",
+                    "Gemini text missing",
+                    "Gemini commitment or captured text changed",
+                    "Gemini evidence cannot use another provider commitment kind",
+                )
+            } else {
+                (
+                    "grok",
+                    "grok-session",
+                    "grok-private-answer",
+                    "grokCommitReceipt",
+                    "assistantMessageId",
+                    "Grok content is missing",
+                    "Grok commitment, original native receipt or complete text capture changed",
+                    "Grok evidence cannot use another provider commitment kind",
+                )
+            };
+        if commit["kind"] == kind {
+            let request = crate::browser_runner::request(&self.store, id)?;
+            let extra = if gemini {
+                crate::browser_gemini::accept_saved_answer(&request, session, observed)?;
+                true
+            } else {
+                crate::browser_grok::accept_saved_answer(&request, session, observed)?;
+                commit["grokCompletionReceipt"] == observed["wireReceipt"]
+            };
+            let text = observed["text"].as_str().context(missing)?;
+            ensure!(
+                record.get("nativeOwnerIdentity").is_some()
+                    && commit[receipt_key] == runtime[receipt_key]
+                    && extra
+                    && commit["assistantMessageId"] == observed[msg_key]
+                    && commit["assistantContent"]["representation"] == "text"
+                    && commit["assistantContent"]["sha256"] == sha256(text.as_bytes())
+                    && commit["output"]["sha256"] == commit["assistantContent"]["sha256"],
+                "{changed}"
+            );
+        } else {
+            ensure!(
+                runtime["provider"] != provider
+                    && observed["kind"] != obs_kind
+                    && commit.get(receipt_key).is_none()
+                    && (gemini || commit.get("grokCompletionReceipt").is_none()),
+                "{wrong_kind}"
+            );
+        }
+        Ok(())
+    }
     fn verify_with_session(
         &self,
         record: &Value,
@@ -1045,13 +1115,15 @@ impl TargetJournal {
         crate::artifacts::check_deadline(deadline)?;
         let creator = &record["creator"];
         let commit = &record["commit"];
-        let grok = commit["kind"] == "grok-session";
-        let gemini = commit["kind"] == "gemini-session";
+        let alternate_kind = matches!(
+            commit["kind"].as_str(),
+            Some("grok-session" | "gemini-session")
+        );
         ensure!(
             commit["version"] == 1
                 && commit["allocationId"] == creator["allocationId"]
                 && commit["claimId"] == creator["target"]["claimId"]
-                && (if grok || gemini {
+                && (if alternate_kind {
                     commit.get("conversationId").is_none()
                 } else {
                     commit["conversationId"]
@@ -1084,10 +1156,7 @@ impl TargetJournal {
             return Ok(());
         }
         ensure!(
-            matches!(
-                commit["kind"].as_str(),
-                Some("session" | "research-report" | "grok-session" | "gemini-session")
-            ),
+            retirable_kind(commit["kind"].as_str()),
             "Invalid target commitment kind"
         );
         let id = commit["sessionId"]
@@ -1113,67 +1182,8 @@ impl TargetJournal {
                 "Native completed dispatch or its exact reservation changed"
             );
         }
-        if grok {
-            let observed = &runtime["acceptedObservation"];
-            crate::browser_grok::accept_saved_answer(
-                &crate::browser_runner::request(&self.store, id)?,
-                &session,
-                observed,
-            )?;
-            ensure!(
-                record.get("nativeOwnerIdentity").is_some()
-                    && commit["grokCommitReceipt"] == runtime["grokCommitReceipt"]
-                    && commit["grokCompletionReceipt"] == observed["wireReceipt"]
-                    && commit["assistantMessageId"] == observed["assistantMessageId"]
-                    && commit["assistantContent"]["representation"] == "text"
-                    && commit["assistantContent"]["sha256"]
-                        == sha256(
-                            observed["text"]
-                                .as_str()
-                                .context("Grok content is missing")?
-                                .as_bytes()
-                        )
-                    && commit["output"]["sha256"] == commit["assistantContent"]["sha256"],
-                "Grok commitment, original native receipt or complete text capture changed"
-            );
-        } else {
-            ensure!(
-                runtime["provider"] != "grok"
-                    && runtime["acceptedObservation"]["kind"] != "grok-private-answer"
-                    && commit.get("grokCommitReceipt").is_none()
-                    && commit.get("grokCompletionReceipt").is_none(),
-                "Grok evidence cannot use another provider commitment kind"
-            );
-        }
-        if gemini {
-            let observed = &runtime["acceptedObservation"];
-            crate::browser_gemini::accept_saved_answer(
-                &crate::browser_runner::request(&self.store, id)?,
-                &session,
-                observed,
-            )?;
-            ensure!(
-                record.get("nativeOwnerIdentity").is_some()
-                    && commit["geminiCommitReceipt"] == runtime["geminiCommitReceipt"]
-                    && commit["assistantMessageId"] == observed["id"]
-                    && commit["assistantContent"]["representation"] == "text"
-                    && commit["assistantContent"]["sha256"]
-                        == sha256(
-                            observed["text"]
-                                .as_str()
-                                .context("Gemini text missing")?
-                                .as_bytes()
-                        )
-                    && commit["output"]["sha256"] == commit["assistantContent"]["sha256"],
-                "Gemini commitment or captured text changed"
-            );
-        } else {
-            ensure!(
-                runtime["provider"] != "gemini"
-                    && runtime["acceptedObservation"]["kind"] != "gemini-temporary-answer"
-                    && commit.get("geminiCommitReceipt").is_none(),
-                "Gemini evidence cannot use another provider commitment kind"
-            );
+        for is_gemini in [false, true] {
+            self.verify_alternate_commit(record, commit, &session, id, is_gemini)?;
         }
         if commit["kind"] == "research-report" {
             let observed = &runtime["acceptedObservation"];

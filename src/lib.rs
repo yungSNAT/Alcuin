@@ -130,7 +130,7 @@ mod browser_script_tests {
         .concat();
         assert_eq!(
             crate::artifacts::sha256(text.as_bytes()),
-            "cd0cb58cf719896bde52201d22920b4c1b810941432b6f05588fa68f7a118ea7"
+            "df72d312cf73fc7d40a22bc536c28618eb4114c07951221799bfa201be98eebf"
         );
     }
 }

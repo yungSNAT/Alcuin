@@ -840,16 +840,10 @@ impl Guard {
                     "submittedPromptHash":request.prompt_sha256,"submittedPromptHashFormat":"grok-request-v1"}))})),
                 "dispatch":merge_object(&current["dispatch"],&json!({"state":"acknowledged"}))})))
         })?;
-        let (_, current) = self.require_base()?;
-        ensure!(
-            current == next,
-            "Child changed during recovered Grok commitment persistence"
-        );
-        self.sealed_receipt
-            .set(receipt(&next))
-            .map_err(|_| anyhow::anyhow!("Recovery commitment was already sealed"))?;
-        self.require_session(&self.link.child_id, &next)?;
-        Ok(next)
+        self.finish_acknowledgement(
+            next,
+            "Child changed during recovered Grok commitment persistence",
+        )
     }
 
     pub(crate) fn acknowledge_gemini(&self, before: &Value, observed: &Value) -> Result<Value> {
@@ -881,8 +875,12 @@ impl Guard {
             );
             Ok(Some(changes))
         })?;
+        self.finish_acknowledgement(next, "Gemini commitment changed after recovery")
+    }
+
+    fn finish_acknowledgement(&self, next: Value, changed: &str) -> Result<Value> {
         let (_, current) = self.require_base()?;
-        ensure!(current == next, "Gemini commitment changed after recovery");
+        ensure!(current == next, "{changed}");
         self.sealed_receipt
             .set(receipt(&next))
             .map_err(|_| anyhow::anyhow!("Recovery commitment was already sealed"))?;
