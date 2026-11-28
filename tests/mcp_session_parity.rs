@@ -381,18 +381,20 @@ async fn consult_dry_runs_keep_the_fallback_consent() {
     let home = tempfile::tempdir().unwrap();
     let server = server(home.path());
     let cancel = CancellationToken::new();
-    let consult = structured(
-        server
-            .invoke(
-                "consult",
-                json!({"prompt":"PUBLIC consult","engine":"browser","browserFallback":"grok","dryRun":true}),
-                &cancel,
-            )
-            .await
-            .unwrap(),
-    );
-    assert_eq!(consult["resolved"]["browser"]["fallbackProvider"], "grok");
-    conforms(&consult, &output_schema("consult"), "consult");
+    for provider in ["grok", "gemini", "none"] {
+        let consult = structured(
+            server
+                .invoke(
+                    "consult",
+                    json!({"prompt":"PUBLIC consult","engine":"browser","browserFallback":provider,"dryRun":true}),
+                    &cancel,
+                )
+                .await
+                .unwrap(),
+        );
+        assert_eq!(consult["resolved"]["browser"]["fallbackProvider"], provider);
+        conforms(&consult, &output_schema("consult"), "consult");
+    }
 }
 
 #[tokio::test]

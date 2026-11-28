@@ -85,6 +85,7 @@ pub struct RendererReservation {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RendererProvider {
     Chatgpt,
+    Gemini,
     Grok,
 }
 // This permit is created only from the exact positively cleaned disabled-Pro inspection.
@@ -113,6 +114,14 @@ impl RendererReservation {
     ) -> Result<Self> {
         crate::browser_grok::require(&page, timeout, cancel).await?;
         Self::acquire_provider(page, claim_id, RendererProvider::Grok, timeout, cancel).await
+    }
+    pub(crate) async fn acquire_gemini(
+        page: Cdp,
+        claim_id: String,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<Self> {
+        Self::acquire_provider(page, claim_id, RendererProvider::Gemini, timeout, cancel).await
     }
     /// Initial entry is separate from recovery, which must preserve the original
     /// document and never changes privacy or creates a second request.
@@ -381,7 +390,12 @@ impl RendererReservation {
         timeout: Duration,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        let cfg = json!({"owner":self.owner,"action":action,"receipt":receipt,"inspection":self.inspection.take(),"provider":if self.provider==RendererProvider::Grok{"grok"}else{"chatgpt"}});
+        let provider = match self.provider {
+            RendererProvider::Chatgpt => "chatgpt",
+            RendererProvider::Gemini => "gemini",
+            RendererProvider::Grok => "grok",
+        };
+        let cfg = json!({"owner":self.owner,"action":action,"receipt":receipt,"inspection":self.inspection.take(),"provider":provider});
         let result = self
             .evaluate_tracked(SUBMISSION, &json!([cfg]), timeout, cancel)
             .await;
@@ -497,6 +511,32 @@ impl RendererReservation {
         let mut value = receipt.clone();
         value["digest"] = json!(sha256(&serde_json::to_vec(receipt)?));
         self.transition("acknowledge", Some(value), timeout, cancel)
+            .await?;
+        self.state = DispatchState::Acknowledged;
+        Ok(())
+    }
+    pub(crate) async fn acknowledge_gemini(
+        &mut self,
+        receipt: Value,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.provider == RendererProvider::Gemini && self.state == DispatchState::Started,
+            "Gemini receipt requires its original started reservation"
+        );
+        anyhow::ensure!(
+            self.evaluate_mutation(
+                crate::browser_gemini::DOM,
+                json!({"action":"acknowledge","id":receipt["id"]}),
+                timeout,
+                cancel
+            )
+            .await?
+                == true,
+            "Gemini's original Temporary Chat no longer owns this dispatch"
+        );
+        self.transition("acknowledge", Some(receipt), timeout, cancel)
             .await?;
         self.state = DispatchState::Acknowledged;
         Ok(())
@@ -779,6 +819,7 @@ impl RendererReservation {
         cfg["owner"] = json!(self.owner);
         let function = match self.provider {
             RendererProvider::Chatgpt => crate::browser_privacy::guard(function),
+            RendererProvider::Gemini => function.to_owned(),
             RendererProvider::Grok => crate::browser_grok::guard(function),
         };
         let result = self

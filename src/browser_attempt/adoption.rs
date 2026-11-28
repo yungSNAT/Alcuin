@@ -37,6 +37,10 @@ fn evidence(store: &SessionStore, child: &Value) -> Result<String> {
         evidence["grok"] =
             json!({"provider":runtime["provider"],"commitReceipt":runtime["grokCommitReceipt"]});
     }
+    if child["browser"]["attempt"]["provider"] == "gemini" {
+        evidence["gemini"] =
+            json!({"provider":runtime["provider"],"commitReceipt":runtime["geminiCommitReceipt"]});
+    }
     Ok(sha256(&serde_json::to_vec(&evidence)?))
 }
 /// The parent view with the selected child's conversation identity, for the
@@ -160,6 +164,11 @@ fn capture(
         Provider::Chatgpt => {
             crate::browser::accept_answer(child, &runtime["acceptedObservation"], runtime)?
         }
+        Provider::Gemini => crate::browser_gemini::accept_saved_answer(
+            &browser_runner::request(store, &link.child_id)?,
+            child,
+            &runtime["acceptedObservation"],
+        )?,
         Provider::Grok => crate::browser_grok::accept_saved_answer(
             &browser_runner::request(store, &link.child_id)?,
             child,

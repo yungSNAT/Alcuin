@@ -21,7 +21,7 @@ Guides: [Quickstart](docs/quickstart.md) · [Install, update and remove](docs/in
 
 Alcuin sends a question and the source files you choose to ChatGPT, or to the OpenAI or Azure OpenAI API, and saves the answer as a durable session. It runs as a CLI (`alcuin`) and a stdio MCP server (`alcuin-mcp`) on Windows, Linux and macOS (Apple silicon, from v0.2.0).
 
-It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. Use Oracle itself for Gemini, Claude or multi-model runs, or on an Intel Mac: see [When to choose something else](#when-to-choose-something-else).
+It is a Rust port of [Oracle](https://github.com/steipete/oracle) by Peter Steinberger, made from a private fork of Oracle that has since been retired. See [When to choose something else](#when-to-choose-something-else) for API and platform alternatives.
 
 ## Install
 
@@ -112,7 +112,7 @@ Alcuin keeps Oracle's names so existing setups carry over: settings use `ORACLE_
 ## Known limitations
 
 - Windows, Linux and macOS on Apple silicon; macOS from v0.2.0. On macOS, CI runs the offline tests and the Chrome fixture test; no browser run has been checked against live ChatGPT there. Intel Macs, WSL-launched Chrome and the terminal UI (`tui`) are not supported.
-- Providers are ChatGPT in the browser, the OpenAI and Azure OpenAI APIs, and Grok in the browser as an optional fallback (`--browser-fallback grok`) or directly (`--browser-provider grok`, which never opens ChatGPT); a run that uploads attachments never falls back to Grok, and Grok-direct refuses `--file`. Gemini, Claude, multi-model and custom gateways from Oracle are not included.
+- Providers are ChatGPT in the browser, the OpenAI and Azure OpenAI APIs, and Gemini or Grok in the browser, each in its own signed-in profile, as an optional fallback (`--browser-fallback gemini` or `grok`) or directly (`--browser-provider gemini` or `grok`, which never opens ChatGPT). Gemini runs require Temporary Chat, Gemini 4 Neon and High thinking; Grok runs use Private Chat. A run that uploads attachments never falls back, and the direct routes refuse `--file`. The fallback fires only when the first ChatGPT dispatch is uncertain and its bounded read-only recovery has expired; a certainly-unsent failure takes the fresh-tab ChatGPT retry and never switches. With the fallback configured or passed, a prompt ChatGPT may already have received is sent once to the second provider. Claude, multi-model and custom gateways from Oracle are not included.
 - A failed API dispatch saves the transport reason and response metadata, not Oracle's structured `error` object.
 - Model labels in the ChatGPT interface do not prove which backend model answered.
 - Deep Research is unavailable. ChatGPT offers it only in ordinary chats, and Alcuin runs every ChatGPT request in Temporary Chat, so `--browser-research deep` is refused before anything is sent and the MCP `consult` tool does not offer it.
@@ -132,7 +132,7 @@ Alcuin suits you if you want a model from another vendor to answer about a fixed
 - **A second look from the same family, with nothing to install:** some coding agents can consult a stronger model of their own family, which reads the whole conversation.
 - **Review without driving a web page:** comparable tools run another vendor's coding agent as a reviewer inside yours. That agent reads what it chooses, not a packet you fix in advance.
 - **Several models at once:** comparable tools consult several providers through their APIs or local CLIs.
-- **Gemini, Claude or an Intel Mac:** the tool Alcuin is ported from, named above.
+- **The Gemini API, Claude or an Intel Mac:** the tool Alcuin is ported from, named above.
 
 ## Development
 

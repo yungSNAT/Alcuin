@@ -424,22 +424,24 @@ fn resolve_origin(
     }
     let (browser, cookie_bootstrap, manual_choice) =
         browser_settings(input, config, env, cwd, &engine, mcp, &model)?;
-    // Grok-direct is a request choice only; configuration never selects a provider.
+    // A direct provider is a request choice only.
     match input.get("browserProvider") {
         None => {}
         Some(value) if *value == "chatgpt" => {}
-        Some(value) if *value == "grok" => {
+        Some(value) if matches!(value.as_str(), Some("grok" | "gemini")) => {
+            let provider = value.as_str().expect("validated provider");
+            // The API engine has already refused every browser* key.
             ensure!(
                 file_inputs.is_empty(),
-                "--browser-provider grok sends text prompts only; put the files' contents in the prompt instead of --file."
+                "--browser-provider {provider} sends text prompts only; put the files' contents in the prompt instead of --file."
             );
             ensure!(
                 browser["researchMode"] != "deep",
-                "--browser-provider grok does not support deep research."
+                "--browser-provider {provider} does not support deep research."
             );
-            options["browserProvider"] = json!("grok");
+            options["browserProvider"] = value.clone();
         }
-        Some(_) => bail!("Browser provider must be chatgpt or grok"),
+        Some(_) => bail!("Browser provider must be chatgpt, grok or gemini"),
     }
     if engine == "browser" {
         options["browserConfig"] = browser.clone();
@@ -2063,6 +2065,38 @@ mod failure_tests {
                 ["ERROR: PUBLIC failure"],
                 "{meta}"
             );
+        }
+    }
+}
+#[cfg(test)]
+mod provider_tests {
+    use serde_json::json;
+
+    #[test]
+    fn a_direct_provider_needs_the_browser_engine_and_an_exact_name() {
+        let home = tempfile::tempdir().unwrap();
+        let environment = crate::config::Environment::from([
+            (
+                "ORACLE_HOME_DIR".into(),
+                home.path().join(".oracle").to_string_lossy().into(),
+            ),
+            (
+                (if cfg!(windows) { "USERPROFILE" } else { "HOME" }).into(),
+                home.path().to_string_lossy().into(),
+            ),
+        ]);
+        for (input, message) in [
+            (
+                json!({"prompt":"PUBLIC","engine":"api","model":"gpt-6-astra","browserProvider":"gemini"}),
+                "API execution cannot honour requested browserProvider; use engine browser.",
+            ),
+            (
+                json!({"prompt":"PUBLIC","engine":"browser","model":"gpt-6-pro","browserProvider":"Gemini"}),
+                "Browser provider must be chatgpt, grok or gemini",
+            ),
+        ] {
+            let error = super::resolve(&input, &json!({}), &environment, home.path()).unwrap_err();
+            assert!(format!("{error:#}").contains(message), "{input}: {error:#}");
         }
     }
 }

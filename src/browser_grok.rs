@@ -12,7 +12,9 @@ pub(crate) const SEND: &str = include_str!("../browser-scripts/grok-send.js");
 pub(crate) const DOM: &str = include_str!("../browser-scripts/grok-dom.js");
 const RETIREMENT: &str = include_str!("../browser-scripts/grok-retirement.js");
 mod profile;
-pub(crate) use profile::{child_config, require_config, require_distinct, require_text_request};
+pub(crate) use profile::{
+    child_config_for, require_config, require_distinct, require_text_request,
+};
 
 pub(crate) struct Intent {
     pub(crate) dispatch_id: String,

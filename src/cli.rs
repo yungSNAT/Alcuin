@@ -503,7 +503,7 @@ async fn run_command(args: Vec<OsString>) -> Result<i32> {
         (
             "browser-provider",
             "--browser-provider <provider>",
-            "chatgpt, grok",
+            "chatgpt, grok, gemini",
         ),
         (
             "browser-attachments",

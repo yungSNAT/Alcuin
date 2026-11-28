@@ -27,10 +27,29 @@ const FIXED: &[&str] = &[
     "maxConcurrentTabs",
 ];
 
+#[cfg(test)]
 pub(crate) fn child_config(parent: &Value, environment: &Environment, cwd: &Path) -> Result<Value> {
+    child_config_for(
+        crate::browser_attempt::Provider::Grok,
+        parent,
+        environment,
+        cwd,
+    )
+}
+
+pub(crate) fn child_config_for(
+    provider: crate::browser_attempt::Provider,
+    parent: &Value,
+    environment: &Environment,
+    cwd: &Path,
+) -> Result<Value> {
+    ensure!(
+        provider != crate::browser_attempt::Provider::Chatgpt,
+        "An alternate browser provider is required"
+    );
     let profile = candidate(
         &cwd.join(crate::config::oracle_home(environment)?)
-            .join("grok-browser-profile"),
+            .join(format!("{}-browser-profile", provider.id())),
     )?;
     let mut config = json!({"manualLogin":true,"manualLoginProfileDir":profile,"cookieSync":false,
         "manualLoginCookieSync":false,"headless":false,"fallbackProvider":"none","keepBrowser":false,
@@ -215,6 +234,18 @@ mod tests {
         let original = parent.clone();
         let config = child_config(&parent, &env, root.path()).unwrap();
         assert_eq!(parent, original);
+        // ChatGPT is the original attempt, never an alternate child profile.
+        let refused = child_config_for(
+            crate::browser_attempt::Provider::Chatgpt,
+            &parent,
+            &env,
+            root.path(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "An alternate browser provider is required"
+        );
         assert_eq!(config["chromePath"], "PUBLIC Chrome");
         assert_eq!(config["keepBrowser"], false);
         for key in [

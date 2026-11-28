@@ -154,6 +154,7 @@ impl ChromeConnection {
         })?))
     }
 }
+use crate::browser_disposition::retirable_kind;
 fn require_session(
     store: &SessionStore,
     session: &str,
@@ -185,10 +186,7 @@ fn require_session(
             && creator["sessionId"] == session
             && record["nativeOwnerIdentity"] == json!(owner.controller_identity)
             && record["commit"]["sessionId"] == session
-            && matches!(
-                record["commit"]["kind"].as_str(),
-                Some("session" | "research-report" | "grok-session")
-            )
+            && retirable_kind(record["commit"]["kind"].as_str())
             && record["finalisedAt"]
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
@@ -934,6 +932,22 @@ mod tests {
         assert_eq!(ExitPending::of(&error).map(|found| found.0.len()), Some(2));
         assert!(format!("{error:#}").contains("PUBLIC inner"));
         assert!(ExitPending::of(&anyhow::anyhow!("PUBLIC refusal")).is_none());
+    }
+
+    /// A Gemini run owns its persistent profile like Grok's, so its finalised
+    /// commit must let the idle disposal close that browser.
+    #[test]
+    fn disposal_retires_every_finalised_session_commit_kind() {
+        for kind in [
+            "session",
+            "research-report",
+            "grok-session",
+            "gemini-session",
+        ] {
+            assert!(retirable_kind(Some(kind)), "{kind}");
+        }
+        assert!(!retirable_kind(Some("native")));
+        assert!(!retirable_kind(None));
     }
 }
 #[cfg(test)]

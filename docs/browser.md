@@ -73,6 +73,12 @@ Alcuin keeps its own ChatGPT sign-in in a profile at `~/.oracle/browser-profile`
 - `--browser-end-marker` asks ChatGPT to finish with a line unique to the run and saves an answer without it as `partial` ([Partial answers](sessions.md#partial-answers)). It needs one turn and a local browser.
 - `--browser-archive auto`, `always` or `never` archives the ChatGPT conversation once Alcuin has saved the answer. `auto` archives only successful single-turn runs outside a project.
 
+## Gemini
+
+The fallback fires only when the first ChatGPT dispatch is uncertain and its bounded read-only recovery has expired; a certainly-unsent failure takes the fresh-tab ChatGPT retry and never switches. With the fallback configured or passed, a prompt ChatGPT may already have received is sent once to the second provider. `--browser-fallback none` always turns the switch off.
+
+`--browser-fallback gemini` allows a single Gemini attempt after a qualifying ChatGPT failure and bounded read-only recovery. `--browser-provider gemini` opens Gemini directly. Both routes use a separate manual sign-in profile and require Temporary Chat, Gemini 4 Neon and High thinking. Gemini accepts a new text prompt only. Alcuin verifies all 3 settings and the complete draft before clicking Send, then saves the answer from the original tab.
+
 ## Grok
 
 `--browser-fallback grok` consults grok.com once, in its own sign-in profile, after ChatGPT fails and Alcuin's read-only recovery of the ChatGPT answer has run out. `--browser-provider grok` asks Grok directly without opening ChatGPT. Grok takes text prompts only: a run that uploads files never falls back to Grok, and `--browser-provider grok` refuses `--file`.

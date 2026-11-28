@@ -222,3 +222,176 @@ async fn restore_does_not_reopen_a_child_cancelled_after_lock_acquisition() {
     assert_eq!(store.stored_for_update(child_id).unwrap(), child);
     assert_eq!(store.model_runs(child_id).unwrap(), runs);
 }
+
+#[tokio::test]
+async fn gemini_recovery_acknowledgement_refuses_wrong_state_concurrent_change_and_reseal() {
+    let (_dead_root, dead_store, dead_manifest) =
+        recovery_store(crate::browser_runner::tests::dead_provider_attempt());
+    let dead_identity: ProcessIdentity = serde_json::from_value(
+        dead_store
+            .stored_for_update(dead_manifest["parentId"].as_str().unwrap())
+            .unwrap()["lifecycle"]["processIdentity"]
+            .clone(),
+    )
+    .unwrap();
+
+    let home = tempfile::tempdir().unwrap();
+    let cancel = CancellationToken::new();
+    let mut prepared = crate::browser_runner::alternate_support_tests::prepare_parent(
+        home.path(),
+        "PUBLIC Gemini recovery guard prompt",
+        json!({"browserProvider":"gemini"}),
+        &cancel,
+    )
+    .unwrap();
+    let link = prepared
+        .coordinator
+        .reserve_first_alternate(Provider::Gemini, &prepared.environment, &cancel)
+        .unwrap();
+    browser_runner::start_owner(&prepared.store, &link.child_id, &prepared.identity).unwrap();
+    let store = prepared.store;
+    let parent_id = prepared.parent_id;
+    let req = browser_runner::request(&store, &link.child_id).unwrap();
+    let claim_id = Uuid::new_v4().to_string();
+    let journal = crate::browser_disposition::TargetJournal::open(&store).unwrap();
+    let created = journal
+        .record_creation(
+            &crate::browser_disposition::TargetCreation::allocated("TARGET-GEMINI-REC"),
+            &json!({"host":"127.0.0.1","port":9222,"targetId":"TARGET-GEMINI-REC","claimId":claim_id}),
+            &prepared.identity,
+            Some(&link.child_id),
+            None,
+        )
+        .unwrap();
+    let mut record = journal.read(&created["allocationId"]).unwrap();
+    record["nativeOwnerIdentity"] = json!(dead_identity);
+    record["creator"]["controllerPid"] = json!(dead_identity.pid);
+    record["creator"]["controllerStartedAtMs"] = json!(dead_identity.started_at_ms);
+    let record_path = store.home().join("target-dispositions").join(format!(
+        "{}.json",
+        created["allocationId"].as_str().unwrap()
+    ));
+    crate::storage::atomic_json(&record_path, &record).unwrap();
+    let creator = record["creator"].clone();
+    let (dispatch, observed, mut runtime) =
+        crate::browser_runner::alternate_support_tests::gemini_evidence(
+            &req,
+            &dead_identity,
+            &claim_id,
+            "started",
+            "PUBLIC recovered Gemini answer",
+            true,
+        );
+    runtime["ownedRecoveryTarget"] = json!({
+        "targetId": "TARGET-GEMINI-REC",
+        "claimId": claim_id,
+        "creator": creator,
+    });
+    let dead_lifecycle = json!({
+        "processIdentity": dead_identity,
+        "workerPid": dead_identity.pid,
+        "workerProcessStartedAtMs": dead_identity.started_at_ms,
+    });
+    let mut updated_link = json!(link);
+    let mut parent_snap = store.stored_for_update(&parent_id).unwrap();
+    parent_snap["lifecycle"] = merge_object(&parent_snap["lifecycle"], &dead_lifecycle);
+    parent_snap["browser"]["runtime"] = merge_object(
+        &parent_snap["browser"]["runtime"],
+        &json!({
+            "controllerPid": dead_identity.pid,
+            "controllerProcessStartedAtMs": dead_identity.started_at_ms,
+        }),
+    );
+    updated_link["parentController"] = controller_identity(&parent_snap);
+    let req_path = store
+        .directory(&link.child_id)
+        .unwrap()
+        .join("browser-request.json");
+    let mut req_json: Value = serde_json::from_slice(&fs::read(&req_path).unwrap()).unwrap();
+    req_json["providerAttempt"] = updated_link.clone();
+    crate::storage::atomic_json(&req_path, &req_json).unwrap();
+    let new_req_hash =
+        request_hash(&browser_runner::request(&store, &link.child_id).unwrap()).unwrap();
+    let updated_parent = store
+        .update(&parent_id, |current| {
+            let mut consultation = current["browser"]["consultation"].clone();
+            consultation["active"] = updated_link.clone();
+            consultation["attempts"][0] = updated_link.clone();
+            consultation["ready"]["link"] = updated_link.clone();
+            consultation["ready"]["childRequestSha256"] = json!(new_req_hash);
+            Ok(Some(json!({
+                "lifecycle": parent_snap["lifecycle"],
+                "browser": merge_object(
+                    &current["browser"],
+                    &json!({
+                        "runtime": parent_snap["browser"]["runtime"],
+                        "consultation": consultation,
+                    }),
+                )
+            })))
+        })
+        .unwrap();
+    assert_eq!(
+        updated_parent["browser"]["consultation"]["active"],
+        updated_link
+    );
+    store
+        .update(&link.child_id, |current| {
+            let mut attempt_ready = current["browser"]["attemptReady"].clone();
+            attempt_ready["link"] = updated_link.clone();
+            attempt_ready["childRequestSha256"] = json!(new_req_hash);
+            Ok(Some(json!({
+                "lifecycle": merge_object(&current["lifecycle"], &dead_lifecycle),
+                "dispatch": dispatch,
+                "browser": merge_object(
+                    &current["browser"],
+                    &json!({
+                        "provider": "gemini",
+                        "attempt": updated_link,
+                        "attemptReady": attempt_ready,
+                        "runtime": runtime,
+                    }),
+                )
+            })))
+        })
+        .unwrap();
+
+    let guard = Guard::acquire(&store, &parent_id, &RunnerLimits::default(), &cancel)
+        .await
+        .unwrap();
+
+    let before = store.stored_for_update(&link.child_id).unwrap();
+    let mut stale = before.clone();
+    stale["updatedAt"] = json!("PUBLIC-stale-snapshot");
+    assert_eq!(
+        guard
+            .acknowledge_gemini(&stale, &observed)
+            .unwrap_err()
+            .to_string(),
+        "Gemini attempt changed during read-only recovery"
+    );
+    assert_eq!(
+        guard
+            .finish_acknowledgement(stale, "PUBLIC-commitment-changed")
+            .unwrap_err()
+            .to_string(),
+        "PUBLIC-commitment-changed"
+    );
+
+    let acked = guard.acknowledge_gemini(&before, &observed).unwrap();
+    assert_eq!(acked["dispatch"]["state"], "acknowledged");
+    assert_eq!(
+        guard
+            .acknowledge_gemini(&acked, &observed)
+            .unwrap_err()
+            .to_string(),
+        "Gemini recovery cannot replace an existing acknowledgement"
+    );
+    assert_eq!(
+        guard
+            .finish_acknowledgement(acked, "PUBLIC-commitment-changed")
+            .unwrap_err()
+            .to_string(),
+        "Recovery commitment was already sealed"
+    );
+}

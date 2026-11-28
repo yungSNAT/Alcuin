@@ -91,8 +91,8 @@ A bare argument is the prompt, as `-p` gives it.
 | `--browser-follow-up <prompt>` | Send another prompt in the same conversation after the answer; repeat for more |
 | `--browser-end-marker` | Ask for a line unique to the run and save an answer without it as `partial` |
 | `--browser-archive <mode>` | Archive the ChatGPT conversation once the answer is saved: `auto`, `always` or `never` |
-| `--browser-fallback <provider>` | `grok` consults grok.com once if ChatGPT fails; `none` does not |
-| `--browser-provider <provider>` | `chatgpt` (the default), or `grok` to ask Grok directly, text only |
+| `--browser-fallback <provider>` | `gemini` or `grok` allows one alternate browser attempt after a qualifying ChatGPT failure. `none` disables the switch |
+| `--browser-provider <provider>` | `chatgpt` is the default. `gemini` and `grok` open the selected provider directly for a new text prompt |
 | `--chatgpt-url <url>` | Open another ChatGPT address, such as a project's |
 | `--browser-tab <ref>` | Reuse an open ChatGPT tab: `current`, a target ID, a URL or part of its title |
 | `--browser-attach-running` | Use a browser already running with remote debugging (127.0.0.1:9222 unless `--remote-chrome` says otherwise) |

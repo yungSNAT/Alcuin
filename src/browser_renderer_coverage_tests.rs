@@ -589,3 +589,43 @@ async fn verify_pair_accepts_slider_evidence_and_rejects_unknown_basis() {
         assert_eq!(owner.state(), DispatchState::NotStarted);
     }
 }
+
+#[tokio::test]
+async fn gemini_acknowledgement_requires_started_gemini_reservation_and_live_ownership() {
+    let cancel = CancellationToken::new();
+    let receipt = json!({"id": "00000000-0000-4000-8000-000000000007"});
+    for (provider, state) in [
+        (RendererProvider::Gemini, DispatchState::NotStarted),
+        (RendererProvider::Chatgpt, DispatchState::Started),
+    ] {
+        let mut owner = scripted(provider, state, |_, _| None).await;
+        let error = owner
+            .acknowledge_gemini(receipt.clone(), SHORT, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Gemini receipt requires its original started reservation"
+        );
+        assert_eq!(owner.state(), state);
+    }
+
+    let mut owner = scripted(
+        RendererProvider::Gemini,
+        DispatchState::Started,
+        |kind, arg| {
+            (kind == Kind::Other && arg["action"] == "acknowledge")
+                .then(|| Reply::value(json!(false)))
+        },
+    )
+    .await;
+    let error = owner
+        .acknowledge_gemini(receipt, SHORT, &cancel)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Gemini's original Temporary Chat no longer owns this dispatch"
+    );
+    assert_eq!(owner.state(), DispatchState::Started);
+}

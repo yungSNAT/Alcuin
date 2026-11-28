@@ -95,3 +95,137 @@ fn grok_commit_propagates_the_missing_saved_request_error() {
     let error = journal.session_commit(&json!({}), &session).unwrap_err();
     assert_eq!(format!("{error:#}"), format!("{request_error:#}"));
 }
+
+#[test]
+fn gemini_commit_and_verification_refuse_missing_request_and_tampered_evidence() {
+    let home = tempfile::tempdir().unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let prepared = crate::browser_runner::alternate_support_tests::prepare_parent(
+        home.path(),
+        "PUBLIC Gemini disposition source",
+        json!({"browserProvider":"gemini","writeOutputPath":null}),
+        &cancel,
+    )
+    .unwrap();
+    let journal = TargetJournal::open(&prepared.store).unwrap();
+    let missing_id = Uuid::new_v4().to_string();
+    let missing = json!({
+        "id": missing_id,
+        "browser": {
+            "runtime": {
+                "provider": "gemini",
+                "acceptedObservation": { "text": "PUBLIC-temp-answer" }
+            }
+        }
+    });
+    let req_err = crate::browser_runner::request(&journal.store, &missing_id).unwrap_err();
+    assert_eq!(
+        format!(
+            "{:#}",
+            journal.session_commit(&json!({}), &missing).unwrap_err()
+        ),
+        format!("{req_err:#}")
+    );
+
+    let id = prepared.parent_id.as_str();
+    let req = crate::browser_runner::request(&journal.store, id).unwrap();
+    let identity = prepared.identity;
+    let claim_id = Uuid::new_v4().to_string();
+    let creator = journal
+        .record_creation(
+            &TargetCreation::allocated("TARGET-GEMINI"),
+            &json!({"host":"127.0.0.1","port":9222,"targetId":"TARGET-GEMINI","claimId":claim_id}),
+            &identity,
+            Some(id),
+            None,
+        )
+        .unwrap();
+    let answer = "PUBLIC complete Gemini disposition answer";
+    let (dispatch, _observed, mut runtime) =
+        crate::browser_runner::alternate_support_tests::gemini_evidence(
+            &req,
+            &identity,
+            &claim_id,
+            "completed",
+            answer,
+            true,
+        );
+    let capture = crate::artifacts::capture(
+        &journal.store,
+        id,
+        "captured-gemini.md",
+        answer.as_bytes(),
+        &cancel,
+    )
+    .unwrap();
+    runtime["capturedAnswer"] = json!(capture);
+    runtime["ownedRecoveryTarget"] = json!({
+        "targetId": "TARGET-GEMINI",
+        "claimId": claim_id,
+        "creator": creator,
+    });
+    journal
+        .store
+        .update(id, |_| {
+            Ok(Some(json!({
+                "status": "completed",
+                "completedAt": "PUBLIC completion",
+                "dispatch": dispatch,
+                "capturedAnswer": capture,
+                "browser": {
+                    "provider": "gemini",
+                    "capturedAnswer": capture,
+                    "runtime": runtime,
+                }
+            })))
+        })
+        .unwrap();
+    let saved = journal.store.require(id).unwrap();
+
+    let mut bad_obs = saved.clone();
+    bad_obs["browser"]["runtime"]["acceptedObservation"]["temporaryChat"] = json!(false);
+    assert!(
+        journal
+            .session_commit(&creator, &bad_obs)
+            .unwrap_err()
+            .to_string()
+            .contains("Gemini answer lacks evidence")
+    );
+
+    let commit = journal.session_commit(&creator, &saved).unwrap();
+    assert_eq!(commit["kind"], "gemini-session");
+    assert!(commit.get("conversationId").is_none());
+    journal.commit(&creator, &commit).unwrap();
+    journal.finalise(&commit).unwrap();
+    let record = journal.read(&creator["allocationId"]).unwrap();
+    journal.verify_proposed(&record, &saved).unwrap();
+
+    assert!(
+        journal
+            .verify_proposed(&record, &bad_obs)
+            .unwrap_err()
+            .to_string()
+            .contains("Gemini answer lacks evidence")
+    );
+
+    let mut bad_hash = record.clone();
+    bad_hash["commit"]["assistantContent"]["sha256"] = json!("0".repeat(64));
+    assert_eq!(
+        journal
+            .verify_proposed(&bad_hash, &saved)
+            .unwrap_err()
+            .to_string(),
+        "Gemini commitment or captured text changed"
+    );
+
+    let mut wrong_kind = record;
+    wrong_kind["commit"]["kind"] = json!("session");
+    wrong_kind["commit"]["conversationId"] = json!("PUBLIC-fake");
+    assert_eq!(
+        journal
+            .verify_proposed(&wrong_kind, &saved)
+            .unwrap_err()
+            .to_string(),
+        "Gemini evidence cannot use another provider commitment kind"
+    );
+}

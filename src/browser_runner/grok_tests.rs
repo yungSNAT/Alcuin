@@ -1,5 +1,10 @@
 use super::*;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use crate::browser_runner::alternate_support_tests::{
+    close_fixture_target, crash_with_manifest, enable_fetch_all, fulfill_html, open_fixture_target,
+    prepare_parent, run_recovery_with_release, runner_limits, spawn_crashed_worker,
+    spawn_static_html_interceptor, target_id_set, wait_for_crash_point, wait_for_targets_baseline,
+    worker_endpoint, worker_limits, worker_manifest,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const PROMPT: &str = "PUBLIC Grok owned runner request";
@@ -79,18 +84,9 @@ query.querySelector('button[aria-label="Send message"]').onclick=()=>new WebSock
 }
 
 pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -> Result<()> {
-    let limits = RunnerLimits {
-        command: Duration::from_secs(5),
-        admission: Duration::from_secs(5),
-        commit: Duration::from_secs(3),
-        answer: Duration::from_secs(3),
-        poll: Duration::from_millis(20),
-        ..RunnerLimits::default()
-    };
+    let limits = runner_limits(3);
     let cancel = CancellationToken::new();
-    let baseline = browser
-        .call("Target.getTargets", json!({}), limits.command, &cancel)
-        .await?;
+    let baseline = target_id_set(browser, limits.command, &cancel).await?;
     for (auto, private_loss, stagger, markdown) in [
         (true, "", false, ""),
         (false, "", false, ""),
@@ -106,54 +102,23 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
         let (prompt, user_html) = markdown_turn(markdown);
         let refused = matches!(markdown, "differs" | "unlisted" | "inline");
         let home = tempfile::tempdir()?;
-        let store = SessionStore::new(home.path().join(".oracle"));
-        let output = home.path().join("PUBLIC-answer.md");
-        let environment = crate::config::Environment::from([
-            (
-                "ORACLE_HOME_DIR".into(),
-                store.home().to_string_lossy().into(),
-            ),
-            (
-                (if cfg!(windows) { "USERPROFILE" } else { "HOME" }).into(),
-                home.path().to_string_lossy().into(),
-            ),
-        ]);
-        let resolved = crate::execution::resolve(
-            &json!({"prompt":prompt,"engine":"browser","model":"gpt-6-pro","writeOutputPath":output,"browserProvider":"grok"}),
-            &json!({"browser":{"manualLogin":true,"cookieSync":false}}),
-            &environment,
+        let mut prepared = prepare_parent(
             home.path(),
+            prompt,
+            json!({"browserProvider":"grok"}),
+            &cancel,
         )?;
-        let parent = prepare(&store, &resolved, home.path())?;
-        let parent_id = parent["id"].as_str().context("No public fixture parent")?;
-        let original_options = parent["options"].clone();
-        let identity = ProcessIdentity::current()?;
-        start_owner(&store, parent_id, &identity)?;
-        let mut coordinator =
-            crate::browser_attempt::Parent::begin(&store, parent_id, &identity, &cancel)?;
-        let link = coordinator.reserve_first_grok(&environment, &cancel)?;
-        start_owner(&store, &link.child_id, &identity)?;
-        let child = store.require(&link.child_id)?;
-        let profile = ProfileRegistry::open(Path::new(
-            child["browser"]["config"]["manualLoginProfileDir"]
-                .as_str()
-                .unwrap(),
-        ))?;
-        let lease = Arc::new(
-            profile
-                .acquire_with_limit(&link.child_id, 1, limits.admission, &cancel)
-                .await?,
-        );
-        let heartbeat = lease.heartbeat();
-        let mut target = TargetAcquisition::default()
-            .acquire(browser.clone(), lease, &cancel, limits.command)
-            .await?;
-        let target_id = target.id().to_owned();
-        let page = target.page().clone();
-        let session = page
-            .session_id()
-            .context("No owned fixture session")?
-            .to_owned();
+        let original_options = prepared.parent["options"].clone();
+        let link = prepared
+            .coordinator
+            .reserve_first_grok(&prepared.environment, &cancel)?;
+        start_owner(&prepared.store, &link.child_id, &prepared.identity)?;
+        let child = prepared.store.require(&link.child_id)?;
+        let mut fixture =
+            open_fixture_target(browser, None, &child, &link.child_id, &limits, &cancel).await?;
+        let target_id = fixture.target_id.clone();
+        let page = fixture.page.clone();
+        let session = fixture.session.clone();
         let sends = Arc::new(AtomicUsize::new(0));
         let sent = sends.clone();
         let acks = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -172,13 +137,7 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
             )
             .await?;
         }
-        page.call(
-            "Fetch.enable",
-            json!({"patterns":[{"urlPattern":"*"}]}),
-            limits.command,
-            &cancel,
-        )
-        .await?;
+        enable_fetch_all(&page, limits.command, &cancel).await?;
         let intercepted = page.clone();
         let html = document(auto, private_loss, stagger, user_html);
         let interceptor = tokio::spawn(async move {
@@ -207,16 +166,17 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                     "Unexpected fixture network request"
                 );
                 seen.fetch_add(1, Ordering::SeqCst);
-                intercepted.call("Fetch.fulfillRequest",json!({"requestId":event["params"]["requestId"],"responseCode":200,
-                    "responseHeaders":[{"name":"Content-Type","value":"text/html"}],"body":STANDARD.encode(&html)}),Duration::from_secs(5),&CancellationToken::new()).await?;
+                fulfill_html(&intercepted, &event["params"]["requestId"], &html).await?;
             }
             Ok::<_, anyhow::Error>(())
         });
+        let store = &prepared.store;
+        let parent_id = prepared.parent_id.as_str();
         let checked=async {
-            let bringup=DirectoryLock::acquire_async(&profile.path().join("oracle-browser-bringup.lock"),limits.command,&cancel).await?;
-            let witness=ExecutionWitness::capture(&store,&link.child_id,&identity)?;
-            let committed=request(&store,&link.child_id)?;
-            let delivered=run_owned(&store,&link.child_id,&witness,&committed,&mut target,endpoint,bringup,&limits,&cancel,&CaptureBoundary::ParentAttempt,None,None).await;
+            let bringup=DirectoryLock::acquire_async(&fixture.profile.path().join("oracle-browser-bringup.lock"),limits.command,&cancel).await?;
+            let witness=ExecutionWitness::capture(store,&link.child_id,&prepared.identity)?;
+            let committed=request(store,&link.child_id)?;
+            let delivered=run_owned(store,&link.child_id,&witness,&committed,&mut fixture.target,endpoint,bringup,&limits,&cancel,&CaptureBoundary::ParentAttempt,None,None).await;
             if delivered.is_err() {
                 let reason=page.evaluate("window.__oracleGrokWitness?.read()?.reason??'no installed witness'",limits.command,&cancel).await;
                 let fixture_error=page.evaluate("window.PUBLIC_fixtureError??null",limits.command,&cancel).await;
@@ -268,16 +228,16 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
                 && child_capture["browser"]["runtime"].get("conversationId").is_none(),"Provider invented GPT identity");
             anyhow::ensure!(browser.call("Target.getTargetInfo",json!({"targetId":target_id}),limits.command,&cancel).await?["targetInfo"]["targetId"]==target_id,
                 "Provider target closed before adoption");
-            coordinator.adopt(&link.child_id,&cancel)?;
-            coordinator.complete(&cancel)?;
-            crate::browser_attempt::settle_selected_saved(&store,parent_id,&cancel).await?;
+            prepared.coordinator.adopt(&link.child_id,&cancel)?;
+            prepared.coordinator.complete(&cancel)?;
+            crate::browser_attempt::settle_selected_saved(store,parent_id,&cancel).await?;
             let parent=store.require(parent_id)?;
             anyhow::ensure!(parent["status"]=="completed" && parent["recoveryRequired"]==false && parent["options"]==original_options,
                 "Public parent completion or original options changed");
-            anyhow::ensure!(String::from_utf8(captured(&store,parent_id)?)?==ANSWER && fs::read_to_string(&output)?.contains(ANSWER),
+            anyhow::ensure!(String::from_utf8(captured(store,parent_id)?)?==ANSWER && fs::read_to_string(&prepared.output)?.contains(ANSWER),
                 "Public capture/output lost original provider answer");
             anyhow::ensure!(sends.load(Ordering::SeqCst)==1 && documents.load(Ordering::SeqCst)==1,"Owned provider repeated navigation or Send");
-            anyhow::ensure!(target_ids(&browser.call("Target.getTargets",json!({}),limits.command,&cancel).await?)==target_ids(&baseline),
+            anyhow::ensure!(target_id_set(browser,limits.command,&cancel).await?==baseline,
                 "Selected Grok cleanup retained its target or closed another fixture target");
             eprintln!("PUBLIC native Grok runner {selected}{}{}: one Send, parent output durable, exact target absent",
                 if stagger {" staggered"} else {""}, if markdown.is_empty() {String::new()} else {format!(" {markdown}")});
@@ -285,7 +245,7 @@ pub(crate) async fn native_cases(browser: &Cdp, endpoint: &AttachmentEndpoint) -
         }.await;
         interceptor.abort();
         let _ = interceptor.await;
-        drop(heartbeat);
+        drop(fixture.heartbeat);
         // This fixture allocated the target. Its error teardown never runs in production.
         let closed = if !private_loss.is_empty() || refused || checked.is_err() {
             close_fixture_target(browser, &target_id, limits.command).await
@@ -344,46 +304,6 @@ query.querySelector('button[aria-label="Send message"]').onclick=()=>new WebSock
         .replace("__CONFIG__", &json!({"hold":hold,"answer":ANSWER}).to_string())
 }
 
-// Pages only: Chrome starts and stops its own service workers and UI targets meanwhile.
-fn target_ids(rows: &Value) -> std::collections::BTreeSet<String> {
-    rows["targetInfos"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|row| row["type"] == "page")
-        .filter_map(|row| row["targetId"].as_str().map(str::to_owned))
-        .collect()
-}
-
-/// Closes a fixture-allocated target and waits until Chromium stops listing it, so the next
-/// case's baseline cannot include a target that is still closing. Fails when absence stays
-/// unconfirmed, naming the last close or listing error.
-async fn close_fixture_target(browser: &Cdp, target_id: &str, command: Duration) -> Result<()> {
-    let cancel = CancellationToken::new();
-    // A refused close is not final: the case under test may already have closed the target.
-    let mut last = browser
-        .close_owned_target(target_id, command, &cancel)
-        .await
-        .err();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        match browser
-            .call("Target.getTargets", json!({}), command, &cancel)
-            .await
-        {
-            Ok(rows) if !target_ids(&rows).contains(target_id) => return Ok(()),
-            Ok(_) => {}
-            Err(error) => last = Some(error),
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let unconfirmed = "Fixture target absence was not confirmed within 5 s of closing";
-    Err(match last {
-        Some(error) => error.context(unconfirmed),
-        None => anyhow::anyhow!(unconfirmed),
-    })
-}
-
 /// A genuine worker crash after the single Send, then public parent recovery from this
 /// process against the same live Chrome target, renderer claim and witness.
 async fn recovery_case(
@@ -392,84 +312,26 @@ async fn recovery_case(
     hold: &str,
     damage: &str,
 ) -> Result<()> {
-    let limits = RunnerLimits {
-        command: Duration::from_secs(5),
-        admission: Duration::from_secs(5),
-        commit: Duration::from_secs(3),
-        answer: Duration::from_secs(10),
-        poll: Duration::from_millis(20),
-        ..RunnerLimits::default()
-    };
+    let limits = runner_limits(10);
     let cancel = CancellationToken::new();
-    let baseline = target_ids(
-        &browser
-            .call("Target.getTargets", json!({}), limits.command, &cancel)
-            .await?,
-    );
-    let root = tempfile::tempdir()?;
-    // Windows resolves the worker's startup lock folder from its synthetic USERPROFILE.
-    fs::create_dir_all(root.path().join("AppData").join("Local"))?;
-    let mut command = std::process::Command::new(std::env::current_exe()?);
-    command
-        .args([
-            "--ignored",
-            "--exact",
-            "browser_runner::grok::tests::grok_recovery_worker_helper",
-            "--nocapture",
-        ])
-        .env_clear()
-        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|value| ("LLVM_PROFILE_FILE", value)))
-        .env("ORACLE_DISABLE_NOTIFICATIONS", "1")
-        .env("HOME", root.path())
-        .env("USERPROFILE", root.path())
-        .env("ALCUIN_GROK_RECOVERY", root.path())
-        .env("ALCUIN_GROK_RECOVERY_HOLD", hold)
-        .env("ALCUIN_GROK_RECOVERY_HOST", &endpoint.host)
-        .env("ALCUIN_GROK_RECOVERY_PORT", endpoint.port.to_string())
-        .env("ALCUIN_GROK_RECOVERY_WS", &endpoint.browser_ws_endpoint);
-    for key in ["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP"] {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    let output = tokio::time::timeout(
-        Duration::from_secs(60),
-        tokio::task::spawn_blocking(move || command.output()),
+    let baseline = target_id_set(browser, limits.command, &cancel).await?;
+    let worker = spawn_crashed_worker(
+        browser,
+        endpoint,
+        "browser_runner::grok::tests::grok_recovery_worker_helper",
+        "ALCUIN_GROK_RECOVERY",
+        "HOLD",
+        hold,
+        "Grok",
+        limits.command,
+        &cancel,
     )
-    .await
-    .context("PUBLIC Grok worker did not crash before its deadline")???;
-    anyhow::ensure!(
-        output.status.success(),
-        "PUBLIC Grok worker failed: {} {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let manifest: Value = serde_json::from_slice(&fs::read(root.path().join("ready.json"))?)?;
-    let identity: ProcessIdentity = serde_json::from_value(manifest["identity"].clone())?;
-    anyhow::ensure!(
-        identity.liveness() == crate::process::Liveness::Dead,
-        "PUBLIC Grok worker is not positively dead"
-    );
-    let store = SessionStore::new(
-        Path::new(manifest["home"].as_str().context("No worker home")?).join(".oracle"),
-    );
-    let parent_id = manifest["parentId"].as_str().context("No parent")?;
-    let child_id = manifest["childId"].as_str().context("No child")?;
-    let target_id = manifest["targetId"].as_str().context("No target")?;
-    let attached = browser
-        .call(
-            "Target.attachToTarget",
-            json!({"targetId":target_id,"flatten":true}),
-            limits.command,
-            &cancel,
-        )
-        .await?;
-    let page = browser.with_session(
-        attached["sessionId"]
-            .as_str()
-            .context("No recovery observer session")?
-            .into(),
-    );
+    .await?;
+    let store = &worker.store;
+    let parent_id = worker.parent_id.as_str();
+    let child_id = worker.child_id.as_str();
+    let target_id = worker.target_id.as_str();
+    let page = &worker.page;
     let checked = async {
         anyhow::ensure!(
             page.evaluate("PUBLIC_sendCount", limits.command, &cancel)
@@ -552,42 +414,26 @@ async fn recovery_case(
                 "PUBLIC answer was not released before recovery"
             );
         }
-        let releaser = page.clone();
-        let release = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            releaser
-                .evaluate(
-                    "window.PUBLIC_release?.()??false",
-                    Duration::from_secs(5),
-                    &CancellationToken::new(),
-                )
-                .await
-        });
-        let profile = ProfileRegistry::open_existing(Path::new(
-            manifest["profileDir"].as_str().context("No profile")?,
-        ))?;
-        let recovered = recover_attached(
-            &store,
+        let (recovered, released) = run_recovery_with_release(
+            store,
             parent_id,
-            profile,
-            browser.clone(),
-            endpoint.clone(),
+            &worker.manifest,
+            page,
+            browser,
+            endpoint,
             &limits,
             &cancel,
+            false,
         )
-        .await;
-        let released = release.await?;
+        .await?;
+        let released = released?;
         // Bindings arrive asynchronously; retirement has finished by now.
         tokio::time::sleep(Duration::from_millis(200)).await;
         collector.abort();
         let writes = writes.lock().unwrap().clone();
         let parent = store.require(parent_id)?;
         let child = store.require(child_id)?;
-        let targets = target_ids(
-            &browser
-                .call("Target.getTargets", json!({}), limits.command, &cancel)
-                .await?,
-        );
+        let targets = target_id_set(browser, limits.command, &cancel).await?;
         if !damage.is_empty() {
             let after = store.stored_for_update(child_id)?;
             // The Private guard's throw reaches Rust as a failed browser expression.
@@ -631,22 +477,13 @@ async fn recovery_case(
             "Recovered Grok attempt is incomplete"
         );
         anyhow::ensure!(
-            String::from_utf8(captured(&store, parent_id)?)? == ANSWER
-                && fs::read_to_string(manifest["output"].as_str().context("No output")?)?
+            String::from_utf8(captured(store, parent_id)?)? == ANSWER
+                && fs::read_to_string(worker.manifest["output"].as_str().context("No output")?)?
                     .contains(ANSWER),
             "Recovered capture or output lost the original Grok answer"
         );
-        // Chromium can list a closed target briefly after its retirement is recorded.
-        let mut targets = targets;
-        let settle = Instant::now() + Duration::from_secs(5);
-        while targets != baseline && Instant::now() < settle {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            targets = target_ids(
-                &browser
-                    .call("Target.getTargets", json!({}), limits.command, &cancel)
-                    .await?,
-            );
-        }
+        let targets =
+            wait_for_targets_baseline(browser, &baseline, targets, limits.command, &cancel).await?;
         anyhow::ensure!(
             child["browser"]["runtime"]["targetRetiredAt"].is_string() && targets == baseline,
             "Recovered Grok target was retained or another target changed"
@@ -693,51 +530,17 @@ async fn grok_recovery_worker_helper() {
 
 async fn recovery_worker(root: &Path) -> Result<()> {
     let hold = std::env::var("ALCUIN_GROK_RECOVERY_HOLD")?;
-    let endpoint = AttachmentEndpoint {
-        host: std::env::var("ALCUIN_GROK_RECOVERY_HOST")?,
-        port: std::env::var("ALCUIN_GROK_RECOVERY_PORT")?.parse()?,
-        browser_ws_endpoint: std::env::var("ALCUIN_GROK_RECOVERY_WS")?,
-    };
+    let endpoint = worker_endpoint("ALCUIN_GROK_RECOVERY")?;
     // The answer deadline outlives the crash point; the witness lifetime covers recovery.
-    let limits = RunnerLimits {
-        command: Duration::from_secs(5),
-        admission: Duration::from_secs(5),
-        commit: Duration::from_secs(30),
-        answer: Duration::from_secs(30),
-        poll: Duration::from_millis(20),
-        ..RunnerLimits::default()
-    };
+    let limits = worker_limits();
     let cancel = CancellationToken::new();
     let browser = endpoint.connect(limits.command, &cancel).await?;
     let home = root.join("home");
     fs::create_dir_all(&home)?;
-    let store = SessionStore::new(home.join(".oracle"));
-    let output = home.join("PUBLIC-answer.md");
-    let environment = crate::config::Environment::from([
-        (
-            "ORACLE_HOME_DIR".into(),
-            store.home().to_string_lossy().into(),
-        ),
-        (
-            (if cfg!(windows) { "USERPROFILE" } else { "HOME" }).into(),
-            home.to_string_lossy().into(),
-        ),
-    ]);
-    let resolved = crate::execution::resolve(
-        &json!({"prompt":PROMPT,"engine":"browser","model":"gpt-6-pro","writeOutputPath":output,"browserFallback":"grok"}),
-        &json!({"browser":{"manualLogin":true,"cookieSync":false}}),
-        &environment,
-        &home,
-    )?;
-    let parent = prepare(&store, &resolved, &home)?;
-    let parent_id = parent["id"].as_str().context("No public fixture parent")?;
-    let identity = ProcessIdentity::current()?;
-    start_owner(&store, parent_id, &identity)?;
-    let mut coordinator =
-        crate::browser_attempt::Parent::begin(&store, parent_id, &identity, &cancel)?;
-    let first = coordinator.reserve_first(&cancel)?;
+    let mut prepared = prepare_parent(&home, PROMPT, json!({"browserFallback":"grok"}), &cancel)?;
+    let first = prepared.coordinator.reserve_first(&cancel)?;
     // The ChatGPT attempt is inert evidence whose bounded recovery expired, as in a real switch.
-    store.update(&first.child_id, |meta| {
+    prepared.store.update(&first.child_id, |meta| {
         let mut runtime = meta["browser"]["runtime"].clone();
         if !runtime.is_object() {
             runtime = json!({});
@@ -751,94 +554,54 @@ async fn recovery_worker(root: &Path) -> Result<()> {
     })?;
     let failure = anyhow::Error::new(crate::browser_provider::Failure::AnswerDeadline)
         .context("Bounded original-target observation expired");
-    let link = coordinator
-        .switch_to_grok(&first, &failure, &environment, &cancel)?
+    let link = prepared
+        .coordinator
+        .switch_to_grok(&first, &failure, &prepared.environment, &cancel)?
         .context("PUBLIC provider switch did not start")?;
-    start_owner(&store, &link.child_id, &identity)?;
-    let child = store.require(&link.child_id)?;
-    let profile = ProfileRegistry::open(Path::new(
-        child["browser"]["config"]["manualLoginProfileDir"]
-            .as_str()
-            .context("No Grok profile")?,
-    ))?;
-    let lease = Arc::new(
-        profile
-            .acquire_with_limit(&link.child_id, 1, limits.admission, &cancel)
-            .await?,
+    start_owner(&prepared.store, &link.child_id, &prepared.identity)?;
+    let child = prepared.store.require(&link.child_id)?;
+    let mut fixture = open_fixture_target(
+        &browser,
+        Some(&endpoint),
+        &child,
+        &link.child_id,
+        &limits,
+        &cancel,
+    )
+    .await?;
+    enable_fetch_all(&fixture.page, limits.command, &cancel).await?;
+    let _interceptor = spawn_static_html_interceptor(
+        &browser,
+        fixture.session.clone(),
+        fixture.page.clone(),
+        "https://grok.com/",
+        recovery_document(&hold),
     );
-    let _heartbeat = lease.heartbeat();
-    let mut target = TargetAcquisition::default()
-        .acquire(browser.clone(), lease.clone(), &cancel, limits.command)
-        .await?;
-    // Production admission records the endpoint that recovery later requires.
-    lease.update(&json!({"chromeHost":endpoint.host,"chromePort":endpoint.port}))?;
-    let target_id = target.id().to_owned();
-    let page = target.page().clone();
-    let session = page
-        .session_id()
-        .context("No owned fixture session")?
-        .to_owned();
-    let mut events = browser.events();
-    page.call(
-        "Fetch.enable",
-        json!({"patterns":[{"urlPattern":"*"}]}),
-        limits.command,
-        &cancel,
-    )
-    .await?;
-    let intercepted = page.clone();
-    let html = recovery_document(&hold);
-    let _interceptor = tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
-            if event["sessionId"] != session || event["method"] != "Fetch.requestPaused" {
-                continue;
-            }
-            anyhow::ensure!(
-                event["params"]["request"]["url"] == "https://grok.com/",
-                "Unexpected fixture network request"
-            );
-            intercepted.call("Fetch.fulfillRequest",json!({"requestId":event["params"]["requestId"],"responseCode":200,
-                "responseHeaders":[{"name":"Content-Type","value":"text/html"}],"body":STANDARD.encode(&html)}),Duration::from_secs(5),&CancellationToken::new()).await?;
-        }
-        Ok::<_, anyhow::Error>(())
-    });
     let bringup = DirectoryLock::acquire_async(
-        &profile.path().join("oracle-browser-bringup.lock"),
+        &fixture.profile.path().join("oracle-browser-bringup.lock"),
         limits.command,
         &cancel,
     )
     .await?;
-    let witness = ExecutionWitness::capture(&store, &link.child_id, &identity)?;
-    let committed = request(&store, &link.child_id)?;
+    let witness = ExecutionWitness::capture(&prepared.store, &link.child_id, &prepared.identity)?;
+    let committed = request(&prepared.store, &link.child_id)?;
     let crash_state = if hold == "user" {
         "started"
     } else {
         "acknowledged"
     };
-    let crash_point = async {
-        loop {
-            let state = store.stored_for_update(&link.child_id)?["dispatch"]["state"].clone();
-            let sent = page
-                .evaluate("window.PUBLIC_sendCount??0", limits.command, &cancel)
-                .await?
-                == 1;
-            if sent && state == crash_state {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    };
-    let manifest = json!({"parentId":parent_id,"childId":link.child_id,"targetId":target_id,
-        "profileDir":profile.path(),"home":home,"output":output,"identity":identity});
+    let crash_point = wait_for_crash_point(
+        &prepared.store,
+        &link.child_id,
+        &fixture.page,
+        crash_state,
+        limits.command,
+        &cancel,
+    );
+    let manifest = worker_manifest(&prepared, &link.child_id, &fixture, &home);
     // A genuine crash: no destructor, witness stop, quarantine or cleanup runs.
     let ready = root.join("ready.json");
-    let crash = move || -> ! {
-        if let Err(error) = crate::storage::atomic_json(&ready, &manifest) {
-            eprintln!("PUBLIC Grok recovery manifest failed: {error:#}");
-            std::process::exit(3);
-        }
-        std::process::exit(0)
-    };
+    let crash = move || -> ! { crash_with_manifest(&ready, &manifest, "Grok") };
     match hold.as_str() {
         // Exits after the child capture, before the worker's own clean release.
         "captured" => {
@@ -854,7 +617,7 @@ async fn recovery_worker(root: &Path) -> Result<()> {
         "delivered" => {}
         _ => {
             tokio::select! {
-                delivered = run_owned(&store,&link.child_id,&witness,&committed,&mut target,&endpoint,bringup,&limits,&cancel,&CaptureBoundary::ParentAttempt,None,None) => {
+                delivered = run_owned(&prepared.store,&link.child_id,&witness,&committed,&mut fixture.target,&endpoint,bringup,&limits,&cancel,&CaptureBoundary::ParentAttempt,None,None) => {
                     anyhow::bail!("PUBLIC worker finished before its crash point: {:?}", delivered.err());
                 }
                 ready = crash_point => ready?,
@@ -863,11 +626,11 @@ async fn recovery_worker(root: &Path) -> Result<()> {
         }
     }
     let delivered = run_owned(
-        &store,
+        &prepared.store,
         &link.child_id,
         &witness,
         &committed,
-        &mut target,
+        &mut fixture.target,
         &endpoint,
         bringup,
         &limits,

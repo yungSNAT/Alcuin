@@ -1335,6 +1335,19 @@ async fn observe(
     deadline: Instant,
 ) -> Result<Value> {
     let commit = &record["commit"];
+    if commit["kind"] == "gemini-session" {
+        marker.context("Gemini retirement needs its exact completed marker")?;
+        let id = commit["sessionId"]
+            .as_str()
+            .context("Gemini session ID missing")?;
+        let session = store.require(id)?;
+        let request = crate::browser_runner::request(store, id)?;
+        let observed = page.evaluate_with_arguments(crate::browser_gemini::DOM, &json!([{
+            "action":"observe","id":commit["geminiCommitReceipt"]["id"],"prompt":request.prompt.replace("\r\n", "\n")
+        }]), remaining(deadline)?, &CancellationToken::new()).await?;
+        crate::browser_gemini::accept_saved_answer(&request, &session, &observed)?;
+        return Ok(observed);
+    }
     if commit["kind"] == "grok-session" {
         let session = store.require(
             commit["sessionId"]
@@ -1506,6 +1519,7 @@ async fn authorise(
         .context("Committed assistant text is unavailable")?;
     let content = if commit["kind"] == "research-report"
         || commit["kind"] == "grok-session"
+        || commit["kind"] == "gemini-session"
         || commit["kind"] == "session" && commit["assistantContent"]["representation"] == "text"
     {
         text.to_owned()
@@ -1711,10 +1725,7 @@ async fn retire(
     let resumed = pending_marker(&page, &owner, &marker, operation_deadline).await?;
     let initialise_completed = resumed.is_none()
         && record.get("nativeOwnerIdentity").is_some()
-        && matches!(
-            record["commit"]["kind"].as_str(),
-            Some("session" | "research-report" | "grok-session")
-        );
+        && crate::browser_disposition::retirable_kind(record["commit"]["kind"].as_str());
     let resumed = if initialise_completed {
         // Persisted journal attempt and completed dispatch are verified before
         // changing the renderer. Full source/content verification follows marking.
@@ -1871,6 +1882,12 @@ fn retirement_marker(
     marker: &str,
     completed: bool,
 ) -> Result<(String, Value)> {
+    if record["commit"]["kind"] == "gemini-session" {
+        return Ok((
+            crate::browser_gemini::DOM.to_owned(),
+            json!({"action":"retire","id":record["commit"]["geminiCommitReceipt"]["id"],"owner":owner,"retirementId":marker}),
+        ));
+    }
     if record["commit"]["kind"] == "grok-session" {
         let session = store.require(
             record["commit"]["sessionId"]

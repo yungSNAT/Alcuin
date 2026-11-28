@@ -31,6 +31,25 @@ pub(crate) use recovery::{
 pub(crate) enum Provider {
     Chatgpt,
     Grok,
+    Gemini,
+}
+
+impl Provider {
+    pub(crate) fn alternate(value: &Value) -> Option<Self> {
+        match value.as_str()? {
+            "grok" => Some(Self::Grok),
+            "gemini" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Chatgpt => "chatgpt",
+            Self::Grok => "grok",
+            Self::Gemini => "gemini",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -437,8 +456,18 @@ impl Parent {
     /// Grok-direct (`--browser-provider grok`): the first and only attempt is Grok, so no
     /// prompt reaches ChatGPT. It has no retry or provider switch: both require a ChatGPT
     /// first attempt. Only a new text conversation qualifies, as for the fallback switch.
+    #[cfg(test)]
     pub(crate) fn reserve_first_grok(
         &mut self,
+        environment: &crate::config::Environment,
+        cancel: &CancellationToken,
+    ) -> Result<Link> {
+        self.reserve_first_alternate(Provider::Grok, environment, cancel)
+    }
+
+    pub(crate) fn reserve_first_alternate(
+        &mut self,
+        provider: Provider,
         environment: &crate::config::Environment,
         cancel: &CancellationToken,
     ) -> Result<Link> {
@@ -450,22 +479,34 @@ impl Parent {
         let parent = self.store.require(&self.id)?;
         let config = &parent["browser"]["config"];
         ensure!(
-            parent["options"]["browserProvider"] == "grok"
+            provider != Provider::Chatgpt
+                && parent["options"]["browserProvider"] == provider.id()
                 && config["resumeConversationUrl"].is_null()
                 && config["browserTabRef"].is_null()
                 && config["researchMode"] != "deep"
                 && config["captureProviderNative"] != true
                 && parent["options"]["writeArtifacts"] != true,
-            "Grok-direct consults support only a new text conversation"
+            "Direct provider consults support only a new text conversation"
         );
-        self.reserve(Provider::Grok, Some(environment), cancel)
+        self.reserve(provider, Some(environment), cancel)
     }
 
     /// The single consented provider switch (reference `withGrokFallback`). Only a typed
     /// ChatGPT failure whose bounded read-only original-target recovery expired qualifies;
     /// every other failure or request keeps the original error. The failed child stays
     /// inert evidence with its retained target; it is never replayed or reactivated.
+    #[cfg(test)]
     pub(crate) fn switch_to_grok(
+        &mut self,
+        failed: &Link,
+        error: &anyhow::Error,
+        environment: &crate::config::Environment,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Link>> {
+        self.switch_provider(failed, error, environment, cancel)
+    }
+
+    pub(crate) fn switch_provider(
         &mut self,
         failed: &Link,
         error: &anyhow::Error,
@@ -475,27 +516,33 @@ impl Parent {
         let Some(failure) = switch_failure(error) else {
             return Ok(None);
         };
-        if !self.switch_eligible(&self.store.require(&self.id)?, failed, cancel)? {
+        let parent = self.store.require(&self.id)?;
+        let Some(provider) = Provider::alternate(&parent["browser"]["config"]["fallbackProvider"])
+        else {
+            return Ok(None);
+        };
+        if !self.switch_eligible(&parent, failed, provider, cancel)? {
             return Ok(None);
         }
         let child = self.store.require(&failed.child_id)?;
-        let decision = json!({"version":1,"from":failed,"to":"grok","failure":failure,
+        let decision = json!({"version":1,"from":failed,"to":provider.id(),"failure":failure,
             "dispatch":"uncertain","recovery":"expired","decidedAt":crate::sessions::timestamp(),
             "retainedTarget":child["browser"]["runtime"]["chromeTargetId"]});
         let reserved = self.reserve_with(
-            Provider::Grok,
+            provider,
             Some(environment),
             Some((Decision::Switch, failed, decision)),
             cancel,
         );
         match reserved {
             Ok(link) => Ok(Some(link)),
-            // The decision is durable only with its Grok reservation; restore the
+            // The decision is durable only with its alternate reservation. Restore the
             // original attempt so its read-only recovery remains available.
             Err(error) if self.state["switch"].is_object() => {
-                Err(match self.revert_unsent_switch("grok-reservation-failed") {
-                    Ok(()) => error.context("Provider switch decided but its Grok reservation failed; the ChatGPT attempt is restored for recovery"),
-                    Err(revert) => error.context(format!("Provider switch decided but its Grok reservation failed and the ChatGPT attempt could not be restored ({revert:#})")),
+                let provider = provider.id();
+                Err(match self.revert_unsent_switch(&format!("{provider}-reservation-failed")) {
+                    Ok(()) => error.context(format!("Provider switch decided but the {provider} reservation failed; the ChatGPT attempt is restored for recovery")),
+                    Err(revert) => error.context(format!("Provider switch decided but the {provider} reservation failed and the ChatGPT attempt could not be restored ({revert:#})")),
                 })
             }
             Err(error) => Err(error),
@@ -505,7 +552,7 @@ impl Parent {
     /// One fresh-tab retry of a first ChatGPT attempt that stopped on a typed failure which
     /// certainly sent nothing, recorded as the consultation's `retry` decision. Its durable
     /// record must agree: no dispatch, or one that never started its Send. The failed child
-    /// stays inert evidence, and the retry is itself never retried or switched to Grok.
+    /// stays inert evidence. The retry cannot start another browser attempt.
     pub(crate) fn retry_unsent(
         &mut self,
         failed: &Link,
@@ -585,17 +632,19 @@ impl Parent {
         &self,
         parent: &Value,
         failed: &Link,
+        provider: Provider,
         cancel: &CancellationToken,
     ) -> Result<bool> {
         let config = &parent["browser"]["config"];
         let state = &parent["browser"]["consultation"];
         // Ineligible failures keep their own error: no attempt record is read for them.
         if !(!cancel.is_cancelled()
-            && config["fallbackProvider"] == "grok"
             && matches!(
                 config["fallbackConsentSource"].as_str(),
                 Some("request" | "personal-config")
             )
+            // The locked recheck confirms the consented provider is still the one decided.
+            && config["fallbackProvider"] == provider.id()
             && config["resumeConversationUrl"].is_null()
             && config["researchMode"] != "deep"
             && config["captureProviderNative"] != true
@@ -677,9 +726,10 @@ impl Parent {
         options["providerAttempt"] = json!({"version":1,"role":"browser-provider-attempt"});
         options["browserConfig"] = match provider {
             Provider::Chatgpt => parent["browser"]["config"].clone(),
-            Provider::Grok => {
+            Provider::Grok | Provider::Gemini => {
                 crate::browser_grok::require_text_request(&self.request, &parent["options"])?;
-                crate::browser_grok::child_config(
+                crate::browser_grok::child_config_for(
+                    provider,
                     &parent["browser"]["config"],
                     environment
                         .context("Grok profile requires the original execution environment")?,
@@ -748,11 +798,19 @@ impl Parent {
             .as_array_mut()
             .context("Missing attempt history")?
             .push(json!(link));
+        #[cfg(test)]
+        if TEST_CHANGE_FALLBACK_BEFORE_RESERVATION.replace(false) {
+            self.store.update(&self.id, |current| {
+                let mut changed = current.clone();
+                changed["browser"]["config"]["fallbackProvider"] = json!("grok");
+                Ok(Some(changed))
+            })?;
+        }
         // No child lock is held whilst reserving its exact identity in the parent.
         self.store.update(&self.id, |current| {
             self.require(current,cancel)?;
             match &decision {
-                Some((Decision::Switch, failed, _)) => ensure!(self.switch_eligible(current, failed, cancel)?,
+                Some((Decision::Switch, failed, _)) => ensure!(self.switch_eligible(current, failed, provider, cancel)?,
                     "Provider switch evidence changed before its decision"),
                 Some((Decision::Retry, failed, _)) => ensure!(self.retry_eligible(current, failed, cancel)?,
                     "Unsent attempt evidence changed before its retry decision"),
@@ -762,10 +820,12 @@ impl Parent {
         })?;
         self.state = proposed;
         #[cfg(test)]
-        ensure!(
-            !TEST_FAIL_AFTER_PARENT_RESERVATION.replace(false),
-            "PUBLIC injected reservation failure"
-        );
+        if TEST_FAIL_AFTER_PARENT_RESERVATION.replace(false) {
+            if TEST_BREAK_SWITCH_RESTORATION.replace(false) {
+                self.state["selected"] = json!("PUBLIC changed");
+            }
+            anyhow::bail!("PUBLIC injected reservation failure");
+        }
         self.store.update(&child_id, |current| {
             running_parent(&self.store.require(&self.id)?, &link)?;
             ensure!(
@@ -825,7 +885,11 @@ impl Parent {
 #[cfg(test)]
 thread_local! {
     /// Fails this thread's next reservation after its parent write, before the child link.
-    static TEST_FAIL_AFTER_PARENT_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static TEST_FAIL_AFTER_PARENT_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// With that failure, also changes the coordinator's state so its restoration is refused.
+    static TEST_BREAK_SWITCH_RESTORATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Changes the parent's fallback provider between the switch snapshot and its locked reservation.
+    static TEST_CHANGE_FALLBACK_BEFORE_RESERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A switch's Grok attempt, or a first ChatGPT attempt before its retry, that has the
@@ -855,7 +919,7 @@ pub(super) fn unsent_restoration(
             && switch["outcome"].is_null()
             && from.provider == Provider::Chatgpt
             && from.ordinal == 1
-            && grok.provider == Provider::Grok
+            && Provider::alternate(&switch["to"]) == Some(grok.provider)
             && grok.ordinal == 2
             && state["attempts"] == json!([from, grok])
             && state["fallback"].is_null()
@@ -930,7 +994,7 @@ fn require_payload(
 ) -> Result<()> {
     let committed = browser_runner::request(store, id)?;
     let ready: Ready = serde_json::from_value(child["browser"]["attemptReady"].clone())?;
-    if link.provider == Provider::Grok {
+    if link.provider != Provider::Chatgpt {
         ensure!(
             child["browser"]["config"] == child["options"]["browserConfig"],
             "Grok saved config differs from its sealed options"
@@ -1898,6 +1962,126 @@ mod tests {
     }
 
     #[test]
+    fn gemini_switch_needs_consent_fires_once_and_never_retries_the_gemini_send() {
+        type Edit = fn(&SessionStore, &Switched);
+        let none: Edit = |_, _| {};
+        let unsent: Edit = |store, f| {
+            patch_meta(store, &f.first.child_id, |meta| {
+                meta["dispatch"]["state"] = json!("not-started");
+            })
+        };
+        // (case, request input, personal browser config, state edit, expected)
+        let cases: [(&str, Value, Value, Edit, bool); 5] = [
+            (
+                "personal",
+                json!({}),
+                json!({"fallbackProvider":"gemini"}),
+                none,
+                true,
+            ),
+            (
+                "request",
+                json!({"browserFallback":"gemini"}),
+                json!({}),
+                none,
+                true,
+            ),
+            (
+                "none wins",
+                json!({"browserFallback":"none"}),
+                json!({"fallbackProvider":"gemini"}),
+                none,
+                false,
+            ),
+            ("off by default", json!({}), json!({}), none, false),
+            (
+                "certainly unsent",
+                json!({}),
+                json!({"fallbackProvider":"gemini"}),
+                unsent,
+                false,
+            ),
+        ];
+        for (case, input, personal, edit, expected) in cases {
+            let mut f = switch_fixture(input, personal);
+            edit(&f.store, &f);
+            let store = f.store.clone();
+            let before = store.require(&f.id).unwrap();
+            let first = f.first.clone();
+            let (environment, cancel) = (f.environment.clone(), f.cancel.clone());
+            let switched = f
+                .coordinator
+                .switch_provider(&first, &typed(), &environment, &cancel)
+                .unwrap();
+            assert_eq!(switched.is_some(), expected, "{case}");
+            if !expected {
+                assert_eq!(store.require(&f.id).unwrap(), before, "{case}");
+                assert_eq!(store.list(false).unwrap().len(), 2, "{case}");
+                continue;
+            }
+            let gemini = switched.unwrap();
+            assert_eq!((gemini.provider, gemini.ordinal), (Provider::Gemini, 2));
+            // The decision is in the same parent record that made the Gemini child active.
+            let state = store.require(&f.id).unwrap()["browser"]["consultation"].clone();
+            assert_eq!(state["switch"]["to"], "gemini", "{case}");
+            assert_eq!(state["switch"]["dispatch"], "uncertain", "{case}");
+            assert_eq!(state["active"], json!(gemini), "{case}");
+            let child = store.require(&gemini.child_id).unwrap();
+            assert!(
+                child["browser"]["config"]["manualLoginProfileDir"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("gemini-browser-profile"),
+                "{case}"
+            );
+            assert_eq!(child["options"]["browserFallback"], "none", "{case}");
+            assert_eq!(child["browser"]["config"]["fallbackProvider"], "none");
+            // Neither a second switch nor a retry follows, whatever the Gemini send did.
+            assert!(
+                f.coordinator
+                    .switch_provider(&first, &typed(), &environment, &cancel)
+                    .unwrap()
+                    .is_none(),
+                "{case} switched twice"
+            );
+            assert!(
+                f.coordinator
+                    .switch_provider(&gemini, &typed(), &environment, &cancel)
+                    .unwrap()
+                    .is_none(),
+                "{case} switched away from Gemini"
+            );
+            let not_sent = anyhow::Error::new(crate::cdp::NotSent("PUBLIC unsent".into()));
+            assert!(
+                f.coordinator
+                    .retry_unsent(&gemini, &not_sent, &cancel)
+                    .unwrap()
+                    .is_none(),
+                "{case} retried the Gemini attempt"
+            );
+            assert_eq!(store.list(false).unwrap().len(), 3, "{case}");
+        }
+    }
+
+    #[test]
+    fn provider_names_round_trip_and_only_alternates_are_fallbacks() {
+        for provider in [Provider::Chatgpt, Provider::Grok, Provider::Gemini] {
+            assert_eq!(
+                serde_json::to_value(provider).unwrap(),
+                json!(provider.id())
+            );
+        }
+        assert_eq!(
+            Provider::alternate(&json!("gemini")),
+            Some(Provider::Gemini)
+        );
+        assert_eq!(Provider::alternate(&json!("grok")), Some(Provider::Grok));
+        for other in [json!("chatgpt"), json!("none"), json!(null), json!(1)] {
+            assert_eq!(Provider::alternate(&other), None, "{other}");
+        }
+    }
+
+    #[test]
     fn only_a_typed_unsent_failure_retries_once_in_a_fresh_chatgpt_attempt() {
         let not_sent = || {
             anyhow::Error::new(crate::cdp::NotSent(
@@ -2102,6 +2286,53 @@ mod tests {
             require_child(&f.store, &first.child_id, &cancel).unwrap(),
             first
         );
+    }
+
+    #[test]
+    fn a_fallback_provider_change_before_the_reservation_refuses_the_switch() {
+        let mut f = switch_fixture(json!({"browserFallback":"gemini"}), json!({}));
+        let (first, environment, cancel) =
+            (f.first.clone(), f.environment.clone(), f.cancel.clone());
+        let before = f.store.require(&f.id).unwrap()["browser"]["consultation"].clone();
+        TEST_CHANGE_FALLBACK_BEFORE_RESERVATION.set(true);
+        let error = f
+            .coordinator
+            .switch_provider(&first, &typed(), &environment, &cancel)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Provider switch evidence changed before its decision"),
+            "{error:#}"
+        );
+        // No decision and no alternate attempt reach the parent; the ChatGPT attempt stays active.
+        let parent = f.store.require(&f.id).unwrap();
+        assert_eq!(parent["browser"]["consultation"], before);
+        assert_eq!(parent["browser"]["config"]["fallbackProvider"], "grok");
+        assert_eq!(
+            require_child(&f.store, &first.child_id, &cancel).unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn a_reservation_failure_whose_restoration_is_refused_keeps_the_decision() {
+        let mut f = switch_fixture(json!({"browserFallback":"gemini"}), json!({}));
+        let (first, environment, cancel) =
+            (f.first.clone(), f.environment.clone(), f.cancel.clone());
+        TEST_FAIL_AFTER_PARENT_RESERVATION.set(true);
+        TEST_BREAK_SWITCH_RESTORATION.set(true);
+        let error = f
+            .coordinator
+            .switch_provider(&first, &typed(), &environment, &cancel)
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("the gemini reservation failed and the ChatGPT attempt could not be restored (Provider switch changed before its restoration)"),
+            "{message}"
+        );
+        // The durable decision stays and names no restoration, so no second switch can start.
+        let state = f.store.require(&f.id).unwrap()["browser"]["consultation"].clone();
+        assert_eq!(state["switch"]["to"], "gemini");
+        assert!(state["switch"]["outcome"].is_null(), "{state}");
     }
 
     #[test]

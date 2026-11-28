@@ -173,16 +173,17 @@ Options:
                                         "auto", "always", "never")
   --browser-fallback <provider>         After ChatGPT fails and its bounded
                                         read-only recovery expires, consult
-                                        grok.com once in a separate manual-login
-                                        profile (explicit alternate-provider
-                                        consent). (choices: "none", "grok")
+                                        Gemini or Grok once in a separate
+                                        manual-login profile (explicit provider
+                                        consent). (choices: "none", "gemini", "grok")
   --browser-provider <provider>         Provider for the first browser attempt:
-                                        chatgpt, or grok to consult grok.com
-                                        directly in its separate manual-login
-                                        profile without opening ChatGPT
+                                        chatgpt, gemini or grok. Alternate
+                                        providers use separate manual-login
+                                        profiles for direct text consultations
                                         (explicit alternate-provider consent;
                                         text prompts only). (choices:
-                                        "chatgpt", "grok", default: "chatgpt")
+                                        "chatgpt", "gemini", "grok", default:
+                                        "chatgpt")
   --browser-follow-up <prompt>         Submit an additional prompt in the same
                                         ChatGPT browser conversation after the
                                         initial answer; repeat for multi-turn

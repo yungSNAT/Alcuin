@@ -1427,6 +1427,10 @@ fn browser_provider_grok_accepts_only_text_prompts_before_creating_a_session() {
         ("chatgpt", vec!["--file", file.as_str()], true),
         ("grok", vec!["--file", file.as_str()], false),
         ("grok", vec!["--browser-research", "deep"], false),
+        ("gemini", vec![], true),
+        ("gemini", vec!["--file", file.as_str()], false),
+        ("gemini", vec!["--browser-research", "deep"], false),
+        ("Gemini", vec![], false),
         ("Grok", vec![], false),
         ("xai", vec![], false),
     ] {
